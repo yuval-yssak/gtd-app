@@ -1,19 +1,19 @@
-import Box from '@mui/material/Box';
-import CircularProgress from '@mui/material/CircularProgress';
+import { Spinner } from '../designSystem';
+import styles from './RouteFallback.module.css';
 
 interface Props {
     /** Test id forwarded to the spinner; lets specs distinguish boot vs route vs inline fallbacks. */
-    testId?: string;
+    testId?: string | undefined;
 }
 
 /**
- * Centered MUI spinner used as the fallback for Suspense boundaries that wrap a full route.
+ * Centered spinner used as the fallback for Suspense boundaries that wrap a full route.
  * Standardized so future skeleton variants can land here without touching pages.
  */
 export function RouteFallback({ testId = 'routeFallback' }: Props = {}) {
     return (
-        <Box sx={{ display: 'flex', justifyContent: 'center', mt: 6 }}>
-            <CircularProgress data-testid={testId} />
-        </Box>
+        <div className={styles.root}>
+            <Spinner size={40} data-testid={testId} />
+        </div>
     );
 }

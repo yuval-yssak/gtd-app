@@ -1,42 +1,42 @@
 .root {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    color: var(--mui-palette-text-secondary, rgba(0, 0, 0, 0.6));
+    gap: var(--space-2);
+    color: var(--color-text-secondary);
 }
 
 .countGroup {
     display: inline-flex;
     align-items: center;
-    gap: 0.125rem;
+    gap: var(--space-0-5);
 }
 
 /* The small RSVP dot — colored by responseStatus. Sized to align with the body-text baseline. */
 .rsvpDot {
-    width: 0.5rem;
-    height: 0.5rem;
-    border-radius: 50%;
     display: inline-block;
-    background-color: var(--mui-palette-action-disabled, rgba(0, 0, 0, 0.26));
+    inline-size: 0.5rem;
+    block-size: 0.5rem;
+    border-radius: var(--radius-full);
+    background-color: var(--color-text-disabled);
 }
 
-.rsvpDotAccepted {
-    background-color: var(--mui-palette-success-main);
+.rsvpDot[data-rsvp="success"] {
+    background-color: var(--color-status-success);
 }
 
-.rsvpDotDeclined {
-    background-color: var(--mui-palette-error-main);
+.rsvpDot[data-rsvp="error"] {
+    background-color: var(--color-status-error);
 }
 
-.rsvpDotTentative {
-    background-color: var(--mui-palette-warning-main);
+.rsvpDot[data-rsvp="warning"] {
+    background-color: var(--color-status-warning);
 }
 
-/* Truncate the organizer label so it never wraps the row. 18ch matches the spec — keeps "Long Last
- * Name <email>" from blowing out the layout on short viewports. */
+/* Truncate the organizer label so it never wraps the row. 18ch keeps "Long Last Name <email>"
+ * from blowing out the layout on short viewports. */
 .organizer {
     overflow: hidden;
+    max-inline-size: 18ch;
     text-overflow: ellipsis;
     white-space: nowrap;
-    max-width: 18ch;
 }

@@ -1,21 +1,19 @@
-import Alert from '@mui/material/Alert';
-import AlertTitle from '@mui/material/AlertTitle';
-import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
 import { Component, type ErrorInfo, type ReactNode } from 'react';
+import { Button, Callout } from '../designSystem';
+import styles from './AppErrorBoundary.module.css';
 
 type Mode = 'page' | 'inline';
 
 interface Props {
     children: ReactNode;
-    mode?: Mode;
+    mode?: Mode | undefined;
     /** Override copy for the error title. */
-    title?: string;
+    title?: string | undefined;
     /**
      * If provided, rendered in place of the built-in retry button. Lets nested boundaries opt out
      * of "reload the page" — for example, a per-dialog boundary that should just close the dialog.
      */
-    fallbackAction?: (reset: () => void) => ReactNode;
+    fallbackAction?: ((reset: () => void) => ReactNode) | undefined;
 }
 
 interface State {
@@ -46,13 +44,13 @@ export class AppErrorBoundary extends Component<Props, State> {
         }
         if (mode === 'page') {
             return (
-                <Button onClick={() => window.location.reload()} variant="contained" data-testid="errorBoundaryReload">
+                <Button onClick={() => window.location.reload()} variant="solid" tone="danger" size="sm" data-testid="errorBoundaryReload">
                     Reload
                 </Button>
             );
         }
         return (
-            <Button onClick={this.reset} variant="outlined" data-testid="errorBoundaryRetry">
+            <Button onClick={this.reset} variant="outline" tone="danger" size="sm" data-testid="errorBoundaryRetry">
                 Retry
             </Button>
         );
@@ -64,21 +62,11 @@ export class AppErrorBoundary extends Component<Props, State> {
         }
         const { mode = 'page', title = 'Something went wrong', fallbackAction } = this.props;
         return (
-            <Box
-                data-testid={mode === 'page' ? 'pageErrorBoundary' : 'inlineErrorBoundary'}
-                sx={{
-                    display: 'flex',
-                    justifyContent: 'center',
-                    alignItems: mode === 'page' ? 'center' : 'flex-start',
-                    minHeight: mode === 'page' ? '100dvh' : 'auto',
-                    p: mode === 'page' ? 4 : 2,
-                }}
-            >
-                <Alert severity="error" action={this.renderAction(mode, fallbackAction)} sx={{ maxWidth: 480, width: '100%' }}>
-                    <AlertTitle>{title}</AlertTitle>
+            <div data-testid={mode === 'page' ? 'pageErrorBoundary' : 'inlineErrorBoundary'} data-mode={mode} className={styles.root}>
+                <Callout tone="error" title={title} action={this.renderAction(mode, fallbackAction)} className={styles.callout}>
                     {this.state.error.message}
-                </Alert>
-            </Box>
+                </Callout>
+            </div>
         );
     }
 }

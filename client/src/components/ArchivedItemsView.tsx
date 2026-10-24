@@ -1,20 +1,10 @@
-import Box from '@mui/material/Box';
-import Chip from '@mui/material/Chip';
-import Divider from '@mui/material/Divider';
-import List from '@mui/material/List';
-import ListItem from '@mui/material/ListItem';
-import ListItemButton from '@mui/material/ListItemButton';
-import ListItemText from '@mui/material/ListItemText';
-import MenuItem from '@mui/material/MenuItem';
-import Paper from '@mui/material/Paper';
-import TextField from '@mui/material/TextField';
-import Typography from '@mui/material/Typography';
 import { Link } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import { memo, useMemo, useState } from 'react';
+import { memo, type ReactElement, useMemo, useState } from 'react';
 import { WindowVirtualizer } from 'virtua';
 import { useAppData } from '../contexts/AppDataProvider';
+import { Card, Chip, Select, Text } from '../designSystem';
 import { useListGhosts } from '../hooks/useListGhosts';
 import { useListScrollRestoration } from '../hooks/useListScrollRestoration';
 import { useListSearch } from '../hooks/useListSearch';
@@ -51,7 +41,7 @@ const SORT_OPTIONS: SortOption[] = [
 interface Props {
     status: Extract<StoredItem['status'], 'done' | 'trash'>;
     title: string;
-    emptyIcon: React.ReactElement;
+    emptyIcon: ReactElement;
     emptyMessage: string;
     /** Current `q` from the owning route's URL ('' when unset). */
     urlQuery: string;
@@ -74,26 +64,22 @@ const ArchivedRow = memo(function ArchivedRow({ item, sortKey, routineTitle, isG
     const verb = sortKey === 'updatedTs' ? 'Updated' : 'Created';
     return (
         <ListRowShell itemId={item._id} isGhost={isGhost} onGhostExited={onGhostExited}>
-            <ListItem {...SHORTCUT_ROW_PROPS} disablePadding secondaryAction={<CopyIdButton isRowAction id={item._id} testId="archivedItemCopyIdButton" />}>
+            <div {...SHORTCUT_ROW_PROPS} className={styles.row} data-divided={hasDivider || undefined}>
                 <Link to="/item/$itemId" params={{ itemId: item._id }} search={{ status: null }} className={styles.rowLink}>
-                    <ListItemButton dense className={styles.rowButton}>
-                        <ListItemText
-                            primary={
-                                <Box className={styles.titleRow}>
-                                    <span>{item.title}</span>
-                                    {item.routineId && <RoutineIndicator routineId={item.routineId} routineTitle={routineTitle} />}
-                                    <AccountChip userId={item.userId} />
-                                    {item.cancelledByGCal && (
-                                        <Chip label="Cancelled in Calendar" size="small" color="warning" data-testid="cancelledByGCalChip" />
-                                    )}
-                                </Box>
-                            }
-                            secondary={`${verb} ${dayjs(item[sortKey]).fromNow()}`}
-                        />
-                    </ListItemButton>
+                    <span className={styles.titleRow}>
+                        <Text as="span" variant="bodySm">
+                            {item.title}
+                        </Text>
+                        {item.routineId && <RoutineIndicator routineId={item.routineId} routineTitle={routineTitle} />}
+                        <AccountChip userId={item.userId} />
+                        {item.cancelledByGCal && <Chip label="Cancelled in Calendar" tone="warning" data-testid="cancelledByGCalChip" />}
+                    </span>
+                    <Text as="span" variant="caption" tone="secondary">
+                        {`${verb} ${dayjs(item[sortKey]).fromNow()}`}
+                    </Text>
                 </Link>
-            </ListItem>
-            {hasDivider && <Divider />}
+                <CopyIdButton isRowAction id={item._id} testId="archivedItemCopyIdButton" />
+            </div>
         </ListRowShell>
     );
 });
@@ -119,37 +105,26 @@ export function ArchivedItemsView({ status, title, emptyIcon, emptyMessage, urlQ
     // Truly empty archive (no query involved) — the empty-state card, or a skeleton during bootstrap.
     if (archivedItems.length === 0) {
         return (
-            <Box>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <Typography
-                        variant="h5"
-                        sx={{
-                            fontWeight: 600,
-                            mb: 3,
-                        }}
-                    >
+            <div>
+                <div className={styles.titleGroup}>
+                    <Text variant="title" className={styles.emptyTitle}>
                         {title}
-                    </Typography>
+                    </Text>
                     {/* "Syncing account…" while a newly-added account bootstraps; surfaces even when the list already has items. */}
                     <AccountSyncChip />
-                </Box>
+                </div>
                 {/* During first-launch bootstrap the empty list is "not loaded yet", not "truly empty" — show the skeleton instead of the empty-state copy. */}
                 {isInitialSyncing ? (
                     <ListSkeleton />
                 ) : (
-                    <Paper variant="outlined" className={styles.emptyCard}>
-                        <Box className={styles.icon}>{emptyIcon}</Box>
-                        <Typography
-                            variant="body2"
-                            sx={{
-                                color: 'text.secondary',
-                            }}
-                        >
+                    <Card padding="none" className={styles.emptyCard}>
+                        <div className={styles.icon}>{emptyIcon}</div>
+                        <Text variant="bodySm" tone="secondary">
                             {emptyMessage}
-                        </Typography>
-                    </Paper>
+                        </Text>
+                    </Card>
                 )}
-            </Box>
+            </div>
         );
     }
 
@@ -161,37 +136,25 @@ export function ArchivedItemsView({ status, title, emptyIcon, emptyMessage, urlQ
     };
 
     return (
-        <Box>
-            <Box className={styles.headerRow}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <Typography
-                        variant="h5"
-                        sx={{
-                            fontWeight: 600,
-                        }}
-                    >
+        <div>
+            <div className={styles.headerRow}>
+                <div className={styles.titleGroup}>
+                    <Text variant="title">
                         {title}
-                        {liveCount > 0 && <Chip label={liveCount} size="small" className={styles.countChip} />}
-                    </Typography>
+                        {liveCount > 0 && <Chip label={liveCount} className={styles.countChip} />}
+                    </Text>
                     {/* "Syncing account…" while a newly-added account bootstraps; surfaces even when the list already has items. */}
                     <AccountSyncChip />
                     <ListSearchButton onToggle={search.toggleSearch} testId={`${status}SearchButton`} />
-                </Box>
-                <TextField
-                    size="small"
-                    select
+                </div>
+                <Select
                     label="Sort by"
                     value={encodeSort(sortKey, sortDir)}
-                    onChange={(e) => onSortChange(e.target.value)}
+                    onValueChange={onSortChange}
+                    options={SORT_OPTIONS.map((o) => ({ value: encodeSort(o.key, o.dir), label: o.label }))}
                     className={styles.sortField}
-                >
-                    {SORT_OPTIONS.map((o) => (
-                        <MenuItem key={encodeSort(o.key, o.dir)} value={encodeSort(o.key, o.dir)}>
-                            {o.label}
-                        </MenuItem>
-                    ))}
-                </TextField>
-            </Box>
+                />
+            </div>
             {search.isOpen && (
                 <ListSearchField
                     value={search.queryInput}
@@ -202,20 +165,14 @@ export function ArchivedItemsView({ status, title, emptyIcon, emptyMessage, urlQ
                 />
             )}
             {sorted.length === 0 ? (
-                <Typography
-                    sx={{
-                        color: 'text.secondary',
-                        textAlign: 'center',
-                        mt: 6,
-                    }}
-                >
+                <Text tone="secondary" className={styles.noMatches}>
                     No items match your search.
-                </Typography>
+                </Text>
             ) : (
-                /* component="div": WindowVirtualizer renders a measuring <div> wrapper, invalid inside
-                   the default <ul>. Windowed rendering — only rows near the viewport mount, so the
-                   unbounded done/trash archives don't block the main thread on mount or navigation. */
-                <List disablePadding component="div" className={styles.list}>
+                /* A plain div, not <ul>: WindowVirtualizer renders a measuring <div> wrapper, invalid
+                   inside a list. Windowed rendering — only rows near the viewport mount, so the unbounded
+                   done/trash archives don't block the main thread on mount or navigation. */
+                <div className={styles.list}>
                     <WindowVirtualizer>
                         {sorted.map((item, idx) => (
                             <ArchivedRow
@@ -229,8 +186,8 @@ export function ArchivedItemsView({ status, title, emptyIcon, emptyMessage, urlQ
                             />
                         ))}
                     </WindowVirtualizer>
-                </List>
+                </div>
             )}
-        </Box>
+        </div>
     );
 }

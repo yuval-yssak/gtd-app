@@ -39,7 +39,9 @@ test.describe('Virtualized list pages with in-page search', () => {
             await page.getByLabel('Close search').click();
             await expect(page.getByTestId('nextActionsSearchInput')).toBeHidden();
             await expect(page).not.toHaveURL(/[?&]q=/);
-            expect(await page.getByTestId('nextActionItemRow').count()).toBeGreaterThan(5);
+            // Polled: filtering runs through useDeferredValue (an interruptible background render), so
+            // the full list returns a frame or two after the URL write.
+            await expect.poll(() => page.getByTestId('nextActionItemRow').count()).toBeGreaterThan(5);
 
             // A shared/bookmarked ?q= deep link opens the field pre-filled and pre-filtered.
             await page.goto('/next-actions?q=Errand%2003');

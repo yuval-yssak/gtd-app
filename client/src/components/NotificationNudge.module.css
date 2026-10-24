@@ -1,9 +1,3 @@
 .alert {
-    margin-top: 1rem;
-}
-
-.alertAction {
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
+    margin-block-start: var(--space-4);
 }

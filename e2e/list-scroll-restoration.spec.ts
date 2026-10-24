@@ -202,11 +202,13 @@ test.describe('List scroll restoration + ghost rows', () => {
             await page.getByRole('button', { name: 'Save changes' }).click();
             await expect(page).toHaveURL(/\/next-actions$/);
 
-            // The edited item moved to the no-date tier, but the viewport must NOT follow it: the
-            // surviving neighbor stays (within about a row) where it was on screen. Compared on screen,
-            // not by scrollTop — the windowed list re-estimates unmeasured rows above after the remount,
-            // so the document offset of the same on-screen position legitimately shifts.
-            await expect.poll(async () => Math.abs((await viewportTopOf(neighborRow)) - neighborViewportTop)).toBeLessThan(150);
+            // The edited item moved to the no-date tier, but the viewport must NOT follow it (that would
+            // move the neighbor by thousands of px): the surviving neighbor stays roughly where it was on
+            // screen. Compared on screen, not by scrollTop — the windowed list re-estimates unmeasured
+            // rows above after the remount. The tolerance is about two rows (2 × 76px, plus rounding): each due date is its
+            // own section, so the edited row usually takes its 38px day header with it, and re-anchoring
+            // can add about one more header's worth depending on where the scroll midpoint fell.
+            await expect.poll(async () => Math.abs((await viewportTopOf(neighborRow)) - neighborViewportTop)).toBeLessThan(160);
             await expect(neighborRow).toBeInViewport();
             await expect(page.getByTestId('nextActionItemRow').filter({ hasText: clickedTitle })).not.toBeInViewport();
         });

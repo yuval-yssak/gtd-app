@@ -134,7 +134,6 @@ function WorkContextsPage() {
                                             rowAction="edit"
                                             label="Rename"
                                             icon={<EditIcon fontSize="small" />}
-                                            size="small"
                                             onClick={() => setEditing(ctx)}
                                             data-testid="workContextRowEditButton"
                                         />

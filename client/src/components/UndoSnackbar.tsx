@@ -1,9 +1,6 @@
-import CloseIcon from '@mui/icons-material/Close';
-import Button from '@mui/material/Button';
-import IconButton from '@mui/material/IconButton';
-import Snackbar from '@mui/material/Snackbar';
-import Stack from '@mui/material/Stack';
+import { X } from 'lucide-react';
 import { useSyncExternalStore, useTransition } from 'react';
+import { Button, IconButton, Toast } from '../designSystem';
 import { isNewTabClick, useNewTabAwareNavigate } from '../lib/newTabNavigation';
 import { dismissCurrentUndo, getCurrentUndo, runCurrentUndo, subscribeToUndo } from '../lib/undoStore';
 
@@ -43,33 +40,29 @@ export function UndoSnackbar() {
     }
 
     return (
-        <Snackbar
+        <Toast
             // Remount per offer so a burst refresh (same key, new offerId) restarts the auto-hide timer.
             key={entry.offerId}
             open
             autoHideDuration={UNDO_SNACKBAR_DURATION_MS}
-            // Clickaway must not eat the offer — the user is likely just continuing to work.
-            onClose={(_, reason) => {
-                if (reason !== 'clickaway') {
-                    dismissCurrentUndo();
-                }
-            }}
+            // The toast never closes on a click elsewhere: the user is likely just continuing to work.
+            onClose={dismissCurrentUndo}
             message={entry.message}
             action={
-                <Stack direction="row" spacing={1}>
+                <>
                     {entry.link && (
-                        <Button color="secondary" size="small" onClick={onViewClick} data-testid="undoSnackbarViewButton">
+                        <Button size="sm" onClick={onViewClick} data-testid="undoSnackbarViewButton">
                             View
                         </Button>
                     )}
-                    <Button color="secondary" size="small" onClick={onUndoClick} disabled={isUndoing} data-testid="undoSnackbarButton">
+                    <Button size="sm" onClick={onUndoClick} disabled={isUndoing} data-testid="undoSnackbarButton">
                         Undo
                     </Button>
-                    {/* Manual dismiss: clickaway is deliberately ignored (above), so without this the snackbar blocks the buttons underneath for the full 6s. */}
-                    <IconButton size="small" color="inherit" aria-label="Close" onClick={dismissCurrentUndo} data-testid="undoSnackbarCloseButton">
-                        <CloseIcon fontSize="small" />
+                    {/* Manual dismiss: without it the toast covers the buttons underneath for the full 6s. */}
+                    <IconButton size="sm" tone="inherit" aria-label="Close" onClick={dismissCurrentUndo} data-testid="undoSnackbarCloseButton">
+                        <X />
                     </IconButton>
-                </Stack>
+                </>
             }
             data-testid="undoSnackbar"
         />

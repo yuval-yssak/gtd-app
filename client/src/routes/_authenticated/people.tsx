@@ -213,7 +213,6 @@ function PeoplePage() {
                                             rowAction="edit"
                                             label="Edit"
                                             icon={<EditIcon fontSize="small" />}
-                                            size="small"
                                             onClick={() => setEditing(person)}
                                             data-testid="personRowEditButton"
                                         />

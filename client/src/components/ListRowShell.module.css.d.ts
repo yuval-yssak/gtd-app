@@ -1,4 +1,5 @@
 declare const styles: {
-    readonly ghostRow: string;
+    readonly collapse: string;
+    readonly row: string;
 };
 export = styles;

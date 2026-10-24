@@ -216,7 +216,6 @@ function RoutinesPage() {
                             rowAction="edit"
                             label="Edit"
                             icon={<EditIcon fontSize="small" />}
-                            size="small"
                             onClick={(e) => editor.openEditor({ routine, event: e })}
                             data-testid="routineRowEditButton"
                         />

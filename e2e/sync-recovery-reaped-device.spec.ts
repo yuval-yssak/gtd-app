@@ -73,10 +73,11 @@ async function stageReapedDeviceWithQueuedOp(page: Page, email: string, title: s
     await page.reload();
 }
 
-/** Waits for the Case-2 choice dialog and asserts its content: unsynced-change count + the three buttons. */
+/** Waits for the Case-2 choice dialog and asserts its content: why, the unsynced-change count, the three buttons. */
 async function expectCase2ChoiceDialog(page: Page, queuedOpCount: number) {
     const dialog = page.getByTestId('syncRecoveryDialog');
     await expect(dialog).toBeVisible({ timeout: 15_000 });
+    await expect(dialog).toContainText("hasn't synced in over 30 days");
     await expect(dialog).toContainText(`${queuedOpCount} unsynced local change`);
     await expect(page.getByTestId('syncRecoveryPush')).toBeVisible();
     await expect(page.getByTestId('syncRecoveryDiscard')).toBeVisible();

@@ -1,6 +1,34 @@
+/* Height animates through grid rows (1fr → 0fr), which works for content of any height. */
+.collapse {
+    display: grid;
+    grid-template-rows: 1fr;
+
+    /* Its length is GHOST_COLLAPSE_MS in ListRowShell.tsx, which consumes the ghost when it ends. */
+    transition: grid-template-rows var(--duration-normal) var(--ease-standard);
+
+    &[data-collapsing] {
+        grid-template-rows: 0fr;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .collapse {
+        transition: none;
+    }
+}
+
+.row {
+    min-block-size: 0;
+
+    /* Clipped only while collapsing — an open row must not cut off focus rings or drag shadows. */
+    .collapse[data-collapsing] & {
+        overflow: hidden;
+    }
+}
+
 /* A "shadow" of an item that just left this list: visible but clearly inert. */
-.ghostRow {
+.row[data-ghost-row] {
     opacity: 0.4;
     pointer-events: none;
-    transition: opacity 0.3s ease;
+    transition: opacity var(--duration-normal) var(--ease-standard);
 }

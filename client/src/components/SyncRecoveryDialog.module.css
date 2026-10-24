@@ -1,0 +1,13 @@
+.spinnerRow {
+    display: flex;
+    justify-content: center;
+    margin-block-start: var(--space-4);
+}
+
+.error {
+    color: var(--color-status-error);
+}
+
+.paragraph {
+    margin-block-start: var(--space-2);
+}

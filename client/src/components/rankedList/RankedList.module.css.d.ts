@@ -6,6 +6,5 @@ declare const styles: {
     readonly sectionHeader: string;
     readonly sectionHeaderOverdue: string;
     readonly shifted: string;
-    readonly srOnly: string;
 };
 export = styles;

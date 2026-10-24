@@ -1,0 +1,17 @@
+.root {
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: var(--space-4);
+
+    &[data-mode="page"] {
+        align-items: center;
+        min-block-size: 100dvh;
+        padding: var(--space-8);
+    }
+}
+
+.callout {
+    inline-size: 100%;
+    max-inline-size: 30rem;
+}

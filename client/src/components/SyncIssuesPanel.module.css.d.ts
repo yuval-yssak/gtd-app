@@ -1,9 +1,9 @@
 declare const styles: {
-    readonly badgeButton: string;
+    readonly content: string;
     readonly dialogTitle: string;
+    readonly list: string;
     readonly row: string;
     readonly rowActions: string;
     readonly rowBody: string;
-    readonly rowTitle: string;
 };
 export = styles;

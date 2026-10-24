@@ -1,5 +1,5 @@
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
+import { Trash2 } from 'lucide-react';
 import { useCallback } from 'react';
 import { ArchivedItemsView } from '../../components/ArchivedItemsView';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
@@ -19,7 +19,7 @@ function TrashPage() {
         <ArchivedItemsView
             status="trash"
             title="Trash"
-            emptyIcon={<DeleteOutlineIcon />}
+            emptyIcon={<Trash2 aria-hidden="true" />}
             emptyMessage="Trashed items will appear here. They are kept so you can review what was discarded."
             urlQuery={q ?? ''}
             writeUrlQuery={writeUrlQuery}

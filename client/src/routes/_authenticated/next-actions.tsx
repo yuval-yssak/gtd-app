@@ -575,7 +575,6 @@ function NextActionsPage() {
                                                         rowAction="moveTo"
                                                         label="Move to…"
                                                         icon={<MoreVertIcon fontSize="small" />}
-                                                        size="small"
                                                         onClick={() => openMoveTo(item, section)}
                                                         data-testid="nextActionMoveToButton"
                                                         {...roving.actionButtonProps}
@@ -592,7 +591,6 @@ function NextActionsPage() {
                                                         rowAction="edit"
                                                         label="Edit"
                                                         icon={<EditIcon fontSize="small" />}
-                                                        size="small"
                                                         onClick={(e) => editor.openEditor({ item, event: e })}
                                                         data-testid="nextActionItemEditButton"
                                                         {...roving.actionButtonProps}
@@ -603,7 +601,6 @@ function NextActionsPage() {
                                                         rowAction="done"
                                                         label="Mark done"
                                                         icon={<CheckCircleOutlineIcon />}
-                                                        size="small"
                                                         color="success"
                                                         onClick={() => void onDone(item)}
                                                         data-testid="nextActionItemDoneButton"

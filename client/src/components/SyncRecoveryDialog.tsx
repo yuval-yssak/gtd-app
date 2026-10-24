@@ -1,17 +1,11 @@
-import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-import CircularProgress from '@mui/material/CircularProgress';
-import Dialog from '@mui/material/Dialog';
-import DialogActions from '@mui/material/DialogActions';
-import DialogContent from '@mui/material/DialogContent';
-import DialogContentText from '@mui/material/DialogContentText';
-import DialogTitle from '@mui/material/DialogTitle';
 import type { IDBPDatabase } from 'idb';
 import { useSyncExternalStore } from 'react';
 import { getSyncRecoveryState, type SyncRecoveryState, subscribeSyncRecovery } from '../contexts/syncRecoveryStore';
 import { downloadRecoveryExports } from '../db/exportRecoveryData';
 import { discardQueuedChangesAndBootstrap, pushQueuedChangesAndBootstrap, retryBootstrap } from '../db/syncRecoveryActions';
+import { Button, Dialog, DialogActions, DialogContent, DialogDescription, DialogTitle, Spinner, Text } from '../designSystem';
 import type { MyDB } from '../types/MyDB';
+import styles from './SyncRecoveryDialog.module.css';
 
 /**
  * Blocking recovery dialog for a device the server reaped after >30 days offline (sync pull → 409
@@ -25,9 +19,9 @@ export function SyncRecoveryDialog({ db }: { db: IDBPDatabase<MyDB> }) {
         return null;
     }
     return (
-        // No onClose on purpose: with no close handler, backdrop clicks and Escape have nothing to
-        // call, so they cannot dismiss this blocking recovery (MUI v9 removed disableEscapeKeyDown).
-        <Dialog open data-testid="syncRecoveryDialog">
+        // No onClose on purpose: the dialog is controlled and nothing ever sets it closed, so backdrop
+        // presses and Escape cannot dismiss this blocking recovery.
+        <Dialog open disableBackdropClose data-testid="syncRecoveryDialog">
             <DialogTitle>Full sync required</DialogTitle>
             <PhaseContent state={state} />
             <PhaseActions state={state} db={db} />
@@ -38,11 +32,10 @@ export function SyncRecoveryDialog({ db }: { db: IDBPDatabase<MyDB> }) {
 function SpinnerContent({ message }: { message: string }) {
     return (
         <DialogContent>
-            <DialogContentText>{message}</DialogContentText>
-            {/* sx: layout-only centering for the progress spinner */}
-            <Box sx={{ display: 'flex', justifyContent: 'center', mt: 2 }}>
-                <CircularProgress />
-            </Box>
+            <DialogDescription>{message}</DialogDescription>
+            <div className={styles.spinnerRow}>
+                <Spinner size={40} />
+            </div>
         </DialogContent>
     );
 }
@@ -60,17 +53,17 @@ function PhaseContent({ state }: { state: Exclude<SyncRecoveryState, { phase: 'i
         case 'case2Choice':
             return (
                 <DialogContent>
-                    <DialogContentText>
+                    <DialogDescription>
                         {STALE_DEVICE_EXPLANATION} A full sync is required, and this device has {state.queuedOpCount} unsynced local change
                         {state.queuedOpCount === 1 ? '' : 's'}. Choose what to do with {state.queuedOpCount === 1 ? 'it' : 'them'}:
-                    </DialogContentText>
+                    </DialogDescription>
                 </DialogContent>
             );
         case 'flushFailed':
             return (
                 <DialogContent>
-                    <DialogContentText color="error">Pushing your offline changes failed: {state.errorMessage}</DialogContentText>
-                    <DialogContentText component="div">
+                    <DialogDescription className={styles.error}>Pushing your offline changes failed: {state.errorMessage}</DialogDescription>
+                    <Text as="div" tone="secondary" className={styles.paragraph}>
                         The following changes were being sent:
                         <ul>
                             {state.failedOpSummaries.map((summary) => (
@@ -78,14 +71,16 @@ function PhaseContent({ state }: { state: Exclude<SyncRecoveryState, { phase: 'i
                             ))}
                         </ul>
                         Nothing was discarded. You can retry, export your data, or discard the changes and run a full sync.
-                    </DialogContentText>
+                    </Text>
                 </DialogContent>
             );
         case 'bootstrapFailed':
             return (
                 <DialogContent>
-                    <DialogContentText color="error">The full sync failed: {state.errorMessage}</DialogContentText>
-                    <DialogContentText>Check your connection and retry.</DialogContentText>
+                    <DialogDescription className={styles.error}>The full sync failed: {state.errorMessage}</DialogDescription>
+                    <Text tone="secondary" className={styles.paragraph}>
+                        Check your connection and retry.
+                    </Text>
                 </DialogContent>
             );
     }
@@ -102,10 +97,10 @@ function PhaseActions({ state, db }: { state: Exclude<SyncRecoveryState, { phase
                     <Button onClick={() => run(downloadRecoveryExports(db, state.userId))} data-testid="syncRecoveryExport">
                         Export
                     </Button>
-                    <Button onClick={() => run(discardQueuedChangesAndBootstrap(db, state.userId))} color="error" data-testid="syncRecoveryDiscard">
+                    <Button onClick={() => run(discardQueuedChangesAndBootstrap(db, state.userId))} tone="danger" data-testid="syncRecoveryDiscard">
                         Discard &amp; full sync
                     </Button>
-                    <Button onClick={() => run(pushQueuedChangesAndBootstrap(db, state.userId))} variant="contained" data-testid="syncRecoveryPush">
+                    <Button onClick={() => run(pushQueuedChangesAndBootstrap(db, state.userId))} variant="solid" data-testid="syncRecoveryPush">
                         Push my offline changes
                     </Button>
                 </DialogActions>
@@ -116,10 +111,10 @@ function PhaseActions({ state, db }: { state: Exclude<SyncRecoveryState, { phase
                     <Button onClick={() => run(downloadRecoveryExports(db, state.userId))} data-testid="syncRecoveryExport">
                         Export
                     </Button>
-                    <Button onClick={() => run(discardQueuedChangesAndBootstrap(db, state.userId))} color="error" data-testid="syncRecoveryDiscard">
+                    <Button onClick={() => run(discardQueuedChangesAndBootstrap(db, state.userId))} tone="danger" data-testid="syncRecoveryDiscard">
                         Discard &amp; full sync
                     </Button>
-                    <Button onClick={() => run(pushQueuedChangesAndBootstrap(db, state.userId))} variant="contained" data-testid="syncRecoveryRetry">
+                    <Button onClick={() => run(pushQueuedChangesAndBootstrap(db, state.userId))} variant="solid" data-testid="syncRecoveryRetry">
                         Retry flush
                     </Button>
                 </DialogActions>
@@ -127,7 +122,7 @@ function PhaseActions({ state, db }: { state: Exclude<SyncRecoveryState, { phase
         case 'bootstrapFailed':
             return (
                 <DialogActions>
-                    <Button onClick={() => run(retryBootstrap(db, state.userId))} variant="contained" data-testid="syncRecoveryRetry">
+                    <Button onClick={() => run(retryBootstrap(db, state.userId))} variant="solid" data-testid="syncRecoveryRetry">
                         Retry full sync
                     </Button>
                 </DialogActions>

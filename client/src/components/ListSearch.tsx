@@ -1,9 +1,5 @@
-import CloseIcon from '@mui/icons-material/Close';
-import SearchIcon from '@mui/icons-material/Search';
-import IconButton from '@mui/material/IconButton';
-import InputAdornment from '@mui/material/InputAdornment';
-import TextField from '@mui/material/TextField';
-import Tooltip from '@mui/material/Tooltip';
+import { Search, X } from 'lucide-react';
+import { IconButton, TextField, Tooltip } from '../designSystem';
 import { useAutoFocus } from '../hooks/useAutoFocus';
 import { LIST_SEARCH_INPUT_ATTR, LIST_SEARCH_TOGGLE_ATTR } from '../lib/keyboardRegionDom';
 import styles from './ListSearch.module.css';
@@ -18,14 +14,14 @@ export function ListSearchButton({ onToggle, testId }: ListSearchButtonProps) {
     return (
         <Tooltip title="Search this list (/)">
             <IconButton
-                size="small"
+                size="sm"
                 aria-label="Search this list"
                 aria-keyshortcuts="/"
                 onClick={onToggle}
                 data-testid={testId}
                 {...{ [LIST_SEARCH_TOGGLE_ATTR]: '' }}
             >
-                <SearchIcon fontSize="small" />
+                <Search />
             </IconButton>
         </Tooltip>
     );
@@ -48,7 +44,6 @@ export function ListSearchField({ value, onValueChange, onClose, placeholder, te
     const inputRef = useAutoFocus();
     return (
         <TextField
-            size="small"
             fullWidth
             placeholder={placeholder}
             value={value}
@@ -57,20 +52,16 @@ export function ListSearchField({ value, onValueChange, onClose, placeholder, te
                 if (e.key === 'Escape') onClose();
             }}
             className={styles.searchField}
-            slotProps={{
-                htmlInput: { ref: inputRef, 'data-testid': testId, [LIST_SEARCH_INPUT_ATTR]: '' },
-                input: {
-                    endAdornment: (
-                        <InputAdornment position="end">
-                            <Tooltip title="Close search (Esc)">
-                                <IconButton size="small" aria-label="Close search" aria-keyshortcuts="Escape" edge="end" onClick={onClose}>
-                                    <CloseIcon fontSize="small" />
-                                </IconButton>
-                            </Tooltip>
-                        </InputAdornment>
-                    ),
-                },
-            }}
+            startAdornment={<Search size={18} aria-hidden="true" />}
+            inputRef={inputRef}
+            inputProps={{ 'aria-label': placeholder, 'data-testid': testId, [LIST_SEARCH_INPUT_ATTR]: '' }}
+            endAdornment={
+                <Tooltip title="Close search (Esc)">
+                    <IconButton size="sm" aria-label="Close search" aria-keyshortcuts="Escape" edge="end" onClick={onClose}>
+                        <X />
+                    </IconButton>
+                </Tooltip>
+            }
         />
     );
 }

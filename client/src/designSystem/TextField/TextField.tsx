@@ -9,9 +9,9 @@ import { useAutosizeTextarea } from './useAutosizeTextarea';
 type ControlChangeEvent = ChangeEvent<HTMLInputElement>;
 
 /** Attributes forwarded onto the `<input>`/`<textarea>` itself (MUI `slotProps.htmlInput`). */
-export type TextFieldControlProps = Omit<ComponentProps<'input'>, 'size' | 'value' | 'onChange' | 'className' | 'ref'> & {
-    'data-testid'?: string | undefined;
-};
+export type TextFieldControlProps = Omit<ComponentProps<'input'>, 'size' | 'value' | 'onChange' | 'className' | 'ref'> &
+    // data-* hooks the app's keyboard layer reads (the list-search input marker, test ids).
+    Partial<Record<`data-${string}`, string>>;
 
 export type TextFieldProps = {
     label?: ReactNode | undefined;

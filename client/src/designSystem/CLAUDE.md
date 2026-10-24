@@ -70,7 +70,11 @@ Import from the barrel: `import { Button, Dialog, Text } from '../designSystem'`
   which would steal the app's F6 region cycling. `Toast` is a small declarative component that
   renders into one persistent `role="status"` region (created after mount, so a toast arrives in an
   existing live region and is announced); errors add `role="alert"`. The body mounts only while
-  open, so its pause-on-hover/focus latch can never outlive a showing.
+  open, so its pause-on-hover/focus latch can never outlive a showing. Unlike MUI's Snackbar,
+  Escape does not dismiss a toast (Escape belongs to whatever popup or region has focus). The
+  region sits outside every DS Dialog, so pressing a toast's action while a Dialog is open counts
+  as an outside press and closes the Dialog — decide that interaction before a Dialog hosts a
+  toast trigger.
 - **Text** keeps MUI's default element per variant (`title` → `h5`, `subtitleSm` → `h6`, `body` → `p`…)
   so the page outline and every `getByRole('heading')` survive. `as` overrides it.
 - **Chip**: a clickable chip *is* the `<button>`; a toggle chip exposes `aria-pressed` and

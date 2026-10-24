@@ -190,7 +190,6 @@ function SomedayPage() {
                                                     rowAction="edit"
                                                     label="Edit"
                                                     icon={<EditIcon fontSize="small" />}
-                                                    size="small"
                                                     onClick={(e) => editor.openEditor({ item, event: e })}
                                                     data-testid="somedayItemEditButton"
                                                     {...ranked.roving.actionButtonProps}

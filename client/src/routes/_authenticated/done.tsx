@@ -1,5 +1,5 @@
-import DoneAllIcon from '@mui/icons-material/DoneAll';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
+import { CheckCheck } from 'lucide-react';
 import { useCallback } from 'react';
 import { ArchivedItemsView } from '../../components/ArchivedItemsView';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
@@ -19,7 +19,7 @@ function DonePage() {
         <ArchivedItemsView
             status="done"
             title="Done"
-            emptyIcon={<DoneAllIcon />}
+            emptyIcon={<CheckCheck aria-hidden="true" />}
             emptyMessage="Completed items will appear here once you finish your first task."
             urlQuery={q ?? ''}
             writeUrlQuery={writeUrlQuery}

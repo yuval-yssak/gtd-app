@@ -1,19 +1,8 @@
-import CloseIcon from '@mui/icons-material/Close';
-import ReportProblemOutlinedIcon from '@mui/icons-material/ReportProblemOutlined';
-import Badge from '@mui/material/Badge';
-import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-import Dialog from '@mui/material/Dialog';
-import DialogContent from '@mui/material/DialogContent';
-import DialogTitle from '@mui/material/DialogTitle';
-import IconButton from '@mui/material/IconButton';
-import List from '@mui/material/List';
-import ListItem from '@mui/material/ListItem';
-import Tooltip from '@mui/material/Tooltip';
-import Typography from '@mui/material/Typography';
+import { TriangleAlert, X } from 'lucide-react';
 import { useCallback, useEffect, useState, useTransition } from 'react';
 import { dismissSyncIssue, fetchSyncIssues, retrySyncIssue, type SyncIssue } from '../api/syncApi';
 import { SYNC_ISSUES_REFRESH_EVENT } from '../contexts/syncIssuesEvents';
+import { Badge, Button, Dialog, DialogContent, DialogTitle, IconButton, Text, Tooltip } from '../designSystem';
 import { useOnline } from '../hooks/useOnline';
 import styles from './SyncIssuesPanel.module.css';
 import { syncIssueRowText } from './syncIssueRowLogic';
@@ -63,34 +52,41 @@ export function SyncIssuesPanel() {
     if (issues.length === 0 && !isOpen) {
         return null;
     }
+    const countLabel = `${issues.length} sync issue${issues.length === 1 ? '' : 's'}`;
 
     return (
         <>
-            <Tooltip title={`${issues.length} sync issue${issues.length === 1 ? '' : 's'}`}>
-                <IconButton size="small" onClick={() => setIsOpen(true)} className={styles.badgeButton} data-testid="syncIssuesBadge">
-                    <Badge badgeContent={issues.length} color="error" max={99}>
-                        <ReportProblemOutlinedIcon color={issues.length > 0 ? 'warning' : 'inherit'} />
+            <Tooltip title={countLabel}>
+                <IconButton
+                    size="sm"
+                    tone={issues.length > 0 ? 'warning' : 'neutral'}
+                    aria-label={countLabel}
+                    onClick={() => setIsOpen(true)}
+                    data-testid="syncIssuesBadge"
+                >
+                    <Badge count={issues.length} tone="error">
+                        <TriangleAlert />
                     </Badge>
                 </IconButton>
             </Tooltip>
-            <Dialog open={isOpen} onClose={() => setIsOpen(false)} fullWidth maxWidth="sm" data-testid="syncIssuesPanel">
+            <Dialog open={isOpen} onClose={() => setIsOpen(false)} fullWidth size="sm" data-testid="syncIssuesPanel">
                 <DialogTitle className={styles.dialogTitle}>
                     Sync issues
-                    <IconButton onClick={() => setIsOpen(false)} size="small" aria-label="Close">
-                        <CloseIcon fontSize="small" />
+                    <IconButton onClick={() => setIsOpen(false)} size="sm" aria-label="Close">
+                        <X />
                     </IconButton>
                 </DialogTitle>
-                <DialogContent dividers>
+                <DialogContent className={styles.content}>
                     {issues.length === 0 ? (
-                        <Typography variant="body2" color="text.secondary">
+                        <Text variant="bodySm" tone="secondary">
                             No sync issues right now.
-                        </Typography>
+                        </Text>
                     ) : (
-                        <List disablePadding>
+                        <ul className={styles.list}>
                             {issues.map((issue) => (
                                 <SyncIssueRow key={issue._id} issue={issue} onChanged={refetch} />
                             ))}
-                        </List>
+                        </ul>
                     )}
                 </DialogContent>
             </Dialog>
@@ -124,33 +120,33 @@ function SyncIssueRow({ issue, onChanged }: SyncIssueRowProps) {
     }
 
     return (
-        <ListItem disableGutters className={styles.row} data-testid="syncIssueEntry">
-            <Box className={styles.rowBody}>
-                <Typography variant="body2" className={styles.rowTitle} data-testid="syncIssueTitle">
+        <li className={styles.row} data-testid="syncIssueEntry">
+            <div className={styles.rowBody}>
+                <Text variant="bodySm" weight="medium" data-testid="syncIssueTitle">
                     {rowText.title}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
+                </Text>
+                <Text variant="bodySm" tone="secondary">
                     {rowText.reason}
-                </Typography>
-                <Typography variant="caption" color="text.secondary" data-testid="syncIssueMeta">
+                </Text>
+                <Text variant="caption" tone="secondary" data-testid="syncIssueMeta">
                     {rowText.meta}
-                </Typography>
+                </Text>
                 {rowText.showDetail && (
-                    <Typography variant="caption" color="text.secondary" data-testid="syncIssueDetail">
+                    <Text variant="caption" tone="secondary" data-testid="syncIssueDetail">
                         {issue.failureDetail}
-                    </Typography>
+                    </Text>
                 )}
-            </Box>
-            <Box className={styles.rowActions}>
+            </div>
+            <div className={styles.rowActions}>
                 {issue.retryable && (
-                    <Button size="small" variant="outlined" onClick={onRetry} disabled={isPending} data-testid="syncIssueRetry">
+                    <Button size="sm" variant="outline" onClick={onRetry} disabled={isPending} data-testid="syncIssueRetry">
                         Retry
                     </Button>
                 )}
-                <Button size="small" onClick={onDismiss} disabled={isPending} data-testid="syncIssueDismiss">
+                <Button size="sm" onClick={onDismiss} disabled={isPending} data-testid="syncIssueDismiss">
                     Dismiss
                 </Button>
-            </Box>
-        </ListItem>
+            </div>
+        </li>
     );
 }

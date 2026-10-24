@@ -1,0 +1,19 @@
+.list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+/* MUI's py: 1.25 rows — same height as a real list row. */
+.row {
+    padding-block: calc(var(--space-2) + var(--space-0-5));
+}
+
+.title {
+    block-size: 1.5rem;
+}
+
+.meta {
+    inline-size: 35%;
+    block-size: 1rem;
+}

@@ -1,5 +1,5 @@
-import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
-import IconButton from '@mui/material/IconButton';
+import { GripVertical } from 'lucide-react';
+import { IconButton } from '../../designSystem';
 import type { RankedListApi } from '../../hooks/useRankedList';
 import type { NextActionSection } from '../../lib/nextActionSections';
 import { ROW_HANDLE_ATTR } from '../../lib/nextActionsRowDom';
@@ -26,7 +26,7 @@ interface Props {
 export function RankedRowHandle({ ranked, item, section, testId }: Props) {
     return (
         <IconButton
-            size="small"
+            size="sm"
             className={styles.dragHandle}
             aria-label="Reorder"
             aria-describedby={ranked.hintIds.list}
@@ -45,7 +45,7 @@ export function RankedRowHandle({ ranked, item, section, testId }: Props) {
                 }
             }}
         >
-            <DragIndicatorIcon fontSize="small" />
+            <GripVertical />
         </IconButton>
     );
 }

@@ -1,10 +1,7 @@
-import CloseIcon from '@mui/icons-material/Close';
-import Alert from '@mui/material/Alert';
-import Button from '@mui/material/Button';
-import IconButton from '@mui/material/IconButton';
 import type { IDBPDatabase } from 'idb';
 import { useState } from 'react';
 import { requestAndRegisterPushSubscription } from '../db/pushSubscription';
+import { Button, Callout } from '../designSystem';
 import type { MyDB } from '../types/MyDB';
 import styles from './NotificationNudge.module.css';
 
@@ -37,23 +34,17 @@ export function NotificationNudge({ db }: Props) {
     }
 
     return (
-        <Alert
-            severity="info"
+        <Callout
+            tone="info"
             className={styles.alert}
-            // MUI Alert: providing `action` suppresses the built-in close button,
-            // so we include our own dismiss icon alongside the Enable CTA.
+            onClose={onDismiss}
             action={
-                <div className={styles.alertAction}>
-                    <Button color="inherit" size="small" onClick={onEnable}>
-                        Enable
-                    </Button>
-                    <IconButton color="inherit" size="small" aria-label="dismiss" onClick={onDismiss}>
-                        <CloseIcon fontSize="small" />
-                    </IconButton>
-                </div>
+                <Button size="sm" onClick={onEnable}>
+                    Enable
+                </Button>
             }
         >
             Enable push notifications to stay in sync across devices, even when the app is closed.
-        </Alert>
+        </Callout>
     );
 }

@@ -1,10 +1,6 @@
-import PeopleOutlineIcon from '@mui/icons-material/PeopleOutlined';
-import Box from '@mui/material/Box';
-import { useTheme } from '@mui/material/styles';
-import Tooltip from '@mui/material/Tooltip';
-import Typography from '@mui/material/Typography';
-import useMediaQuery from '@mui/material/useMediaQuery';
-import classNames from 'classnames';
+import { Users } from 'lucide-react';
+import { Text, Tooltip } from '../designSystem';
+import { AT_LEAST_SM_QUERY, useMediaQuery } from '../hooks/useIsMobile';
 import type { GCalResponseStatus, StoredItem } from '../types/MyDB';
 import styles from './CalendarRowMeta.module.css';
 import { getAttendeeCount, getOrganizerDisplay, getSelfResponseStatus, rsvpDotColorFor, shouldRenderMeta } from './calendarRowMetaLogic';
@@ -19,8 +15,7 @@ interface Props {
  * mobile so the row doesn't overflow). Returns null when neither data point is available.
  */
 export function CalendarRowMeta({ item }: Props) {
-    const theme = useTheme();
-    const isDesktop = useMediaQuery(theme.breakpoints.up('sm'));
+    const isDesktop = useMediaQuery(AT_LEAST_SM_QUERY);
 
     if (!shouldRenderMeta(item)) return null;
 
@@ -29,24 +24,26 @@ export function CalendarRowMeta({ item }: Props) {
     const organizerLabel = getOrganizerDisplay(item);
 
     return (
-        <Box className={styles.root} data-testid="calendarRowMeta">
+        <div className={styles.root} data-testid="calendarRowMeta">
             {count > 0 && (
                 <Tooltip title={`${count} ${count === 1 ? 'attendee' : 'attendees'}`}>
-                    <Box className={styles.countGroup} data-testid="calendarRowMetaCount">
-                        <PeopleOutlineIcon fontSize="small" />
-                        <Typography variant="caption">{count}</Typography>
+                    <span className={styles.countGroup} data-testid="calendarRowMetaCount">
+                        <Users size={16} aria-hidden="true" />
+                        <Text variant="caption" tone="inherit">
+                            {count}
+                        </Text>
                         {selfStatus && <RsvpDot status={selfStatus} />}
-                    </Box>
+                    </span>
                 </Tooltip>
             )}
             {isDesktop && organizerLabel && (
                 <Tooltip title={item.organizer?.email ?? organizerLabel}>
-                    <Typography variant="caption" className={styles.organizer} data-testid="calendarRowMetaOrganizer">
+                    <Text variant="caption" tone="inherit" className={styles.organizer} data-testid="calendarRowMetaOrganizer">
                         {organizerLabel}
-                    </Typography>
+                    </Text>
                 </Tooltip>
             )}
-        </Box>
+        </div>
     );
 }
 
@@ -55,19 +52,15 @@ interface RsvpDotProps {
 }
 
 function RsvpDot({ status }: RsvpDotProps) {
-    const color = rsvpDotColorFor(status);
-    const colorClass = colorClassFor(color);
-    // role="img" lets us attach aria-label to the otherwise-decorative span — Biome's a11y rule
-    // requires a recognized role before custom ARIA props are accepted on a generic element.
     return (
-        <span className={classNames(styles.rsvpDot, colorClass)} data-testid={`calendarRowMetaRsvpDot-${status}`} role="img" aria-label={`RSVP: ${status}`} />
+        <span
+            className={styles.rsvpDot}
+            data-rsvp={rsvpDotColorFor(status)}
+            data-testid={`calendarRowMetaRsvpDot-${status}`}
+            // role="img" lets us attach aria-label to the otherwise-decorative span — Biome's a11y rule requires
+            // a recognized role before custom ARIA props are accepted on a generic element.
+            role="img"
+            aria-label={`RSVP: ${status}`}
+        />
     );
-}
-
-/** Maps the palette key to its CSS Module class. `default` keeps the base gray dot. */
-function colorClassFor(color: 'success' | 'error' | 'warning' | 'default'): string | undefined {
-    if (color === 'success') return styles.rsvpDotAccepted;
-    if (color === 'error') return styles.rsvpDotDeclined;
-    if (color === 'warning') return styles.rsvpDotTentative;
-    return undefined;
 }

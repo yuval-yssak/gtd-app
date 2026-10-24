@@ -1,10 +1,9 @@
-import Snackbar from '@mui/material/Snackbar';
 import { useMemo } from 'react';
+import { Toast } from '../../designSystem';
 import type { RankedListApi } from '../../hooks/useRankedList';
 import { isApplePlatform } from '../../lib/platformKeys';
 import type { RowActionName } from '../../lib/rowShortcuts';
 import { MoveToSheet } from '../nextActions/MoveToSheet';
-import styles from './RankedList.module.css';
 import { reorderHintText } from './rankedListHint';
 
 interface Props {
@@ -23,16 +22,16 @@ export function RankedListChrome({ ranked, actions, sectionNoun, liveTestId }: P
     const { key, ...sheet } = ranked.moveToSheet;
     return (
         <>
-            <span id={ranked.hintIds.list} className={styles.srOnly}>
+            <span id={ranked.hintIds.list} className="srOnly">
                 {reorderHintText(isApple, actions, sectionNoun)}
             </span>
-            <span id={ranked.hintIds.row} className={styles.srOnly}>
+            <span id={ranked.hintIds.row} className="srOnly">
                 Space to reorder, Arrow Right for the row’s buttons.
             </span>
-            <div aria-live="polite" className={styles.srOnly} data-testid={liveTestId}>
+            <div aria-live="polite" className="srOnly" data-testid={liveTestId}>
                 {ranked.drag.liveText}
             </div>
-            <Snackbar open={ranked.drag.error !== null} autoHideDuration={4000} onClose={ranked.drag.clearError} message={ranked.drag.error ?? ''} />
+            <Toast open={ranked.drag.error !== null} tone="error" autoHideDuration={4000} onClose={ranked.drag.clearError} message={ranked.drag.error ?? ''} />
             <MoveToSheet key={key} {...sheet} />
         </>
     );
