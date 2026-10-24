@@ -35,8 +35,9 @@ const cache = new Map<string, CacheEntry>();
 
 /**
  * Cache key for a (db, userIds) pair. Exported so AppResourceProvider can distinguish "the
- * signed-in set changed" (key changes → adopt the new snapshot urgently) from "the cache was
- * invalidated" (key unchanged → the swap must stay inside refresh()'s startTransition).
+ * signed-in set changed" (key changes → adopted into state urgently; the provider defers what it
+ * shows) from "the cache was invalidated" (key unchanged → the swap must stay inside refresh()'s
+ * startTransition).
  */
 export function appResourceKey(db: IDBPDatabase<MyDB>, userIds: readonly string[]): string {
     const sorted = [...userIds].sort().join(',');
@@ -45,10 +46,11 @@ export function appResourceKey(db: IDBPDatabase<MyDB>, userIds: readonly string[
 
 /**
  * Whether AppResourceProvider may adopt a freshly derived snapshot during render (urgently,
- * outside startTransition). True only for a (db, userIds) context shift. A previous version
- * keyed this on snapshot identity, which is also true after a cache invalidation — any urgent
- * parent re-render then suspended the whole route to its fallback for the length of the IDB
- * re-read (the "page blink"). Pure and exported so that regression stays unit-testable.
+ * outside startTransition; what it shows stays deferred until the new snapshot resolves). True
+ * only for a (db, userIds) context shift. A previous version keyed this on snapshot identity,
+ * which is also true after a cache invalidation — any urgent parent re-render then suspended the
+ * whole route to its fallback for the length of the IDB re-read (the "page blink"). Pure and
+ * exported so that regression stays unit-testable.
  */
 export function shouldAdoptSnapshotDuringRender(renderedKey: string, nextKey: string): boolean {
     return nextKey !== renderedKey;

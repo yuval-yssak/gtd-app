@@ -1,9 +1,6 @@
-import Button from '@mui/material/Button';
-import CircularProgress from '@mui/material/CircularProgress';
-import Paper from '@mui/material/Paper';
-import Typography from '@mui/material/Typography';
 import { createFileRoute, isRedirect, Link, redirect } from '@tanstack/react-router';
 import { useState } from 'react';
+import { Button, Card, Text } from '../designSystem';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { APP_NAME } from '../lib/appName';
 import { authClient } from '../lib/authClient';
@@ -56,55 +53,34 @@ function LoginPage() {
 
     return (
         <div className={styles.page}>
-            <Paper elevation={3} className={styles.card}>
-                <Typography
-                    variant="h5"
-                    sx={{
-                        fontWeight: 600,
-                        mb: 1,
-                    }}
-                >
+            <Card padding="none" className={styles.card}>
+                <Text variant="title" weight="semibold" className={styles.appName}>
                     {APP_NAME}
-                </Typography>
+                </Text>
                 {/* A one-line description so the sign-in card is self-explanatory; the public homepage
                     Google's OAuth reviewers read is the landing page at / (routes/-LandingPage.tsx). */}
-                <Typography variant="body2" className={styles.subtitle} sx={{ mb: 2 }} data-testid="loginAppDescription">
+                <Text variant="bodySm" tone="secondary" className={styles.description} data-testid="loginAppDescription">
                     A personal productivity app for capturing, organising and reviewing your tasks — with offline-first sync across your devices and optional
                     Google Calendar integration.
-                </Typography>
-                <Typography variant="body2" className={styles.subtitle} sx={{ mb: 4 }}>
+                </Text>
+                <Text variant="bodySm" tone="secondary" className={styles.prompt}>
                     Sign in to your account
-                </Typography>
+                </Text>
                 <div className={styles.buttonGroup}>
-                    <Button
-                        variant="outlined"
-                        size="large"
-                        fullWidth
-                        onClick={() => signIn('google')}
-                        disabled={isPending}
-                        startIcon={pendingProvider === 'google' ? <CircularProgress size={16} /> : null}
-                    >
+                    <Button variant="outline" size="lg" fullWidth onClick={() => signIn('google')} disabled={isPending} loading={pendingProvider === 'google'}>
                         {pendingProvider === 'google' ? 'Redirecting…' : 'Sign in with Google'}
                     </Button>
-                    <Button
-                        variant="outlined"
-                        size="large"
-                        fullWidth
-                        onClick={() => signIn('github')}
-                        disabled={isPending}
-                        startIcon={pendingProvider === 'github' ? <CircularProgress size={16} /> : null}
-                    >
+                    <Button variant="outline" size="lg" fullWidth onClick={() => signIn('github')} disabled={isPending} loading={pendingProvider === 'github'}>
                         {pendingProvider === 'github' ? 'Redirecting…' : 'Sign in with GitHub'}
                     </Button>
                 </div>
                 {signInError && (
-                    <Typography variant="body2" color="error" sx={{ mt: 2 }} role="alert">
+                    <Text variant="bodySm" tone="error" className={styles.error} role="alert">
                         {signInError}
-                    </Typography>
+                    </Text>
                 )}
                 {/* Google's OAuth consent-screen review checks that the policy is reachable from the sign-in flow. */}
-                {/* Margins via sx: Typography's own margin reset outranks the CSS-module class at runtime. */}
-                <Typography variant="caption" component="p" className={styles.legalFooter} sx={{ mt: 2 }}>
+                <Text as="p" variant="caption" tone="secondary" className={styles.legalFooter}>
                     By signing in you agree to the{' '}
                     <Link to="/terms" data-testid="loginTermsLink">
                         Terms of Service
@@ -114,13 +90,13 @@ function LoginPage() {
                         Privacy Policy
                     </Link>
                     .
-                </Typography>
-                <Typography variant="caption" component="p" className={styles.homeLink} sx={{ mt: 1 }}>
+                </Text>
+                <Text as="p" variant="caption" tone="secondary" className={styles.homeLink}>
                     <Link to="/" data-testid="loginHomeLink">
                         Home
                     </Link>
-                </Typography>
-            </Paper>
+                </Text>
+            </Card>
         </div>
     );
 }

@@ -1,8 +1,7 @@
-import Paper from '@mui/material/Paper';
-import Typography from '@mui/material/Typography';
 import { Link } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import { MarkdownPreview } from '../components/markdown/MarkdownPreview';
+import { Card, Text } from '../designSystem';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { LEGAL_DOCUMENTS, LEGAL_EFFECTIVE_DATE, type LegalDocument, legalSectionAnchor, legalSectionHeadings } from '../lib/legalDocuments';
 import styles from './-legal.module.css';
@@ -18,7 +17,7 @@ export function LegalPage({ legalDocument }: { legalDocument: LegalDocument }) {
     const headings = legalSectionHeadings(legalDocument.markdown);
     return (
         <main className={styles.page} data-testid="legalPage">
-            <Paper elevation={3} className={styles.card}>
+            <Card padding="none" className={styles.card}>
                 <nav className={styles.nav} aria-label="Legal pages">
                     {/* "/" is the way back for a signed-in reader (Settings links here; an installed PWA has no
                         back button): it routes to the inbox from IndexedDB alone, or to the landing page. */}
@@ -26,12 +25,12 @@ export function LegalPage({ legalDocument }: { legalDocument: LegalDocument }) {
                     <Link to="/login">Sign in</Link>
                     <Link to={otherDocument.path}>{otherDocument.title}</Link>
                 </nav>
-                <Typography variant="h4" component="h1" className={styles.title} data-testid="legalTitle">
+                <Text as="h1" variant="headline" weight="semibold" className={styles.title} data-testid="legalTitle">
                     {legalDocument.title}
-                </Typography>
-                <Typography variant="body2" className={styles.effectiveDate}>
+                </Text>
+                <Text variant="bodySm" tone="secondary" className={styles.effectiveDate}>
                     Effective {dayjs(LEGAL_EFFECTIVE_DATE).format('D MMMM YYYY')}
-                </Typography>
+                </Text>
                 <nav aria-label="Contents">
                     <ol className={styles.contents}>
                         {headings.map((heading) => (
@@ -42,7 +41,7 @@ export function LegalPage({ legalDocument }: { legalDocument: LegalDocument }) {
                     </ol>
                 </nav>
                 <MarkdownPreview markdown={legalDocument.markdown} headingId={legalSectionAnchor} internalLinksInSameTab />
-            </Paper>
+            </Card>
         </main>
     );
 }

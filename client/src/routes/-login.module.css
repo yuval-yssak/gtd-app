@@ -1,36 +1,49 @@
 .page {
-    min-height: 100vh;
+    min-block-size: 100vh;
     display: flex;
     align-items: center;
     justify-content: center;
-    background-color: var(--mui-palette-grey-100, #f5f5f5);
+    background-color: var(--color-bg-page);
 }
 
 .card {
-    /* p: 6 = 3rem, width: 22.5rem fixed — matches original Paper sx values */
-    padding: 3rem;
-    width: 22.5rem;
+    padding: var(--space-12);
+    inline-size: 22.5rem;
     text-align: center;
+}
+
+.appName {
+    margin-block-end: var(--space-2);
+}
+
+.description {
+    margin-block-end: var(--space-4);
+}
+
+.prompt {
+    margin-block-end: var(--space-8);
 }
 
 .buttonGroup {
     display: flex;
     flex-direction: column;
-    gap: 1rem;
+    gap: var(--space-4);
 }
 
-.subtitle {
-    color: var(--mui-palette-text-secondary, rgba(0, 0, 0, 0.6));
+.error {
+    margin-block-start: var(--space-4);
 }
 
 .legalFooter {
-    color: var(--mui-palette-text-secondary, rgba(0, 0, 0, 0.6));
+    margin-block-start: var(--space-4);
 }
 
-.legalFooter a {
+/* The legal and home links read as quiet text, not accent links. */
+.legalFooter a,
+.homeLink a {
     color: inherit;
 }
 
-.homeLink a {
-    color: var(--mui-palette-text-secondary, rgba(0, 0, 0, 0.6));
+.homeLink {
+    margin-block-start: var(--space-2);
 }

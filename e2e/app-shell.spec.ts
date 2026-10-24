@@ -1,10 +1,11 @@
 import { expect, type Page, test } from '@playwright/test';
-import { withOneLoggedInDevice } from './helpers/context';
+import { withOneLoggedInDevice, withTwoAccountsOnOneDevice } from './helpers/context';
 import { PHONE } from './helpers/touch';
 import { uniqueStamp } from './helpers/uniqueStamp';
 
 // The design-system shell: the colour-scheme toggle (lib/colorScheme.ts stamps <html data-theme>,
-// the tokens switch on it) and the phone navigation drawer (Base UI Drawer, unmounted while closed).
+// the tokens switch on it), the phone navigation drawer (Base UI Drawer, unmounted while closed), and
+// the shell staying visible while the data layer settles at boot.
 
 function stampedTheme(page: Page) {
     return page.evaluate(() => document.documentElement.getAttribute('data-theme'));
@@ -102,3 +103,39 @@ test.describe('phone navigation drawer', () => {
         );
     });
 });
+
+test.describe('boot', () => {
+    // The multi-session seed adds the second account just after boot, which changes the data layer's
+    // key. The provider defers that swap; adopted urgently it re-suspended to the boot boundary above
+    // the shell, which flashed the whole shell hidden and dropped keyboard focus to <body>.
+    test('the navigation never hides while the data layer settles on a two-account device', async ({ browser }) => {
+        const stamp = uniqueStamp();
+        await withTwoAccountsOnOneDevice(browser, [`shell-boot-a-${stamp}@example.com`, `shell-boot-b-${stamp}@example.com`], async (page) => {
+            await page.addInitScript(watchNavVisibility);
+            await page.goto('/next-actions');
+            await expect.poll(() => page.evaluate(() => (window as NavWatchWindow).__navWatch?.isDone), { timeout: 10_000 }).toBe(true);
+            expect(await page.evaluate(() => (window as NavWatchWindow).__navWatch?.hiddenAfterShown)).toBe(false);
+        });
+    });
+});
+
+type NavWatchWindow = Window & { __navWatch?: { hiddenAfterShown: boolean; isDone: boolean } };
+
+/** Runs in the page from its first script: samples the sidebar menu every frame for 3s after it first shows. */
+function watchNavVisibility() {
+    const watch = { hiddenAfterShown: false, isDone: false };
+    (window as NavWatchWindow).__navWatch = watch;
+    let shownAt: number | null = null;
+    const sample = (now: number) => {
+        const menu = document.querySelector('[data-testid="mainMenu"]');
+        const isVisible = menu?.checkVisibility() ?? false;
+        if (shownAt === null && isVisible) shownAt = now;
+        if (shownAt !== null && !isVisible) watch.hiddenAfterShown = true;
+        if (shownAt !== null && now - shownAt > 3000) {
+            watch.isDone = true;
+            return;
+        }
+        requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+}

@@ -1,5 +1,5 @@
 import type { IDBPDatabase } from 'idb';
-import { createContext, type PropsWithChildren, startTransition, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, type PropsWithChildren, startTransition, useCallback, useContext, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import type { MyDB } from '../types/MyDB';
 import {
     type AppResourceSnapshot,
@@ -49,10 +49,9 @@ export function AppResourceProvider({ db, userIds, children }: PropsWithChildren
     const userIdsRef = useRef(userIds);
     userIdsRef.current = userIds;
 
-    // Adopt the derived snapshot during render ONLY when the (db, userIds) key changed — a context
-    // shift (account added/removed) the user expects to feel, so no startTransition. See
-    // shouldAdoptSnapshotDuringRender for why keying on the cache key (not snapshot identity) is
-    // load-bearing; invalidation swaps must flow only through `refresh`.
+    // Adopt the derived snapshot during render ONLY when the (db, userIds) key changed — an account
+    // added/removed. See shouldAdoptSnapshotDuringRender for why keying on the cache key (not
+    // snapshot identity) is load-bearing; invalidation swaps must flow only through `refresh`.
     const key = appResourceKey(db, userIds);
     const [renderedKey, setRenderedKey] = useState(key);
     if (shouldAdoptSnapshotDuringRender(renderedKey, key)) {
@@ -72,7 +71,14 @@ export function AppResourceProvider({ db, userIds, children }: PropsWithChildren
     // AppDataProvider above us) can trigger a resource refresh without importing context.
     useEffect(() => registerAppResourceRefreshHandler(refresh), [refresh]);
 
-    const value = useMemo<AppResourceContextValue>(() => ({ snapshot: renderedSnapshot, refresh }), [renderedSnapshot, refresh]);
+    // Deferred, so a key shift renders the new snapshot in the background and the current one stays
+    // on screen until it resolves. Adopted urgently, the shift suspended the provider's consumers to
+    // the boot boundary above the app shell: the multi-session seed adding an account just after
+    // boot flashed the whole shell hidden and dropped keyboard focus to <body>. The first mount
+    // still suspends normally, so boot renders the shell and its data together.
+    const shownSnapshot = useDeferredValue(renderedSnapshot);
+
+    const value = useMemo<AppResourceContextValue>(() => ({ snapshot: shownSnapshot, refresh }), [shownSnapshot, refresh]);
 
     return <AppResourceContext.Provider value={value}>{children}</AppResourceContext.Provider>;
 }
