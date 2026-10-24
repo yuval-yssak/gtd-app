@@ -5,6 +5,7 @@ import { AccountReauthDialog } from '../components/AccountReauthDialog';
 import { AccountSwitcher } from '../components/AccountSwitcher';
 import { AppErrorBoundary } from '../components/AppErrorBoundary';
 import { AppNav } from '../components/AppNav';
+import { AppNoticeToast } from '../components/AppNoticeToast';
 import { GlobalShortcuts } from '../components/GlobalShortcuts';
 import { KeyboardShortcutsDialog } from '../components/KeyboardShortcutsDialog';
 import { NavigationProgress } from '../components/NavigationProgress';
@@ -74,6 +75,9 @@ export function AuthenticatedLayout() {
                                 (discarding typed text and the keydown listener); it reads useAppData(),
                                 so it must stay inside AppDataProvider. */}
                             <QuickCaptureFab db={db} />
+                            {/* App-wide one-line notices (lib/appNotice) that outlive the route that raised
+                                them; outside the route Suspense for the same reason as the FAB. */}
+                            <AppNoticeToast />
                         </AppErrorBoundary>
                     </AppDataProvider>
                 </PendingReassignProvider>

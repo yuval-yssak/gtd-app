@@ -1,13 +1,10 @@
-import AssignmentTurnedInIcon from '@mui/icons-material/AssignmentTurnedIn';
-import Alert from '@mui/material/Alert';
-import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-import Snackbar from '@mui/material/Snackbar';
-import Typography from '@mui/material/Typography';
 import type { IDBPDatabase } from 'idb';
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { usePendingReassign } from '../contexts/PendingReassignProvider';
 import { FROM_GMAIL_READONLY_MESSAGE } from '../db/itemMutations';
+import { Button, Callout, Text } from '../designSystem';
+import { useFinishOnce } from '../hooks/useFinishOnce';
+import { showAppNotice } from '../lib/appNotice';
 import type { MyDB, StoredItem, StoredPerson, StoredWorkContext } from '../types/MyDB';
 import { type ItemEditorActionsApi, ItemEditorBody } from './itemEditor/ItemEditorBody';
 import styles from './ProcessInboxWizard.module.css';
@@ -38,6 +35,25 @@ export function nextWizardStep(items: ReadonlyArray<StoredItem>, index: number):
     return { kind: 'item', index, itemId: current._id, isLast: index + 1 >= items.length };
 }
 
+/** How a finished run went: items walked, and how many of them were skipped (left in the inbox). */
+interface RunTally {
+    total: number;
+    skipped: number;
+}
+
+/**
+ * The toast the run ends on, back in the inbox. It claims a clear inbox only when nothing was
+ * skipped — skipped items are plainly still listed there. A Gmail read-only warning the LAST item
+ * raised rides along: the run navigates away as it finishes, so a separate toast would be replaced.
+ */
+export function runSummaryNotice({ total, skipped }: RunTally, hasReadonlyWarning: boolean): string {
+    const summary =
+        skipped === 0
+            ? `Inbox clear! All ${total} item${total === 1 ? '' : 's'} processed.`
+            : `Processed ${total - skipped} of ${total} — ${skipped} still in the inbox.`;
+    return hasReadonlyWarning ? `${summary} ${FROM_GMAIL_READONLY_MESSAGE}` : summary;
+}
+
 /**
  * Sequential wizard over inbox items. Hosts the universal ItemEditorBody for the current item so
  * each item gets the full status-chip / forms / cross-account picker — same UX as single-item
@@ -48,12 +64,19 @@ export function ProcessInboxWizard({ items, db, people, workContexts, onClose, o
     const [index, setIndex] = useState(0);
     const step = nextWizardStep(items, index);
     const { isPending } = usePendingReassign();
-    // Local snackbar slot for the fromGmail-read-only warning — wizard doesn't use useItemEditor.
-    const [toast, setToast] = useState<{ open: boolean; message: string }>({ open: false, message: '' });
+    const [skippedCount, setSkippedCount] = useState(0);
+    // Set when the last item's save raised the Gmail read-only warning, so the closing toast carries
+    // it. Safe to read at the finish: the warning fires during the save, before the body's onClose
+    // advances past the last item.
+    const lastItemReadonlyRef = useRef(false);
 
     const advance = useCallback(() => {
         setIndex((i) => i + 1);
     }, []);
+    const skip = useCallback(() => {
+        setSkippedCount((n) => n + 1);
+        advance();
+    }, [advance]);
 
     // ItemEditorBody schedules `onSaved()` then `onClose()` once a save commits. By passing
     // refresh+advance as the close handler, "Save & next" is the body's normal save path with
@@ -66,23 +89,33 @@ export function ProcessInboxWizard({ items, db, people, workContexts, onClose, o
         await onItemProcessed();
     }, [onItemProcessed]);
 
-    const onCloseItem = useCallback(() => {
-        advance();
-    }, [advance]);
+    // Whether the current item committed an EXPLICIT save. The body also closes on Escape and on a
+    // reassign kickoff; like the weekly review, only an explicit save counts as processing the
+    // item — every other close steps past it and counts it as skipped.
+    const hasSaveCommittedRef = useRef(false);
+    const onSaveCommitted = useCallback(() => {
+        hasSaveCommittedRef.current = true;
+    }, []);
 
-    const closeToast = () => setToast((s) => ({ ...s, open: false }));
-    const toastSnackbar = <Snackbar open={toast.open} autoHideDuration={3000} onClose={closeToast} message={toast.message} />;
+    const onCloseItem = useCallback(() => {
+        const hasSaveCommitted = hasSaveCommittedRef.current;
+        hasSaveCommittedRef.current = false;
+        if (hasSaveCommitted) {
+            advance();
+            return;
+        }
+        skip();
+    }, [advance, skip]);
+
+    // Finished: back to the inbox, where an app-wide toast (it outlives this page) reports the run.
+    // Once only — the page can re-render (a late items refresh) while that navigation commits.
+    useFinishOnce(step.kind === 'done', () => {
+        showAppNotice(runSummaryNotice({ total: items.length, skipped: skippedCount }, lastItemReadonlyRef.current));
+        onClose();
+    });
 
     if (step.kind === 'done') {
-        const total = items.length;
-        // Wrap the done-view in a fragment so a fromGmail snackbar from the just-saved last item
-        // remains visible after the wizard switches off the editor branch.
-        return (
-            <>
-                <DonePage total={total} onClose={onClose} />
-                {toastSnackbar}
-            </>
-        );
+        return null;
     }
 
     const currentItem = items[step.index];
@@ -92,13 +125,13 @@ export function ProcessInboxWizard({ items, db, people, workContexts, onClose, o
     }
     const reassignInFlight = isPending('item', currentItem._id);
 
-    const renderActions = (api: ItemEditorActionsApi) => <WizardActions isLast={step.isLast} api={api} onSkip={advance} onAbort={onClose} />;
+    const renderActions = (api: ItemEditorActionsApi) => <WizardActions isLast={step.isLast} api={api} onSkip={skip} onAbort={onClose} />;
 
     // When the current item is mid-reassign the body refuses to render the editor (it would
     // misroute writes under the target user). The wizard must still surface Skip so the user
     // can move past the in-flight item — otherwise the only available gesture is Cancel,
     // which loses all wizard progression.
-    const inFlightContent = reassignInFlight ? <ReassignInFlightWizardBody isLast={step.isLast} onSkip={advance} onAbort={onClose} /> : null;
+    const inFlightContent = reassignInFlight ? <ReassignInFlightWizardBody isLast={step.isLast} onSkip={skip} onAbort={onClose} /> : null;
 
     const editorBody = (
         <ItemEditorBody
@@ -109,19 +142,23 @@ export function ProcessInboxWizard({ items, db, people, workContexts, onClose, o
             workContexts={workContexts}
             onClose={onCloseItem}
             onSaved={onSavedItem}
-            onFromGmailReadOnly={() => setToast({ open: true, message: FROM_GMAIL_READONLY_MESSAGE })}
+            onSaveCommitted={onSaveCommitted}
+            onFromGmailReadOnly={() => {
+                if (step.isLast) {
+                    lastItemReadonlyRef.current = true;
+                } else {
+                    showAppNotice(FROM_GMAIL_READONLY_MESSAGE);
+                }
+            }}
             renderActions={renderActions}
         />
     );
 
     return (
-        <>
-            <Box className={styles.pageRoot} data-testid="processInboxPage">
-                <WizardHeader index={step.index} total={items.length} />
-                <Box className={styles.pageBody}>{inFlightContent ?? editorBody}</Box>
-            </Box>
-            {toastSnackbar}
-        </>
+        <div className={styles.pageRoot} data-testid="processInboxPage">
+            <WizardHeader index={step.index} total={items.length} />
+            <div className={styles.pageBody}>{inFlightContent ?? editorBody}</div>
+        </div>
     );
 }
 
@@ -132,30 +169,18 @@ interface WizardHeaderProps {
 
 function WizardHeader({ index, total }: WizardHeaderProps) {
     return (
-        <Box className={styles.headerRow}>
-            <Box className={styles.headerTextBlock}>
-                <Typography
-                    component="span"
-                    variant="h6"
-                    sx={{
-                        fontWeight: 600,
-                    }}
-                >
+        <div className={styles.headerRow}>
+            <div className={styles.headerTextBlock}>
+                <Text variant="titleSm" weight="semibold">
                     Process Inbox
-                </Typography>
-                <Typography
-                    component="span"
-                    variant="caption"
-                    sx={{
-                        color: 'text.secondary',
-                    }}
-                >
+                </Text>
+                <Text as="span" variant="caption" tone="secondary">
                     {index + 1} of {total}
-                </Typography>
-            </Box>
+                </Text>
+            </div>
             {/* No header CopyIdButton here: the wizard passes no `hasHostCopyIdButton`, so
                 ItemEditorBody's meta row renders the copy button for this host. */}
-        </Box>
+        </div>
     );
 }
 
@@ -170,13 +195,13 @@ function WizardActions({ isLast, api, onSkip, onAbort }: WizardActionsProps) {
     const saveLabel = isLast ? 'Save & finish' : 'Save & next';
     return (
         <>
-            <Button onClick={onAbort} color="inherit" disabled={api.isSaving} data-testid="processInboxExit">
+            <Button variant="ghost" tone="neutral" onClick={onAbort} disabled={api.isSaving} data-testid="processInboxExit">
                 Exit
             </Button>
-            <Button onClick={onSkip} color="inherit" disabled={api.isSaving} data-testid="processInboxSkip">
+            <Button variant="ghost" tone="neutral" onClick={onSkip} disabled={api.isSaving} data-testid="processInboxSkip">
                 Skip{isLast ? ' & finish' : ' for now'}
             </Button>
-            <Button variant="contained" disabled={api.saveDisabled} onClick={api.triggerSave} data-testid="processInboxSaveNext">
+            <Button variant="solid" disabled={api.saveDisabled} onClick={api.triggerSave} data-testid="processInboxSaveNext">
                 {saveLabel}
             </Button>
         </>
@@ -193,48 +218,18 @@ interface ReassignInFlightWizardBodyProps {
  *  wizard refuses the edit but keeps Skip / Exit reachable so the user isn't trapped. */
 function ReassignInFlightWizardBody({ isLast, onSkip, onAbort }: ReassignInFlightWizardBodyProps) {
     return (
-        <Box className={styles.inFlightBody}>
-            <Alert severity="info" variant="outlined">
+        <div className={styles.inFlightBody}>
+            <Callout tone="info" variant="outline">
                 This item is being moved to another account. You can edit it once the move completes — skip past it for now.
-            </Alert>
-            <Box className={styles.inFlightActions}>
-                <Button onClick={onAbort} color="inherit" data-testid="processInboxExit">
+            </Callout>
+            <div className={styles.inFlightActions}>
+                <Button variant="ghost" tone="neutral" onClick={onAbort} data-testid="processInboxExit">
                     Exit
                 </Button>
-                <Button onClick={onSkip} variant="contained" data-testid="processInboxSkip">
+                <Button variant="solid" onClick={onSkip} data-testid="processInboxSkip">
                     Skip{isLast ? ' & finish' : ' for now'}
                 </Button>
-            </Box>
-        </Box>
-    );
-}
-
-function DonePage({ total, onClose }: { total: number; onClose: () => void }) {
-    return (
-        <Box className={styles.donePage}>
-            <AssignmentTurnedInIcon className={styles.completedIcon} />
-            <Typography
-                variant="h5"
-                sx={{
-                    fontWeight: 600,
-                }}
-            >
-                Inbox clear!
-            </Typography>
-            {total > 0 && (
-                <Typography
-                    variant="body2"
-                    sx={{
-                        color: 'text.secondary',
-                        mt: 1,
-                    }}
-                >
-                    All {total} item{total !== 1 ? 's' : ''} processed.
-                </Typography>
-            )}
-            <Button variant="contained" onClick={onClose} sx={{ mt: 3 }} data-testid="processInboxDone">
-                Done
-            </Button>
-        </Box>
+            </div>
+        </div>
     );
 }

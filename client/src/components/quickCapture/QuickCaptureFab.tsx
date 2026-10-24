@@ -1,24 +1,10 @@
-import AddIcon from '@mui/icons-material/Add';
-import NoteAddIcon from '@mui/icons-material/NoteAdd';
-import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-import Chip from '@mui/material/Chip';
-import Dialog from '@mui/material/Dialog';
-import DialogActions from '@mui/material/DialogActions';
-import DialogContent from '@mui/material/DialogContent';
-import DialogTitle from '@mui/material/DialogTitle';
-import Fab from '@mui/material/Fab';
-import IconButton from '@mui/material/IconButton';
-import InputAdornment from '@mui/material/InputAdornment';
-import Tab from '@mui/material/Tab';
-import Tabs from '@mui/material/Tabs';
-import TextField from '@mui/material/TextField';
-import Tooltip from '@mui/material/Tooltip';
 import type { IDBPDatabase } from 'idb';
+import { NotebookPen, Plus } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { deleteQuickCaptureDraft, getQuickCaptureDraft, saveQuickCaptureDraft } from '../../db/draftHelpers';
 import { collectItem } from '../../db/itemMutations';
+import { Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, Tabs, TextField, Tooltip } from '../../designSystem';
 import { useAutosave } from '../../hooks/useAutosave';
 import { useCaptureNotesPanel } from '../../hooks/useCaptureNotesPanel';
 import { useHiddenAccountCaptureNotice } from '../../hooks/useHiddenAccountCaptureNotice';
@@ -28,6 +14,11 @@ import { MarkdownNotesEditor, NOTES_PLACEHOLDER } from '../markdown/MarkdownNote
 import { MarkdownPreview } from '../markdown/MarkdownPreview';
 import styles from './QuickCaptureFab.module.css';
 import { isEditableEventTarget, shouldOpenQuickCapture } from './quickCaptureLogic';
+
+const NOTES_TABS = [
+    { value: 0, label: 'Edit' },
+    { value: 1, label: 'Preview' },
+] as const;
 
 /**
  * App-wide "add to inbox" affordance: a floating action button on every authenticated page plus
@@ -140,58 +131,50 @@ export function QuickCaptureFab({ db }: { db: IDBPDatabase<MyDB> }) {
     return (
         <>
             <Tooltip title="Add to inbox (c)">
-                <Fab
-                    color="primary"
+                <button
+                    type="button"
                     aria-label="add to inbox"
                     aria-keyshortcuts="C"
                     className={styles.fab}
                     onClick={() => setIsOpen(true)}
                     data-testid="quickCaptureFab"
                 >
-                    <AddIcon />
-                </Fab>
+                    <Plus aria-hidden="true" />
+                </button>
             </Tooltip>
 
-            <Dialog open={isOpen} onClose={onClose} fullWidth maxWidth="sm" data-testid="quickCaptureDialog">
+            <Dialog open={isOpen} onClose={onClose} fullWidth size="sm" data-testid="quickCaptureDialog">
                 <DialogTitle>Add to inbox</DialogTitle>
                 <DialogContent>
                     <TextField
-                        // MUI autoFocus works here: the Dialog mounts the field fresh on each open.
+                        // Mounted fresh on each open (the dialog unmounts its content), so autoFocus fires every time.
                         autoFocus
                         fullWidth
-                        variant="standard"
                         placeholder="What's on your mind?"
+                        aria-label="Capture to inbox"
                         value={title}
                         onChange={(e) => onFieldsChange(e.target.value, notes)}
                         onKeyDown={(e) => {
                             if (e.key === 'Enter') void onCapture();
                         }}
-                        slotProps={{
-                            htmlInput: { 'data-testid': 'quickCaptureInput' },
-                            input: {
-                                endAdornment: (
-                                    <InputAdornment position="end">
-                                        <Tooltip title={notesPanel.isOpen ? 'Hide note' : 'Add note'}>
-                                            {/* color="primary" when notes have content so the user knows a note is attached */}
-                                            <IconButton
-                                                onClick={notesPanel.toggleByUser}
-                                                color={notes.trim() ? 'primary' : 'default'}
-                                                data-testid="quickCaptureAddNoteButton"
-                                            >
-                                                <NoteAddIcon />
-                                            </IconButton>
-                                        </Tooltip>
-                                    </InputAdornment>
-                                ),
-                            },
-                        }}
+                        inputProps={{ 'data-testid': 'quickCaptureInput' }}
+                        endAdornment={
+                            <Tooltip title={notesPanel.isOpen ? 'Hide note' : 'Add note'}>
+                                {/* Accent while the note has content, so the user knows a note is attached. */}
+                                <IconButton
+                                    aria-label={notesPanel.isOpen ? 'Hide note' : 'Add note'}
+                                    tone={notes.trim() ? 'accent' : 'neutral'}
+                                    onClick={notesPanel.toggleByUser}
+                                    data-testid="quickCaptureAddNoteButton"
+                                >
+                                    <NotebookPen />
+                                </IconButton>
+                            </Tooltip>
+                        }
                     />
                     {notesPanel.isOpen && (
-                        <Box className={styles.captureNotes} data-testid="quickCaptureNotes">
-                            <Tabs value={notesPanel.tab} onChange={(_, tab: 0 | 1) => notesPanel.selectTab(tab)} className={styles.tabs}>
-                                <Tab label="Edit" value={0} />
-                                <Tab label="Preview" value={1} />
-                            </Tabs>
+                        <div className={styles.captureNotes} data-testid="quickCaptureNotes">
+                            <Tabs value={notesPanel.tab} onValueChange={notesPanel.selectTab} tabs={NOTES_TABS} aria-label="Note" className={styles.tabs} />
                             {notesPanel.tab === 0 ? (
                                 <MarkdownNotesEditor
                                     value={notes}
@@ -204,24 +187,23 @@ export function QuickCaptureFab({ db }: { db: IDBPDatabase<MyDB> }) {
                                     {notes.trim() ? <MarkdownPreview markdown={notes} /> : <span className={styles.notesEmpty}>Nothing to preview.</span>}
                                 </div>
                             )}
-                        </Box>
+                        </div>
                     )}
                 </DialogContent>
                 <DialogActions>
                     {capturedCount > 0 && (
                         <Chip
-                            size="small"
-                            color="success"
-                            variant="outlined"
+                            tone="success"
+                            variant="outline"
                             className={styles.capturedCount}
                             label={`${capturedCount} captured`}
                             data-testid="quickCaptureCount"
                         />
                     )}
-                    <Button onClick={onClose} data-testid="quickCaptureClose">
+                    <Button variant="ghost" onClick={onClose} data-testid="quickCaptureClose">
                         Done
                     </Button>
-                    <Button variant="contained" onClick={() => void onCapture()} disabled={!title.trim()} data-testid="quickCaptureSubmit">
+                    <Button variant="solid" onClick={() => void onCapture()} disabled={!title.trim()} data-testid="quickCaptureSubmit">
                         Capture
                     </Button>
                 </DialogActions>

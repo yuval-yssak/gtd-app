@@ -1,17 +1,12 @@
-import ArrowBackIcon from '@mui/icons-material/ArrowBack';
-import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-import IconButton from '@mui/material/IconButton';
-import Paper from '@mui/material/Paper';
-import Snackbar from '@mui/material/Snackbar';
-import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
+import { ArrowLeft } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { EditableStatus } from '../../components/editItemDialogLogic';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { ItemEditorBody } from '../../components/itemEditor/ItemEditorBody';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { FROM_GMAIL_READONLY_MESSAGE } from '../../db/itemMutations';
+import { Button, Card, IconButton, Text, Toast } from '../../designSystem';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useScrollToTopOnMount } from '../../hooks/useListScrollRestoration';
 import { useNavigateBack } from '../../hooks/useNavigateBack';
@@ -38,21 +33,15 @@ export const Route = createFileRoute('/_authenticated/item/$itemId')({
 
 function PageHeader({ title, onBack, idForCopy }: { title: string; onBack: () => void; idForCopy?: string }) {
     return (
-        <Box className={styles.header}>
-            <IconButton onClick={onBack} size="small" aria-label="Go back">
-                <ArrowBackIcon />
+        <div className={styles.header}>
+            <IconButton onClick={onBack} size="sm" aria-label="Go back">
+                <ArrowLeft />
             </IconButton>
-            <Typography
-                variant="h6"
-                className={styles.headerTitle}
-                sx={{
-                    fontWeight: 600,
-                }}
-            >
+            <Text variant="titleSm" weight="semibold" className={styles.headerTitle}>
                 {title}
-            </Typography>
+            </Text>
             {idForCopy && <CopyIdButton id={idForCopy} />}
-        </Box>
+        </div>
     );
 }
 
@@ -116,21 +105,15 @@ function ItemPage() {
 
     if (!item) {
         return (
-            <Box className={styles.page}>
+            <div className={styles.page}>
                 <PageHeader title="Edit item" onBack={() => window.history.back()} />
-                <Typography
-                    sx={{
-                        color: 'text.secondary',
-                        mt: 4,
-                        textAlign: 'center',
-                    }}
-                >
-                    Item not found — it may have already been processed.
-                </Typography>
-                <Button onClick={() => window.history.back()} sx={{ mt: 2, display: 'block', mx: 'auto' }}>
-                    Go back
-                </Button>
-            </Box>
+                <div className={styles.notFound}>
+                    <Text tone="secondary">Item not found — it may have already been processed.</Text>
+                    <Button variant="ghost" onClick={() => window.history.back()}>
+                        Go back
+                    </Button>
+                </div>
+            </div>
         );
     }
 
@@ -165,9 +148,9 @@ function ItemPage() {
     };
 
     return (
-        <Box className={styles.page} data-testid="itemPageWrapper">
+        <div className={styles.page} data-testid="itemPageWrapper">
             <PageHeader title="Edit item" onBack={goBack} idForCopy={item._id} />
-            <Paper variant="outlined" className={styles.card}>
+            <Card padding="none" className={styles.card}>
                 <ItemEditorBody
                     key={item._id}
                     item={item}
@@ -180,8 +163,8 @@ function ItemPage() {
                     hasHostCopyIdButton
                     {...(initialStatus ? { initialStatus } : {})}
                 />
-            </Paper>
-            <Snackbar open={toast.open} autoHideDuration={3000} onClose={() => setToast((s) => ({ ...s, open: false }))} message={toast.message} />
-        </Box>
+            </Card>
+            <Toast open={toast.open} autoHideDuration={3000} onClose={() => setToast((s) => ({ ...s, open: false }))} message={toast.message} />
+        </div>
     );
 }

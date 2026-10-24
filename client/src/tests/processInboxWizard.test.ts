@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { nextWizardStep } from '../components/ProcessInboxWizard';
+import { nextWizardStep, runSummaryNotice } from '../components/ProcessInboxWizard';
+import { FROM_GMAIL_READONLY_MESSAGE } from '../db/itemMutations';
 import type { StoredItem } from '../types/MyDB';
 
 const ITEM_A: StoredItem = {
@@ -41,5 +42,25 @@ describe('nextWizardStep', () => {
     it('marks the only item as isLast when there is exactly one', () => {
         const step = nextWizardStep([ITEM_A], 0);
         expect(step).toEqual({ kind: 'item', index: 0, itemId: 'item-A', isLast: true });
+    });
+});
+
+describe('runSummaryNotice', () => {
+    it('says the inbox is clear when every item of the run was saved, singular or plural', () => {
+        expect(runSummaryNotice({ total: 3, skipped: 0 }, false)).toBe('Inbox clear! All 3 items processed.');
+        expect(runSummaryNotice({ total: 1, skipped: 0 }, false)).toBe('Inbox clear! All 1 item processed.');
+    });
+
+    // The run lands back on the inbox, where skipped items are plainly still listed — so the
+    // summary must not claim the inbox is clear.
+    it('reports what is still in the inbox when the run skipped items', () => {
+        expect(runSummaryNotice({ total: 3, skipped: 1 }, false)).toBe('Processed 2 of 3 — 1 still in the inbox.');
+        expect(runSummaryNotice({ total: 2, skipped: 2 }, false)).toBe('Processed 0 of 2 — 2 still in the inbox.');
+    });
+
+    // The run returns to the inbox as it finishes, so a read-only warning raised by the last item
+    // rides along rather than being replaced by the summary.
+    it('carries the last item’s Gmail read-only warning along', () => {
+        expect(runSummaryNotice({ total: 2, skipped: 0 }, true)).toBe(`Inbox clear! All 2 items processed. ${FROM_GMAIL_READONLY_MESSAGE}`);
     });
 });

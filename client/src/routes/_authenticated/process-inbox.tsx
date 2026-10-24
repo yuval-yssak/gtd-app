@@ -1,14 +1,13 @@
-import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-import Typography from '@mui/material/Typography';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { ProcessInboxWizard } from '../../components/ProcessInboxWizard';
 import { useAppData } from '../../contexts/AppDataProvider';
+import { Button, Text } from '../../designSystem';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { inboxItemsInOrder } from '../../lib/inboxOrder';
 import { parseListQuerySearch } from '../../lib/listQueryUrlParams';
 import type { StoredItem } from '../../types/MyDB';
+import styles from './-process-inbox.module.css';
 
 export const Route = createFileRoute('/_authenticated/process-inbox')({
     // `q` carries the inbox search the run was started from, so only the matching items are walked.
@@ -36,23 +35,16 @@ function ProcessInboxPage() {
     const [inboxSnapshot] = useState<StoredItem[]>(() => inboxItemsInOrder(items, q ?? ''));
 
     // Back to the inbox with the search the run started from still applied.
-    const close = () => void navigate({ to: '/inbox', search: { q } });
+    const close = useCallback(() => void navigate({ to: '/inbox', search: { q } }), [navigate, q]);
 
     if (inboxSnapshot.length === 0) {
         return (
-            <Box sx={{ p: 3, textAlign: 'center' }}>
-                <Typography
-                    sx={{
-                        color: 'text.secondary',
-                        mb: 2,
-                    }}
-                >
-                    Inbox zero — nothing to process.
-                </Typography>
-                <Button variant="contained" onClick={close}>
+            <div className={styles.empty}>
+                <Text tone="secondary">Inbox zero — nothing to process.</Text>
+                <Button variant="solid" onClick={close}>
                     Back to Inbox
                 </Button>
-            </Box>
+            </div>
         );
     }
 

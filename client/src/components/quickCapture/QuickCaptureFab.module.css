@@ -1,44 +1,64 @@
-/* Doubled class raises specificity to (0,2,0), beating MUI Fab's emotion class (0,1,0) which is
-   injected later in the cascade and would otherwise leave the FAB in normal flow — where it pads
-   the document past the viewport under the viewport-fitted weekly-review column. */
-.fab.fab {
+/* Fixed, so it never sits in the document flow — where it would pad the page past the viewport
+   under the viewport-fitted weekly-review column. */
+.fab {
     position: fixed;
-    right: 1.25rem;
-    /* Clear the mobile bottom navigation (see AppNav) */
-    bottom: 5rem;
-    /* Below MUI modals (1300) so open dialogs cover it, above page content */
-    z-index: 1050;
+    inset-inline-end: var(--space-5);
+    /* Clears the mobile bottom navigation (see AppNav). */
+    inset-block-end: 5rem;
+    z-index: var(--z-fab);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    inline-size: 3.5rem;
+    block-size: 3.5rem;
+    border: none;
+    border-radius: var(--radius-full);
+    background-color: var(--color-accent);
+    box-shadow: var(--shadow-popup);
+    color: var(--color-on-accent);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+
+    @media (hover: hover) {
+        &:hover {
+            background-color: var(--color-accent-hover);
+        }
+    }
+
+    &:focus-visible {
+        outline: var(--focus-ring-width) solid var(--focus-ring-color);
+        outline-offset: 2px;
+    }
 }
 
-@media (min-width: 56.25rem) {
-    .fab.fab {
-        bottom: 1.5rem;
+@media (width >= 900px) {
+    .fab {
+        inset-block-end: var(--space-6);
     }
 }
 
 .capturedCount {
-    margin-right: auto;
-    margin-left: 1rem;
+    margin-inline: var(--space-4) auto;
 }
 
 .captureNotes {
-    padding-top: 0.75rem;
+    padding-block-start: var(--space-3);
 }
 
 .tabs {
-    margin-bottom: 0.5rem;
+    margin-block-end: var(--space-2);
 }
 
 .notesPreview {
-    min-height: 7.5rem;
-    padding: 0.75rem 0.875rem;
-    border: 0.0625rem solid var(--mui-palette-divider, rgba(0, 0, 0, 0.23));
-    border-radius: 0.25rem;
-    font-size: 0.875rem;
+    min-block-size: 7.5rem;
+    padding: var(--space-3);
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-sm);
+    font-size: var(--type-sm-size);
     line-height: 1.6;
 }
 
 .notesEmpty {
-    color: var(--mui-palette-text-secondary, rgba(0, 0, 0, 0.6));
+    color: var(--color-text-secondary);
     font-style: italic;
 }

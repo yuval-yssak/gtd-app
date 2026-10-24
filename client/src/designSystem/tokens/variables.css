@@ -137,6 +137,8 @@
            consistently with the design system. */
         --z-raised: 1;
         --z-sticky: 10;
+        /* The quick-capture FAB: above page content, below the app bar and every modal. */
+        --z-fab: 1050;
         --z-app-bar: 1100;
         --z-drawer: 1200;
         --z-dialog: 1300;

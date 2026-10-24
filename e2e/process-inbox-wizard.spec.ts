@@ -9,7 +9,7 @@ import { uniqueStamp } from './helpers/uniqueStamp';
 // - "Process Inbox" opens the wizard page.
 // - Save & next persists the per-item edits and advances to the next item.
 // - Skip leaves the item in inbox and advances.
-// - The terminal "Inbox clear!" screen appears after the last item, and Done returns to the inbox.
+// - After the last item the run returns to the inbox with a toast summing it up.
 // - An active inbox search narrows the run to the matching items.
 
 test.describe('Process Inbox wizard', () => {
@@ -46,16 +46,44 @@ test.describe('Process Inbox wizard', () => {
             await page.getByRole('button', { name: 'Trash' }).click();
             await page.getByTestId('processInboxSaveNext').click();
 
-            // Terminal "Inbox clear" screen, then back to the inbox.
-            await expect(page.getByText('Inbox clear!')).toBeVisible();
-            await page.getByTestId('processInboxDone').click();
+            // Finishing returns to the inbox, where the toast reports the run.
             await expect(page).toHaveURL(/\/inbox$/);
+            // Item B was skipped, so the run reports it as still in the inbox rather than claiming it clear.
+            await expect(page.getByTestId('appNoticeToast')).toHaveText('Processed 2 of 3 — 1 still in the inbox.');
 
             await gtd.flush(page);
             const items = await gtd.listItems(page);
             expect(items.find((i) => i._id === c._id)?.status).toBe('nextAction');
             expect(items.find((i) => i._id === b._id)?.status).toBe('inbox');
             expect(items.find((i) => i._id === a._id)?.status).toBe('trash');
+        });
+    });
+
+    // Escape closes the body without saving: the wizard steps past the item, which stays in the
+    // inbox — so it counts as skipped, never as processed.
+    test('an item left with Escape counts as still in the inbox', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `pi-escape-${uniqueStamp()}@example.com`, async (page) => {
+            const first = await gtd.collect(page, 'PI escape first');
+            const second = await gtd.collect(page, 'PI escape second');
+            await gtd.flush(page);
+
+            await page.goto('/inbox');
+            await page.getByTestId('processInboxButton').click();
+            await expect(page.getByText('1 of 2')).toBeVisible();
+            await expect(page.getByRole('textbox', { name: 'Title' })).toHaveValue('PI escape second');
+            await page.keyboard.press('Escape');
+
+            await expect(page.getByText('2 of 2')).toBeVisible();
+            await page.getByRole('button', { name: 'Next Action' }).click();
+            await page.getByTestId('processInboxSaveNext').click();
+
+            await expect(page).toHaveURL(/\/inbox$/);
+            await expect(page.getByTestId('appNoticeToast')).toHaveText('Processed 1 of 2 — 1 still in the inbox.');
+
+            await gtd.flush(page);
+            const items = await gtd.listItems(page);
+            expect(items.find((i) => i._id === second._id)?.status).toBe('inbox');
+            expect(items.find((i) => i._id === first._id)?.status).toBe('nextAction');
         });
     });
 
@@ -75,9 +103,8 @@ test.describe('Process Inbox wizard', () => {
             await page.getByRole('button', { name: 'Someday / Maybe' }).click();
             await page.getByTestId('processInboxSaveNext').click();
 
-            await expect(page.getByText('Inbox clear!')).toBeVisible();
-            await page.getByTestId('processInboxDone').click();
             await expect(page).toHaveURL(/\/inbox\?q=bank/);
+            await expect(page.getByTestId('appNoticeToast')).toHaveText('Inbox clear! All 1 item processed.');
 
             await gtd.flush(page);
             const items = await gtd.listItems(page);
