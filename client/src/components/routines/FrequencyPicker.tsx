@@ -1,14 +1,6 @@
-import Chip from '@mui/material/Chip';
-import FormControlLabel from '@mui/material/FormControlLabel';
-import Radio from '@mui/material/Radio';
-import RadioGroup from '@mui/material/RadioGroup';
-import Stack from '@mui/material/Stack';
-import TextField from '@mui/material/TextField';
-import ToggleButton from '@mui/material/ToggleButton';
-import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
-import Typography from '@mui/material/Typography';
 import dayjs from 'dayjs';
 import { useState } from 'react';
+import { Chip, RadioGroup, type RadioOption, Text, TextField, ToggleGroup } from '../../designSystem';
 import { computeNextOccurrence, deriveRecurrenceAnchor } from '../../lib/rruleUtils';
 import styles from './FrequencyPicker.module.css';
 
@@ -123,9 +115,9 @@ function NextDuePreview({ rrule }: { rrule: string }) {
     try {
         const next = computeNextOccurrence(rrule, dayjs().toDate());
         return (
-            <Typography variant="caption" className={styles.preview}>
+            <Text variant="caption" tone="secondary" className={styles.preview}>
                 Next due: {dayjs(next).format('ddd, MMM D, YYYY')}
-            </Typography>
+            </Text>
         );
     } catch {
         return null;
@@ -138,6 +130,9 @@ interface Props {
     onChange: (rrule: string, recurrenceAnchor: RecurrenceAnchor) => void;
     disabled?: boolean;
 }
+
+const FREQ_MODES = ['daily', 'weekly', 'monthly', 'yearly'] as const satisfies readonly FreqMode[];
+const MODE_OPTIONS: RadioOption<FreqMode>[] = FREQ_MODES.map((mode) => ({ value: mode, label: MODE_LABELS[mode] }));
 
 export function FrequencyPicker({ value, recurrenceAnchor, onChange, disabled }: Props) {
     const [state, setState] = useState<FreqState>(() => parseToFreqState(value, recurrenceAnchor));
@@ -161,16 +156,14 @@ export function FrequencyPicker({ value, recurrenceAnchor, onChange, disabled }:
     const currentRrule = buildRrule(state);
 
     return (
-        <fieldset disabled={disabled} style={{ border: 'none', padding: 0, margin: 0, opacity: disabled ? 0.5 : 1 }}>
-            <RadioGroup value={state.mode} onChange={(e) => update({ mode: e.target.value as FreqMode })} className={styles.modeGroup}>
-                {(Object.keys(MODE_LABELS) as FreqMode[]).map((mode) => (
-                    <div key={mode}>
-                        <FormControlLabel value={mode} control={<Radio size="small" />} label={<Typography variant="body2">{MODE_LABELS[mode]}</Typography>} />
-                        {state.mode === mode && <SubFields mode={mode} state={state} onUpdate={update} onToggleDay={toggleDay} />}
-                    </div>
-                ))}
-            </RadioGroup>
-
+        <fieldset disabled={disabled} className={styles.root}>
+            {/* `disabled` passed explicitly, not left to the fieldset: the DS radios and toggles are
+                spans, which a native <fieldset disabled> does not reach. */}
+            {/* Unnamed on purpose: the host's "Frequency" legend names the group; a second name would read twice. */}
+            <RadioGroup value={state.mode} onValueChange={(mode) => update({ mode })} options={MODE_OPTIONS} disabled={disabled} />
+            {/* After the group, not inside it: the day chips and the anchor toggle would otherwise sit
+                in the radio group's arrow-key roving focus. */}
+            <SubFields mode={state.mode} state={state} onUpdate={update} onToggleDay={toggleDay} disabled={disabled ?? false} />
             <NextDuePreview rrule={currentRrule} />
         </fieldset>
     );
@@ -181,6 +174,7 @@ interface SubFieldsProps {
     state: FreqState;
     onUpdate: (patch: Partial<FreqState>) => void;
     onToggleDay: (key: string) => void;
+    disabled: boolean;
 }
 
 const RECURRENCE_ANCHOR_CAPTIONS: Record<'monthly' | 'weekly', Record<RecurrenceAnchor, string>> = {
@@ -194,114 +188,130 @@ const RECURRENCE_ANCHOR_CAPTIONS: Record<'monthly' | 'weekly', Record<Recurrence
     },
 };
 
-function RecurrenceAnchorToggle({ mode, state, onUpdate }: { mode: 'monthly' | 'weekly'; state: FreqState; onUpdate: (patch: Partial<FreqState>) => void }) {
+const RECURRENCE_ANCHOR_OPTIONS = [
+    { value: 'floating', label: 'Floating', 'data-testid': 'recurrenceAnchorFloating' },
+    { value: 'fixed', label: 'Fixed day', 'data-testid': 'recurrenceAnchorFixed' },
+] as const;
+
+interface RecurrenceAnchorToggleProps {
+    mode: 'monthly' | 'weekly';
+    state: FreqState;
+    onUpdate: (patch: Partial<FreqState>) => void;
+    disabled: boolean;
+}
+
+function RecurrenceAnchorToggle({ mode, state, onUpdate, disabled }: RecurrenceAnchorToggleProps) {
     return (
-        <div className={styles.subFields}>
-            <ToggleButtonGroup
+        <div className={styles.anchorToggle}>
+            <ToggleGroup
+                aria-label="Recurrence anchor"
+                size="sm"
+                disabled={disabled}
                 value={state.recurrenceAnchor}
-                exclusive
-                size="small"
-                onChange={(_, next: RecurrenceAnchor | null) => next && onUpdate({ recurrenceAnchor: next })}
-            >
-                <ToggleButton value="floating" data-testid="recurrenceAnchorFloating">
-                    Floating
-                </ToggleButton>
-                <ToggleButton value="fixed" data-testid="recurrenceAnchorFixed">
-                    Fixed day
-                </ToggleButton>
-            </ToggleButtonGroup>
-            <Typography variant="caption" className={styles.preview}>
+                onValueChange={(next) => onUpdate({ recurrenceAnchor: next })}
+                options={RECURRENCE_ANCHOR_OPTIONS}
+            />
+            <Text variant="caption" tone="secondary" className={styles.preview}>
                 {RECURRENCE_ANCHOR_CAPTIONS[mode][state.recurrenceAnchor]}
-            </Typography>
+            </Text>
         </div>
     );
 }
 
-function SubFields({ mode, state, onUpdate, onToggleDay }: SubFieldsProps) {
-    if (mode === 'yearly') return null;
+interface IntervalFieldProps {
+    /** The words read on either side of the number: "Every [n] days". */
+    before: string;
+    after: string;
+    /** The number field's accessible name — the words around it are not associated with it. */
+    label: string;
+    value: number;
+    min: number;
+    max?: number | undefined;
+    onValueChange: (value: number) => void;
+}
+
+/** "Every [n] days": a narrow number field read in line with the words around it. */
+function IntervalField({ before, after, label, value, min, max, onValueChange }: IntervalFieldProps) {
+    const clamp = (raw: number) => Math.min(max ?? Number.POSITIVE_INFINITY, Math.max(min, raw || min));
+    return (
+        <div className={styles.inlineRow}>
+            <Text as="span" variant="bodySm">
+                {before}
+            </Text>
+            <TextField
+                type="number"
+                size="sm"
+                className={styles.narrowInput}
+                value={value}
+                onChange={(e) => onValueChange(clamp(parseInt(e.target.value, 10)))}
+                inputProps={{ min, ...(max !== undefined ? { max } : {}), 'aria-label': label }}
+            />
+            <Text as="span" variant="bodySm">
+                {after}
+            </Text>
+        </div>
+    );
+}
+
+function SubFields({ mode, state, onUpdate, onToggleDay, disabled }: SubFieldsProps) {
+    if (mode === 'yearly') {
+        return null;
+    }
 
     return (
         <div className={styles.subFields}>
             {mode === 'daily' && (
-                <div className={styles.inlineRow}>
-                    <Typography variant="body2">Every</Typography>
-                    <TextField
-                        type="number"
-                        size="small"
-                        className={styles.narrowInput}
-                        value={state.intervalDays}
-                        onChange={(e) => onUpdate({ intervalDays: Math.max(1, parseInt(e.target.value, 10) || 1) })}
-                        slotProps={{ htmlInput: { min: 1 } }}
-                    />
-                    <Typography variant="body2">days</Typography>
-                </div>
+                <IntervalField
+                    before="Every"
+                    after="days"
+                    label="Interval in days"
+                    value={state.intervalDays}
+                    min={1}
+                    onValueChange={(intervalDays) => onUpdate({ intervalDays })}
+                />
             )}
             {mode === 'weekly' && (
                 <>
-                    <RecurrenceAnchorToggle mode="weekly" state={state} onUpdate={onUpdate} />
+                    <RecurrenceAnchorToggle mode="weekly" state={state} onUpdate={onUpdate} disabled={disabled} />
                     {state.recurrenceAnchor === 'fixed' && (
-                        <Stack
-                            direction="row"
-                            sx={{
-                                flexWrap: 'wrap',
-                                gap: 0.5,
-                            }}
-                        >
+                        <div className={styles.dayChips}>
                             {DAYS.map(({ key, label }) => (
-                                <Chip
-                                    key={key}
-                                    label={label}
-                                    size="small"
-                                    variant={state.selectedDays.includes(key) ? 'filled' : 'outlined'}
-                                    color={state.selectedDays.includes(key) ? 'primary' : 'default'}
-                                    onClick={() => onToggleDay(key)}
-                                />
+                                <Chip key={key} label={label} selected={state.selectedDays.includes(key)} onClick={() => onToggleDay(key)} />
                             ))}
-                        </Stack>
+                        </div>
                     )}
-                    <div className={styles.inlineRow}>
-                        <Typography variant="body2">Every</Typography>
-                        <TextField
-                            type="number"
-                            size="small"
-                            className={styles.narrowInput}
-                            value={state.intervalWeeks}
-                            onChange={(e) => onUpdate({ intervalWeeks: Math.max(1, parseInt(e.target.value, 10) || 1) })}
-                            slotProps={{ htmlInput: { min: 1 } }}
-                        />
-                        <Typography variant="body2">week(s)</Typography>
-                    </div>
+                    <IntervalField
+                        before="Every"
+                        after="week(s)"
+                        label="Interval in weeks"
+                        value={state.intervalWeeks}
+                        min={1}
+                        onValueChange={(intervalWeeks) => onUpdate({ intervalWeeks })}
+                    />
                 </>
             )}
             {mode === 'monthly' && (
                 <>
-                    <RecurrenceAnchorToggle mode="monthly" state={state} onUpdate={onUpdate} />
+                    <RecurrenceAnchorToggle mode="monthly" state={state} onUpdate={onUpdate} disabled={disabled} />
                     {state.recurrenceAnchor === 'fixed' && (
-                        <div className={styles.inlineRow}>
-                            <Typography variant="body2">Day</Typography>
-                            <TextField
-                                type="number"
-                                size="small"
-                                className={styles.narrowInput}
-                                value={state.dayOfMonth}
-                                onChange={(e) => onUpdate({ dayOfMonth: Math.min(31, Math.max(1, parseInt(e.target.value, 10) || 1)) })}
-                                slotProps={{ htmlInput: { min: 1, max: 31 } }}
-                            />
-                            <Typography variant="body2">of the month</Typography>
-                        </div>
-                    )}
-                    <div className={styles.inlineRow}>
-                        <Typography variant="body2">Every</Typography>
-                        <TextField
-                            type="number"
-                            size="small"
-                            className={styles.narrowInput}
-                            value={state.intervalMonths}
-                            onChange={(e) => onUpdate({ intervalMonths: Math.max(1, parseInt(e.target.value, 10) || 1) })}
-                            slotProps={{ htmlInput: { min: 1 } }}
+                        <IntervalField
+                            before="Day"
+                            after="of the month"
+                            label="Day of the month"
+                            value={state.dayOfMonth}
+                            min={1}
+                            max={31}
+                            onValueChange={(dayOfMonth) => onUpdate({ dayOfMonth })}
                         />
-                        <Typography variant="body2">month(s)</Typography>
-                    </div>
+                    )}
+                    <IntervalField
+                        before="Every"
+                        after="month(s)"
+                        label="Interval in months"
+                        value={state.intervalMonths}
+                        min={1}
+                        onValueChange={(intervalMonths) => onUpdate({ intervalMonths })}
+                    />
                 </>
             )}
         </div>

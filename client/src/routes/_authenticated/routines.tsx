@@ -1,42 +1,13 @@
-import AddIcon from '@mui/icons-material/Add';
-import CalendarViewWeekIcon from '@mui/icons-material/CalendarViewWeek';
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
-import EditIcon from '@mui/icons-material/Edit';
-import ExpandLessIcon from '@mui/icons-material/ExpandLess';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import PauseIcon from '@mui/icons-material/Pause';
-import PlayArrowIcon from '@mui/icons-material/PlayArrow';
-import ViewListIcon from '@mui/icons-material/ViewList';
-import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-import Chip from '@mui/material/Chip';
-import Collapse from '@mui/material/Collapse';
-import Dialog from '@mui/material/Dialog';
-import DialogActions from '@mui/material/DialogActions';
-import DialogContent from '@mui/material/DialogContent';
-import DialogContentText from '@mui/material/DialogContentText';
-import DialogTitle from '@mui/material/DialogTitle';
-import Divider from '@mui/material/Divider';
-import IconButton from '@mui/material/IconButton';
-import List from '@mui/material/List';
-import ListItem from '@mui/material/ListItem';
-import ListItemButton from '@mui/material/ListItemButton';
-import ListItemText from '@mui/material/ListItemText';
-import Tab from '@mui/material/Tab';
-import Tabs from '@mui/material/Tabs';
-import TextField from '@mui/material/TextField';
-import ToggleButton from '@mui/material/ToggleButton';
-import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
-import Tooltip from '@mui/material/Tooltip';
-import Typography from '@mui/material/Typography';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import dayjs from 'dayjs';
+import { CalendarDays, ChevronDown, ChevronUp, List, Pause, Pencil, Play, Plus, Trash2 } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
 import { WindowVirtualizer } from 'virtua';
 import { AccountChip } from '../../components/AccountChip';
 import { AccountSyncChip } from '../../components/AccountSyncChip';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { ListSkeleton } from '../../components/ListSkeleton';
+import { ListRow, ListRowButton, ListRowText } from '../../components/listRow/ListRow';
 import { RowActionButton } from '../../components/RowActionButton';
 import { useRoutineEditor } from '../../components/routineEditor/useRoutineEditor';
 import { PauseRoutineConfirmDialog } from '../../components/routines/PauseRoutineConfirmDialog';
@@ -44,6 +15,21 @@ import { RoutineWeekGrid } from '../../components/routines/RoutineWeekGrid';
 import { SyncingChip } from '../../components/SyncingChip';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { pauseRoutine, removeRoutine } from '../../db/routineMutations';
+import {
+    AlertDialog,
+    Button,
+    Chip,
+    Collapsible,
+    DialogActions,
+    DialogDescription,
+    DialogTitle,
+    IconButton,
+    Tabs,
+    Text,
+    TextField,
+    ToggleGroup,
+    Tooltip,
+} from '../../designSystem';
 import { useAutoFocus } from '../../hooks/useAutoFocus';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
@@ -55,6 +41,11 @@ import { SHORTCUT_ROW_PROPS } from '../../lib/rowShortcuts';
 import { formatRoutineSchedule } from '../../lib/rruleUtils';
 import type { StoredRoutine } from '../../types/MyDB';
 import styles from './-routines.module.css';
+
+const VIEW_OPTIONS = [
+    { value: 'list', label: <List size={18} />, 'aria-label': 'List view', 'data-testid': 'routinesViewListButton' },
+    { value: 'week', label: <CalendarDays size={18} />, 'aria-label': 'Week view', 'data-testid': 'routinesViewWeekButton' },
+] as const;
 
 export const Route = createFileRoute('/_authenticated/routines')({
     component: RoutinesPage,
@@ -155,61 +146,66 @@ function RoutinesPage() {
         return nextLabel ? `${schedule} · next ${nextLabel}` : schedule;
     }
 
-    function renderRoutineRow(routine: StoredRoutine) {
+    function renderRoutineRow(routine: StoredRoutine, isDivided: boolean) {
         return (
-            <ListItem
+            <ListRow
                 {...SHORTCUT_ROW_PROPS}
-                disablePadding
-                className={styles.item}
-                secondaryAction={
-                    <Box sx={{ display: 'flex', gap: 0.5 }}>
+                isDivided={isDivided}
+                actions={
+                    <>
                         <CopyIdButton isRowAction id={routine._id} testId="routineRowCopyIdButton" />
                         {routine.active ? (
                             <Tooltip title="Pause">
-                                <IconButton size="small" onClick={() => setRoutineToPause(routine)} data-testid="routineRowPauseButton">
-                                    <PauseIcon fontSize="small" />
+                                <IconButton size="sm" aria-label="Pause" onClick={() => setRoutineToPause(routine)} data-testid="routineRowPauseButton">
+                                    <Pause />
                                 </IconButton>
                             </Tooltip>
                         ) : (
                             <Tooltip title="Resume — opens editor to set a new start date">
                                 <IconButton
-                                    size="small"
-                                    color="success"
+                                    size="sm"
+                                    tone="success"
+                                    aria-label="Resume"
                                     onClick={(e) => editor.openEditor({ routine, event: e })}
                                     data-testid="routineRowResumeButton"
                                 >
-                                    <PlayArrowIcon fontSize="small" />
+                                    <Play />
                                 </IconButton>
                             </Tooltip>
                         )}
                         <RowActionButton
                             rowAction="edit"
                             label="Edit"
-                            icon={<EditIcon fontSize="small" />}
+                            icon={<Pencil />}
                             onClick={(e) => editor.openEditor({ routine, event: e })}
                             data-testid="routineRowEditButton"
                         />
                         <Tooltip title="Delete">
-                            <IconButton size="small" color="error" onClick={() => setRoutineToDelete(routine)} data-testid="routineRowDeleteButton">
-                                <DeleteOutlineIcon fontSize="small" />
+                            <IconButton
+                                size="sm"
+                                tone="danger"
+                                aria-label="Delete"
+                                onClick={() => setRoutineToDelete(routine)}
+                                data-testid="routineRowDeleteButton"
+                            >
+                                <Trash2 />
                             </IconButton>
                         </Tooltip>
-                    </Box>
+                    </>
                 }
             >
-                <ListItemButton onClick={(e) => editor.openEditor({ routine, event: e })} data-testid="routineRow">
-                    <ListItemText
+                <ListRowButton onActivate={(e) => editor.openEditor({ routine, event: e })} data-testid="routineRow">
+                    <ListRowText
                         primary={
-                            <Box className={styles.titleRow}>
-                                {routine.title}
+                            <>
+                                <span>{routine.title}</span>
                                 <AccountChip userId={routine.userId} />
-                            </Box>
+                            </>
                         }
                         secondary={routineSecondaryLabel(routine)}
-                        className={styles.listItemText}
                     />
-                </ListItemButton>
-            </ListItem>
+                </ListRowButton>
+            </ListRow>
         );
     }
 
@@ -225,16 +221,9 @@ function RoutinesPage() {
 
     function renderEmptyState() {
         return (
-            <Typography
-                data-testid="routinesEmptyState"
-                sx={{
-                    color: 'text.secondary',
-                    textAlign: 'center',
-                    mt: 6,
-                }}
-            >
+            <Text tone="secondary" className={styles.emptyState} data-testid="routinesEmptyState">
                 {emptyStateMessage()}
-            </Typography>
+            </Text>
         );
     }
 
@@ -243,28 +232,29 @@ function RoutinesPage() {
             return null;
         }
         return (
-            <Box className={styles.pausedSection}>
-                <ListItemButton
-                    onClick={() => setIsPausedSectionOpen((open) => !open)}
+            <div className={styles.pausedSection}>
+                <button
+                    type="button"
                     className={styles.pausedToggle}
+                    aria-expanded={isPausedSectionOpen}
+                    onClick={() => setIsPausedSectionOpen((open) => !open)}
                     data-testid="routinePausedSectionToggle"
                 >
-                    <ListItemText primary={`Paused (${paused.length})`} />
-                    {isPausedSectionOpen ? <ExpandLessIcon /> : <ExpandMoreIcon />}
-                </ListItemButton>
-                {/* unmountOnExit: collapsed rows would otherwise stay in the DOM with
-                    data-list-item-id anchors that skew scroll restoration. */}
-                <Collapse in={isPausedSectionOpen} unmountOnExit>
-                    <List disablePadding component="div" className={styles.list}>
+                    <Text as="span">Paused ({paused.length})</Text>
+                    {isPausedSectionOpen ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+                </button>
+                {/* Not kept mounted: collapsed rows would stay in the DOM with data-list-item-id
+                    anchors that skew scroll restoration. */}
+                <Collapsible open={isPausedSectionOpen} keepMounted={false}>
+                    <ul className={styles.list}>
                         {paused.map((routine, idx) => (
-                            <Box key={routine._id} className={styles.pausedRow} data-list-item-id={routine._id}>
-                                {renderRoutineRow(routine)}
-                                {idx < paused.length - 1 && <Divider />}
-                            </Box>
+                            <li key={routine._id} className={styles.pausedRow} data-list-item-id={routine._id}>
+                                {renderRoutineRow(routine, idx < paused.length - 1)}
+                            </li>
                         ))}
-                    </List>
-                </Collapse>
-            </Box>
+                    </ul>
+                </Collapsible>
+            </div>
         );
     }
 
@@ -277,30 +267,29 @@ function RoutinesPage() {
                 {buckets.length > 0 && (
                     // Buckets flattened into one windowed sequence (labels and rows are each a
                     // measured child) — only elements near the viewport mount, so a large routine
-                    // collection doesn't block the main thread on navigation. component="div": the
-                    // WindowVirtualizer measuring wrapper is invalid inside the default <ul>.
-                    <List disablePadding component="div" className={styles.list}>
+                    // collection doesn't block the main thread on navigation.
+                    <div className={styles.list}>
                         <WindowVirtualizer>
                             {buckets.flatMap((group) => [
-                                <Typography
+                                <Text
                                     key={`bucket-${group.bucket}`}
+                                    as="div"
                                     variant="overline"
+                                    tone="secondary"
                                     className={styles.bucketLabel}
                                     data-testid="routineFrequencyBucket"
-                                    sx={{ color: 'text.secondary' }}
                                 >
                                     {group.bucket}
-                                </Typography>,
+                                </Text>,
                                 ...group.routines.map((routine, idx) => (
                                     // data-list-item-id: scroll-restoration anchor (see useListScrollRestoration)
-                                    <Box key={routine._id} data-list-item-id={routine._id}>
-                                        {renderRoutineRow(routine)}
-                                        {idx < group.routines.length - 1 && <Divider />}
-                                    </Box>
+                                    <div key={routine._id} data-list-item-id={routine._id}>
+                                        {renderRoutineRow(routine, idx < group.routines.length - 1)}
+                                    </div>
                                 )),
                             ])}
                         </WindowVirtualizer>
-                    </List>
+                    </div>
                 )}
                 {renderPausedSection()}
             </>
@@ -320,87 +309,72 @@ function RoutinesPage() {
     }
 
     return (
-        <Box>
-            <Box className={styles.pageHeader}>
+        <div>
+            <div className={styles.pageHeader}>
                 {/* Title + sync chip grouped so the chip stays beside the title; the parent's
                     space-between keeps the create button on the right. */}
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <Typography
-                        variant="h5"
-                        sx={{
-                            fontWeight: 600,
-                        }}
-                    >
+                <div className={styles.titleGroup}>
+                    <Text variant="title">
                         Routines
-                        {routines.length > 0 && <Chip label={routines.length} size="small" className={styles.countChip} />}
-                    </Typography>
+                        {routines.length > 0 && <Chip label={routines.length} className={styles.countChip} />}
+                    </Text>
                     {/* Routines surface GCal-linked recurring series, so a calendar sync can change them. */}
                     {isCalendarSyncing && <SyncingChip label="Syncing calendar…" />}
                     <AccountSyncChip />
-                </Box>
+                </div>
                 <Tooltip title="Create routine">
-                    <IconButton onClick={(e) => editor.openEditor({ event: e })} data-testid="newRoutineButton">
-                        <AddIcon />
+                    <IconButton aria-label="Create routine" onClick={(e) => editor.openEditor({ event: e })} data-testid="newRoutineButton">
+                        <Plus />
                     </IconButton>
                 </Tooltip>
-            </Box>
+            </div>
             {hasAnyRoutines && (
                 <TextField
-                    size="small"
+                    size="sm"
                     fullWidth
                     placeholder="Search routines…"
                     value={search.queryInput}
                     onChange={(e) => search.setQueryInput(e.target.value)}
                     className={styles.searchField}
-                    slotProps={{ htmlInput: { ref: searchFieldRef, 'data-testid': 'routinesSearchInput' } }}
+                    inputRef={searchFieldRef}
+                    inputProps={{ 'aria-label': 'Search routines', 'data-testid': 'routinesSearchInput' }}
                 />
             )}
             {hasAnyRoutines && (
-                <Box className={styles.controlsRow}>
-                    <Tabs value={activeTab} onChange={(_e, value: RoutinesTab) => onTabSelected(value)} aria-label="Routine type">
-                        <Tab value="nextAction" label={`Next Action (${nextActionCount})`} data-testid="routinesTabNextAction" />
-                        <Tab value="calendar" label={`Calendar (${calendarCount})`} data-testid="routinesTabCalendar" />
-                    </Tabs>
-                    <ToggleButtonGroup
-                        exclusive
-                        size="small"
-                        value={activeView}
-                        onChange={(_e, value: RoutinesView | null) => {
-                            if (value) onViewSelected(value);
-                        }}
-                    >
-                        <ToggleButton value="list" aria-label="List view" data-testid="routinesViewListButton">
-                            <ViewListIcon fontSize="small" />
-                        </ToggleButton>
-                        <ToggleButton value="week" aria-label="Week view" data-testid="routinesViewWeekButton">
-                            <CalendarViewWeekIcon fontSize="small" />
-                        </ToggleButton>
-                    </ToggleButtonGroup>
-                </Box>
+                <div className={styles.controlsRow}>
+                    <Tabs
+                        aria-label="Routine type"
+                        value={activeTab}
+                        onValueChange={onTabSelected}
+                        tabs={[
+                            { value: 'nextAction', label: `Next Action (${nextActionCount})`, 'data-testid': 'routinesTabNextAction' },
+                            { value: 'calendar', label: `Calendar (${calendarCount})`, 'data-testid': 'routinesTabCalendar' },
+                        ]}
+                    />
+                    <ToggleGroup size="sm" aria-label="Routines view" value={activeView} onValueChange={onViewSelected} options={VIEW_OPTIONS} />
+                </div>
             )}
             {isBootstrapping ? <ListSkeleton /> : activeView === 'week' ? renderWeekView() : renderListView()}
-            <Dialog open={routineToDelete !== null} onClose={() => setRoutineToDelete(null)} maxWidth="sm" fullWidth>
+            <AlertDialog open={routineToDelete !== null} onClose={() => setRoutineToDelete(null)} size="sm" fullWidth data-testid="deleteRoutineDialog">
                 <DialogTitle>Delete routine?</DialogTitle>
-                <DialogContent>
-                    <DialogContentText>
-                        {routineToDelete ? <>Delete "{routineToDelete.title}"?</> : null}
-                        {routineToDelete?.routineType === 'calendar' && (
-                            <>
-                                <br />
-                                <br />
-                                This will also remove the recurring event from Google Calendar and trash all generated calendar items.
-                            </>
-                        )}
-                    </DialogContentText>
-                </DialogContent>
+                <DialogDescription>
+                    {routineToDelete ? <>Delete "{routineToDelete.title}"?</> : null}
+                    {routineToDelete?.routineType === 'calendar' && (
+                        <>
+                            <br />
+                            <br />
+                            This will also remove the recurring event from Google Calendar and trash all generated calendar items.
+                        </>
+                    )}
+                </DialogDescription>
                 <DialogActions>
                     <Button onClick={() => setRoutineToDelete(null)}>Cancel</Button>
-                    <Button color="error" onClick={() => void onConfirmDelete()}>
+                    <Button tone="danger" onClick={() => void onConfirmDelete()} data-testid="deleteRoutineConfirm">
                         Delete
                     </Button>
                 </DialogActions>
-            </Dialog>
+            </AlertDialog>
             <PauseRoutineConfirmDialog routine={routineToPause} onCancel={() => setRoutineToPause(null)} onConfirm={() => void onConfirmPause()} />
-        </Box>
+        </div>
     );
 }

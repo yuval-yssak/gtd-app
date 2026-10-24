@@ -3,6 +3,7 @@ declare const styles: {
     readonly nextItemDone: string;
     readonly nextItemLink: string;
     readonly nextItemRow: string;
+    readonly notFound: string;
     readonly page: string;
 };
 export = styles;

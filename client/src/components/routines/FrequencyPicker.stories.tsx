@@ -50,3 +50,13 @@ export const MonthlyByDayOfMonth: Story = {
 export const Yearly: Story = {
     render: () => <ControlledFrequencyPicker initialRrule="FREQ=YEARLY" />,
 };
+
+/** Weekly, floating: the next due date follows completion, so there are no weekday chips. */
+export const WeeklyFloating: Story = {
+    render: () => <FrequencyPicker value="FREQ=WEEKLY" recurrenceAnchor="floating" onChange={fn()} />,
+};
+
+/** Locked (an ended calendar routine): every control is disabled and dimmed. */
+export const Disabled: Story = {
+    render: () => <FrequencyPicker value="FREQ=WEEKLY;BYDAY=MO,WE,FR" onChange={fn()} disabled />,
+};

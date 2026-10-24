@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
@@ -122,6 +122,50 @@ test.describe('Routines page — compact row labels', () => {
 
             // Routine-generated next actions carry expectedBy — surfaced as "next due <date>".
             await expect(page.getByTestId('routineRow').filter({ hasText: 'Workout' })).toContainText(/Every day · next due/);
+        });
+    });
+});
+
+test.describe('Routines page — row actions', () => {
+    const rowFor = (page: Page, title: string) => page.locator('[data-list-item-id]').filter({ hasText: title });
+
+    test('Delete asks for confirmation, then removes the routine from the list', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `routines-delete-${uniqueStamp()}@example.com`, async (page) => {
+            await gtd.createRoutine(page, { title: 'Water plants', routineType: 'nextAction', rrule: 'FREQ=DAILY', template: {}, active: true });
+            await gtd.createRoutine(page, { title: 'Take vitamins', routineType: 'nextAction', rrule: 'FREQ=DAILY', template: {}, active: true });
+            await gtd.flush(page);
+
+            await page.goto('/routines');
+            await rowFor(page, 'Water plants').getByTestId('routineRowDeleteButton').click();
+            const dialog = page.getByTestId('deleteRoutineDialog');
+            await expect(dialog).toContainText('Delete "Water plants"?');
+
+            // Cancel keeps the routine.
+            await dialog.getByRole('button', { name: 'Cancel' }).click();
+            await expect(dialog).toHaveCount(0);
+            await expect(rowFor(page, 'Water plants')).toHaveCount(1);
+
+            await rowFor(page, 'Water plants').getByTestId('routineRowDeleteButton').click();
+            await page.getByTestId('deleteRoutineConfirm').click();
+            await expect(rowFor(page, 'Water plants')).toHaveCount(0);
+            await expect(rowFor(page, 'Take vitamins')).toHaveCount(1);
+        });
+    });
+
+    test('Pause asks for confirmation, then moves the routine under Paused', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `routines-pause-${uniqueStamp()}@example.com`, async (page) => {
+            await gtd.createRoutine(page, { title: 'Water plants', routineType: 'nextAction', rrule: 'FREQ=DAILY', template: {}, active: true });
+            await gtd.flush(page);
+
+            await page.goto('/routines');
+            await rowFor(page, 'Water plants').getByTestId('routineRowPauseButton').click();
+            await expect(page.getByTestId('pauseRoutineDialog')).toContainText('Pause "Water plants"?');
+            await page.getByTestId('pauseRoutineConfirm').click();
+
+            await expect(page.getByTestId('pauseRoutineDialog')).toHaveCount(0);
+            await expect(page.getByTestId('routinePausedSectionToggle')).toHaveText(/Paused \(1\)/);
+            await page.getByTestId('routinePausedSectionToggle').click();
+            await expect(rowFor(page, 'Water plants').getByTestId('routineRowResumeButton')).toBeVisible();
         });
     });
 });

@@ -52,9 +52,9 @@ test.describe('unsaved-changes guard — item editor', () => {
             await expect(guardDialog).toBeVisible();
             await page.getByTestId('unsavedChangesStay').click();
             await expect(guardDialog).toHaveCount(0);
-            // The guard dialog is a MUI modal — wait for its exit so the next ESC isn't swallowed.
-            // (:not() skips AppNav's keep-mounted mobile drawer, which is always in the DOM.)
-            await expect(page.locator('.MuiModal-root:not([aria-hidden="true"])')).toHaveCount(0);
+            // Wait for the dialog's popup to close so the next ESC isn't swallowed: the page's ESC
+            // listener stands down while any modal popup is marked open (isModalOpen).
+            await expect(page.locator('[data-modal-popup][data-open]')).toHaveCount(0);
             await expect(page).toHaveURL(new RegExp(`/item/${item._id}`)); // navigation was cancelled
 
             await page.keyboard.press('Escape');

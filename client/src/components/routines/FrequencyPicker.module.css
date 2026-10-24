@@ -1,34 +1,42 @@
+/* The fieldset reset comes from tokens/base.css. */
 .root {
     display: flex;
     flex-direction: column;
-    gap: 1rem;
+    gap: var(--space-4);
 }
 
-.modeGroup {
-    display: flex;
-    flex-direction: column;
-}
-
+/* Indented to the radio labels' text, so the fields read as belonging to the chosen mode. */
 .subFields {
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
-    margin-top: 0.75rem;
-    padding-left: 1.75rem; /* aligns with radio label text */
+    gap: var(--space-3);
+    padding-inline-start: var(--space-6);
+}
+
+.anchorToggle {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-1);
+}
+
+.dayChips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
 }
 
 .inlineRow {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--space-2);
     flex-wrap: wrap;
 }
 
 .narrowInput {
-    width: 4.5rem;
+    inline-size: 4.5rem;
 }
 
 .preview {
     font-style: italic;
-    color: var(--mui-palette-text-secondary);
 }

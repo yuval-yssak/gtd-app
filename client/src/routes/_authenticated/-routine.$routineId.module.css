@@ -1,31 +1,38 @@
 .page {
-    max-width: 56rem;
+    max-inline-size: 56rem;
 }
 
 .card {
-    padding: 1.5rem;
+    padding: var(--space-6);
+}
+
+.notFound {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-4);
+    margin-block-start: var(--space-8);
+    text-align: center;
 }
 
 .nextItemLink {
-    margin-bottom: 1rem;
-    text-transform: none;
+    margin-block-end: var(--space-4);
 }
 
 /* Next-item row: the jump link, its overdue marker, and the inline complete action. */
 .nextItemRow {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--space-2);
     flex-wrap: wrap;
-    margin-bottom: 1rem;
+    margin-block-end: var(--space-4);
 }
 
 /* The link owns the row's bottom margin via .nextItemRow — drop its own. */
 .nextItemRow .nextItemLink {
-    margin-bottom: 0;
+    margin-block-end: 0;
 }
 
 .nextItemDone {
-    text-transform: none;
     flex-shrink: 0;
 }

@@ -31,6 +31,7 @@
  * squashing a tall card instead of letting it overflow into the scroll. */
 .editorCard {
     inline-size: 100%;
+
     /* Wide enough for the review's two-column metadata grid (see NextActionFields.module.css) —
        the small date/number/toggle controls pair up instead of each owning a full row. */
     max-inline-size: 44rem;
@@ -46,6 +47,7 @@
     min-block-size: 0;
     inline-size: 100%;
     display: flex;
+
     /* `safe` centers only while the content fits; once it is taller than the area it degrades to
      * flex-start. Plain `center` puts the card's top at a NEGATIVE offset, which scrollTop cannot
      * reach (it floors at 0) — with overflow:auto those pixels are clipped away entirely. */
@@ -70,6 +72,7 @@
     margin-block-start: auto;
     flex-shrink: 0;
     inline-size: 100%;
+
     /* Matches .editorCard so the decision buttons stay flush with the card's end edge. */
     max-inline-size: 44rem;
     padding: var(--space-3) var(--space-4);

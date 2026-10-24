@@ -1,59 +1,80 @@
 .list {
-    border: 0.0625rem solid var(--mui-palette-divider);
-    border-radius: 0.25rem;
-}
-
-/* Compact rows: the page's goal is a whole-collection overview, so density beats breathing room. */
-.item {
-    padding: 0.25rem 1rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border: 1px solid var(--color-divider);
+    border-radius: var(--radius-sm);
 }
 
 .countChip {
-    margin-left: 0.75rem;
+    margin-inline-start: var(--space-3);
     vertical-align: middle;
-}
-
-.listItemText {
-    padding-right: 3rem;
-}
-
-.titleRow {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
 }
 
 .pageHeader {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 1.5rem;
+    margin-block-end: var(--space-6);
+}
+
+.titleGroup {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
 }
 
 .searchField {
-    margin-bottom: 1rem;
+    margin-block-end: var(--space-4);
+}
+
+.emptyState {
+    margin-block-start: var(--space-12);
+    text-align: center;
 }
 
 .bucketLabel {
-    display: block;
-    margin: 0.75rem 0 0.25rem;
+    margin-block: var(--space-3) var(--space-1);
+    padding-inline: var(--space-4);
 }
 
 .controlsRow {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 0.5rem;
-    margin-bottom: 0.75rem;
+    gap: var(--space-2);
+    margin-block-end: var(--space-3);
 }
 
 .pausedSection {
-    margin-top: 1.5rem;
+    margin-block-start: var(--space-6);
 }
 
 .pausedToggle {
-    border: 0.0625rem solid var(--mui-palette-divider);
-    border-radius: 0.25rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    inline-size: 100%;
+    padding: var(--space-2) var(--space-4);
+    border: 1px solid var(--color-divider);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: start;
+    cursor: pointer;
+
+    /* Hover-capable pointers only: on touch the background would stick after a tap. */
+    @media (hover: hover) {
+        &:hover {
+            background-color: var(--color-state-hover);
+        }
+    }
+
+    &:focus-visible {
+        outline: var(--focus-ring-width) solid var(--focus-ring-color);
+        outline-offset: var(--focus-ring-offset);
+    }
 }
 
 /* Paused (archived) routines read as background noise until deliberately expanded. */

@@ -1,7 +1,3 @@
-import Alert from '@mui/material/Alert';
-import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-import TextField from '@mui/material/TextField';
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
@@ -26,6 +22,7 @@ import {
 } from '../../db/routineItemHelpers';
 import { createRoutineWithFirstItems, updateRoutine } from '../../db/routineMutations';
 import { splitRoutine } from '../../db/routineSplit';
+import { Button, Callout, TextField } from '../../designSystem';
 import { useAutosave } from '../../hooks/useAutosave';
 import { useCalendarOptions } from '../../hooks/useCalendarOptions';
 import { useEntityUsage } from '../../hooks/useEntityUsage';
@@ -882,37 +879,37 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
 
     if (reassignInFlight) {
         return (
-            <Box className={styles.body}>
+            <div className={styles.body}>
                 <ReassignInFlightInline onClose={closeEditor} entityLabel="routine" />
-            </Box>
+            </div>
         );
     }
 
     return (
-        <Box className={styles.body}>
+        <div className={styles.body}>
             {conflictFields.length > 0 && (
-                <Alert
-                    severity="info"
+                <Callout
+                    tone="info"
                     onClose={() => setConflictFields([])}
                     action={
-                        <Button color="inherit" size="small" onClick={adoptTheirVersion} data-testid="routineEditorUseTheirs">
+                        <Button tone="neutral" size="sm" onClick={adoptTheirVersion} data-testid="routineEditorUseTheirs">
                             Use their version
                         </Button>
                     }
                     data-testid="routineEditorConflictNotice"
                 >
                     This routine changed on another device ({conflictFields.join(', ')}). Your edits are kept and will overwrite on save.
-                </Alert>
+                </Callout>
             )}
             {isEdit && !routine.active && (
-                <Alert severity="info" variant="outlined">
+                <Callout tone="info" variant="outline">
                     This routine is paused. Save your changes to resume it.
-                </Alert>
+                </Callout>
             )}
             {isEndedCalendar && (
-                <Alert severity="info" variant="outlined">
+                <Callout tone="info" variant="outline">
                     This routine has ended. Only title and notes can be edited.
-                </Alert>
+                </Callout>
             )}
 
             <TextField
@@ -965,13 +962,13 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
                 <AccountPicker value={ownerUserId} onChange={setOwnerUserId} disabled={isSaving} {...(reassignError ? { error: reassignError } : {})} />
             )}
 
-            <Box className={styles.inlineActions}>
+            <div className={styles.inlineActions}>
                 <Button onClick={closeEditor}>Cancel</Button>
-                <Button variant="contained" disabled={saveDisabled} onClick={() => onSave()} data-testid="routineEditorSaveButton">
+                <Button variant="solid" disabled={saveDisabled} onClick={() => onSave()} data-testid="routineEditorSaveButton">
                     {isEdit ? 'Save changes' : 'Create routine'}
                 </Button>
-            </Box>
+            </div>
             <UnsavedChangesDialog blocker={navigationBlocker} />
-        </Box>
+        </div>
     );
 }

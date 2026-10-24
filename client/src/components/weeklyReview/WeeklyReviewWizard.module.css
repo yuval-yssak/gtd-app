@@ -2,10 +2,12 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-4);
+
     /* Stays 4rem wider than the card/bar (44rem) so the stepper and header strip keep their own
        breathing room while the item card centers inside them. */
     max-inline-size: 48rem;
     margin-inline: auto;
+
     /* Viewport-fitted so the stage action bar stays pinned at the bottom: item content scrolls
        INSIDE its card, never the page — the decision buttons keep one fixed screen position. The
        inset var mirrors mainContent's vertical padding (fallback = its desktop value). */
@@ -40,8 +42,11 @@
     text-align: start;
     cursor: pointer;
 
-    &:hover {
-        background-color: var(--color-state-hover);
+    /* Hover-capable pointers only: on touch the background would stick after a tap. */
+    @media (hover: hover) {
+        &:hover {
+            background-color: var(--color-state-hover);
+        }
     }
 
     &:focus-visible {

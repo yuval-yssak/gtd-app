@@ -1,8 +1,5 @@
-import Box from '@mui/material/Box';
-import Chip from '@mui/material/Chip';
-import ListItemButton from '@mui/material/ListItemButton';
-import Typography from '@mui/material/Typography';
 import { useMemo } from 'react';
+import { Chip, Text } from '../../designSystem';
 import { buildRoutineWeekGrid, WEEK_DAY_LABELS } from '../../lib/routineWeekGrid';
 import { formatRoutineSchedule } from '../../lib/rruleUtils';
 import type { StoredRoutine } from '../../types/MyDB';
@@ -29,60 +26,52 @@ export function RoutineWeekGrid({ routines, onRoutineSelected }: RoutineWeekGrid
     const { days, lessFrequent } = useMemo(() => buildRoutineWeekGrid(routines), [routines]);
 
     return (
-        <Box data-testid="routineWeekGrid">
-            <Box className={styles.scrollContainer}>
-                <Box className={styles.grid}>
+        <div data-testid="routineWeekGrid">
+            <div className={styles.scrollContainer}>
+                <div className={styles.grid}>
                     {WEEK_DAY_LABELS.map((dayLabel, dayIndex) => (
-                        <Box key={dayLabel} className={styles.dayColumn} data-testid="routineWeekDayColumn">
-                            <Typography variant="caption" className={styles.dayLabel}>
+                        <div key={dayLabel} className={styles.dayColumn} data-testid="routineWeekDayColumn">
+                            <Text variant="caption" weight="semibold" className={styles.dayLabel}>
                                 {dayLabel}
-                            </Typography>
+                            </Text>
                             {days[dayIndex]?.map((routine) => (
                                 <Chip
                                     key={routine._id}
                                     label={entryLabel(routine)}
-                                    size="small"
-                                    variant="outlined"
+                                    variant="outline"
                                     onClick={(e) => onRoutineSelected(routine, e)}
                                     className={styles.entryChip}
                                     data-testid="routineWeekGridEntry"
                                 />
                             ))}
-                        </Box>
+                        </div>
                     ))}
-                </Box>
-            </Box>
+                </div>
+            </div>
             {lessFrequent.length > 0 && (
-                <Box className={styles.lessFrequentSection}>
-                    <Typography
-                        variant="overline"
-                        sx={{
-                            color: 'text.secondary',
-                        }}
-                    >
+                <div className={styles.lessFrequentSection}>
+                    <Text variant="overline" tone="secondary">
                         Less frequent
-                    </Typography>
+                    </Text>
                     {lessFrequent.map((routine) => (
-                        // ListItemButton (not a bare Box): keyboard-focusable like the grid's Chip entries.
-                        <ListItemButton
+                        // A real button: keyboard-focusable like the grid's chip entries.
+                        <button
                             key={routine._id}
+                            type="button"
                             className={styles.lessFrequentRow}
                             onClick={(e) => onRoutineSelected(routine, e)}
                             data-testid="routineWeekLessFrequentRow"
                         >
-                            <Typography variant="body2">{routine.title}</Typography>
-                            <Typography
-                                variant="caption"
-                                sx={{
-                                    color: 'text.secondary',
-                                }}
-                            >
+                            <Text as="span" variant="bodySm">
+                                {routine.title}
+                            </Text>
+                            <Text variant="caption" tone="secondary">
                                 {formatRoutineSchedule(routine)}
-                            </Typography>
-                        </ListItemButton>
+                            </Text>
+                        </button>
                     ))}
-                </Box>
+                </div>
             )}
-        </Box>
+        </div>
     );
 }

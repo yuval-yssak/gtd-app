@@ -1,18 +1,12 @@
-import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
-import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutlined';
-import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-import Chip from '@mui/material/Chip';
-import Paper from '@mui/material/Paper';
-import Snackbar from '@mui/material/Snackbar';
-import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
 import dayjs from 'dayjs';
+import { ArrowRight, CircleCheck } from 'lucide-react';
 import { useState, useTransition } from 'react';
 import { RoutineEditorBody } from '../../components/routineEditor/RoutineEditorBody';
 import { RoutinePageHeader } from '../../components/routineEditor/RoutinePageHeader';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone, FROM_GMAIL_READONLY_MESSAGE } from '../../db/itemMutations';
+import { Button, Card, Chip, Text, Toast } from '../../designSystem';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useScrollToTopOnMount } from '../../hooks/useListScrollRestoration';
 import { useNavigateBack } from '../../hooks/useNavigateBack';
@@ -42,7 +36,7 @@ function NextItemLink({ routine, items }: { routine: StoredRoutine; items: Store
 
     if (!result.item) {
         return (
-            <Button disabled startIcon={<ArrowForwardIcon />} className={styles.nextItemLink} data-testid="routineNextItemEmpty">
+            <Button disabled startIcon={<ArrowRight />} className={styles.nextItemLink} data-testid="routineNextItemEmpty">
                 {result.reason}
             </Button>
         );
@@ -59,9 +53,9 @@ function NextItemLink({ routine, items }: { routine: StoredRoutine; items: Store
         });
 
     return (
-        <Box className={styles.nextItemRow}>
+        <div className={styles.nextItemRow}>
             <Button
-                startIcon={<ArrowForwardIcon />}
+                startIcon={<ArrowRight />}
                 className={styles.nextItemLink}
                 onClick={(e) => navigateOrNewTab(e, { to: '/item/$itemId', params: { itemId: item._id }, search: { status: null } })}
                 data-testid="routineNextItemLink"
@@ -69,10 +63,10 @@ function NextItemLink({ routine, items }: { routine: StoredRoutine; items: Store
                 Next: {item.title}
                 {dateLabel && ` · ${dateLabel}`}
             </Button>
-            {isOverdue && <Chip label="Overdue" color="warning" size="small" data-testid="routineNextItemOverdueChip" />}
+            {isOverdue && <Chip label="Overdue" tone="warning" size="sm" data-testid="routineNextItemOverdueChip" />}
             <Button
-                size="small"
-                startIcon={<CheckCircleOutlineIcon />}
+                size="sm"
+                startIcon={<CircleCheck />}
                 disabled={isCompleting}
                 onClick={onMarkDone}
                 className={styles.nextItemDone}
@@ -80,8 +74,8 @@ function NextItemLink({ routine, items }: { routine: StoredRoutine; items: Store
             >
                 Mark done
             </Button>
-            <Snackbar open={Boolean(toast)} autoHideDuration={4000} onClose={() => setToast('')} message={toast} />
-        </Box>
+            <Toast open={Boolean(toast)} autoHideDuration={4000} onClose={() => setToast('')} message={toast} />
+        </div>
     );
 }
 
@@ -107,21 +101,13 @@ function RoutinePage() {
 
     if (!routine || !account) {
         return (
-            <Box className={styles.page} data-testid="routinePageWrapper">
+            <div className={styles.page} data-testid="routinePageWrapper">
                 <RoutinePageHeader title="Edit routine" onBack={goBack} />
-                <Typography
-                    sx={{
-                        color: 'text.secondary',
-                        mt: 4,
-                        textAlign: 'center',
-                    }}
-                >
-                    Routine not found — it may have been deleted.
-                </Typography>
-                <Button onClick={goBack} sx={{ mt: 2, display: 'block', mx: 'auto' }}>
-                    Go back
-                </Button>
-            </Box>
+                <div className={styles.notFound}>
+                    <Text tone="secondary">Routine not found — it may have been deleted.</Text>
+                    <Button onClick={goBack}>Go back</Button>
+                </div>
+            </div>
         );
     }
 
@@ -131,10 +117,10 @@ function RoutinePage() {
     }
 
     return (
-        <Box className={styles.page} data-testid="routinePageWrapper">
+        <div className={styles.page} data-testid="routinePageWrapper">
             <RoutinePageHeader title="Edit routine" onBack={goBack} idForCopy={routine._id} />
             <NextItemLink routine={routine} items={allItems} />
-            <Paper variant="outlined" className={styles.card}>
+            <Card padding="none" className={styles.card}>
                 <RoutineEditorBody
                     key={routine._id}
                     db={db}
@@ -145,7 +131,7 @@ function RoutinePage() {
                     onClose={goBack}
                     onSaved={onSaved}
                 />
-            </Paper>
-        </Box>
+            </Card>
+        </div>
     );
 }

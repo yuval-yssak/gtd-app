@@ -262,13 +262,12 @@ test.describe('Item editor — item page UX', () => {
             await page.getByLabel('Waiting for (optional)').click();
             await expect(page.getByRole('listbox')).toBeVisible();
 
-            // First ESC: MUI closes the menu, the page listener stands down — URL unchanged.
+            // First ESC: the popup closes, the page listener stands down — URL unchanged.
             await page.keyboard.press('Escape');
             await expect(page.getByRole('listbox')).toHaveCount(0);
-            // Wait out the menu's exit transition — the page listener treats a still-open (not yet
-            // aria-hidden/unmounted) MuiModal-root as "popup open" and would swallow the second ESC.
-            // AppNav's keep-mounted mobile drawer stays in the DOM aria-hidden, hence the :not().
-            await expect(page.locator('.MuiModal-root:not([aria-hidden="true"])')).toHaveCount(0);
+            // Wait out the popup's exit — the page listener treats a modal popup still marked open
+            // as "popup open" (isModalOpen) and would swallow the second ESC.
+            await expect(page.locator('[data-modal-popup][data-open]')).toHaveCount(0);
             await expect(page).toHaveURL(new RegExp(`/item/${item._id}`));
 
             // Second ESC: nothing open → navigate back (deep link → status-bucket fallback).

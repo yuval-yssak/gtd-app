@@ -2,9 +2,12 @@ import * as fs from 'node:fs/promises';
 import type { Download, Page } from '@playwright/test';
 import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc';
 import { resetServerForEmails, withOneLoggedInDevice, withTwoAccountsOnOneDevice } from './helpers/context';
 import { API_URL, CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
+
+dayjs.extend(utc);
 
 // Account deletion + data export. Deleted users must evaporate from every device — the one
 // receiving the SSE `account-deleted` event live, AND one that was offline at the time and
@@ -97,7 +100,10 @@ async function activeAccountId(page: Page): Promise<string> {
  */
 async function settledActiveAccountId(page: Page): Promise<string | null> {
     try {
-        return await gtd.getActiveAccountId(page);
+        // Just after the evaporation reload the new page can exist before its dev harness mounts —
+        // not settled yet, same as a context destroyed mid-reload.
+        const isHarnessMounted = await page.evaluate(() => typeof (window as unknown as { __gtd?: unknown }).__gtd !== 'undefined');
+        return isHarnessMounted ? await gtd.getActiveAccountId(page) : null;
     } catch (err) {
         if (String(err).includes('Execution context was destroyed')) {
             return null;
@@ -299,7 +305,9 @@ test.describe('data export', () => {
             await page.getByTestId('downloadMyDataButton').click();
             const download: Download = await downloadPromise;
 
-            expect(download.suggestedFilename()).toBe(`done-export-${dayjs().format('YYYY-MM-DD')}.json`);
+            // The server names the file by ITS clock (the e2e API runs TZ=UTC, as Cloud Run does) — a
+            // local date here fails every night between local midnight and UTC midnight.
+            expect(download.suggestedFilename()).toBe(`done-export-${dayjs.utc().format('YYYY-MM-DD')}.json`);
             const payload = JSON.parse(await fs.readFile(await download.path(), 'utf8')) as {
                 format: string;
                 user: { _id: string; email: string } | null;

@@ -6,40 +6,57 @@
 .grid {
     display: grid;
     grid-template-columns: repeat(7, minmax(7.5rem, 1fr));
-    gap: 0.5rem;
-    min-width: 56rem;
+    gap: var(--space-2);
+    min-inline-size: 56rem;
     align-items: start;
 }
 
 .dayColumn {
     display: flex;
     flex-direction: column;
-    gap: 0.375rem;
-    border: 0.0625rem solid var(--mui-palette-divider);
-    border-radius: 0.25rem;
-    padding: 0.5rem;
-    min-height: 6rem;
+    gap: var(--space-1-5);
+    border: 1px solid var(--color-divider);
+    border-radius: var(--radius-sm);
+    padding: var(--space-2);
+    min-block-size: 6rem;
 }
 
 .dayLabel {
-    font-weight: 600;
     text-align: center;
 }
 
 .entryChip {
     justify-content: flex-start;
-    max-width: 100%;
+    max-inline-size: 100%;
 }
 
 .lessFrequentSection {
-    margin-top: 1rem;
+    margin-block-start: var(--space-4);
 }
 
-/* ListItemButton supplies cursor + hover background; only layout is custom. */
 .lessFrequentRow {
     display: flex;
     align-items: baseline;
-    gap: 0.5rem;
-    padding: 0.25rem 0.5rem;
-    border-radius: 0.25rem;
+    gap: var(--space-2);
+    inline-size: 100%;
+    padding: var(--space-1) var(--space-2);
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: start;
+    cursor: pointer;
+
+    /* Hover-capable pointers only: on touch the background would stick after a tap. */
+    @media (hover: hover) {
+        &:hover {
+            background-color: var(--color-state-hover);
+        }
+    }
+
+    &:focus-visible {
+        outline: var(--focus-ring-width) solid var(--focus-ring-color);
+        outline-offset: var(--focus-ring-offset);
+    }
 }
