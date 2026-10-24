@@ -316,9 +316,10 @@ After any code change — bug fix, feature, or refactor — run the following cy
 **Client changes:**
 1. `cd client && npm run generate-typed-css-modules` — regenerates `.d.ts` files for CSS Modules
 2. `npm run lint:fix` — Biome format + lint (may auto-correct files; subsequent steps run on the corrected state)
-3. `npm run typecheck`
-4. `npm run test`
-5. Invoke the `client-code-reviewer` subagent (canonical source: `client/.claude/agents/code-reviewer.md`)
+3. `npm run lint:css` — stylelint token gate on CSS Modules (`client/stylelint.config.js`); has no autofix
+4. `npm run typecheck`
+5. `npm run test`
+6. Invoke the `client-code-reviewer` subagent (canonical source: `client/.claude/agents/code-reviewer.md`)
 
 **API server changes:**
 1. `cd api-server && npm run lint:fix` — Biome format + lint
@@ -330,7 +331,10 @@ After any code change — bug fix, feature, or refactor — run the following cy
 1. `cd e2e && npm run lint:fix`
 2. `npx playwright test <changed specs>` — only specs that actually changed; full suite is too slow for the inner loop
 
-A stop hook (`scripts/post-change-checks.sh`) runs the client / api-server / e2e blocks **in parallel** after each Claude response. It exits 2 (blocking) on any failure so Claude is automatically re-invoked until everything is green. It skips entirely unless a PostToolUse hook touched the `.claude/.edited-this-turn` sentinel — a manual rerun after the sentinel is consumed is a silent no-op.
+A stop hook (`scripts/post-change-checks.sh`) runs the client / api-server / e2e blocks **in parallel** after each Claude response. It exits 2 (blocking) on any failure so Claude is automatically re-invoked until everything is green. It skips entirely unless a PostToolUse hook wrote the `.claude/.edited-this-turn` sentinel (one edited path per line) — a manual rerun after the sentinel is consumed is a silent no-op.
+
+- **90-second cap.** Every block runs under one wall-clock budget (`GTD_HOOK_BUDGET_SECONDS`, default 90). A block that hits it is killed with its whole process group and reported as a failure. A healthy run takes about 20s (client ≈ 20s, one e2e spec ≈ 15s), so a timeout means something is broken — most often a stopped `gtd-test-mongo` container (every API write then 500s and each e2e test fails slowly), a spec that grew too big, or lost concurrency. Fix the cause; do not raise the budget.
+- **E2E runs only the specs edited this turn**, not every spec in the uncommitted diff (which on a long branch would rerun the same specs every turn). The client and api-server blocks still key off the whole diff, so edits made through shell commands are checked too.
 
 **Lint warnings count as failures.** Biome warnings printed by `lint:fix` (typically `noNonNullAssertion` and other "unsafe fix" categories) must be cleaned up in the same turn that surfaces them. Do not finish a turn while warnings remain, even if the script exits 0. The preferred fix for `arr[0]!` in tests is destructure-then-narrow:
 ```ts
@@ -347,7 +351,7 @@ if (!call) throw new Error('expected one X');
 
 ### Why two agents (and where they live)
 
-The two reviewers are kept separate because they encode different stack-specific knowledge (React 19/MUI/IDB vs. Hono/MongoDB/Better Auth). Each canonical definition lives next to the code it reviews (`client/.claude/agents/code-reviewer.md`, `api-server/.claude/agents/code-reviewer.md`).
+The two reviewers are kept separate because they encode different stack-specific knowledge (React 19/Base UI/IDB vs. Hono/MongoDB/Better Auth). Each canonical definition lives next to the code it reviews (`client/.claude/agents/code-reviewer.md`, `api-server/.claude/agents/code-reviewer.md`).
 
 For sessions started at the monorepo root, both are exposed via symlinks at `.claude/agents/` (`client-code-reviewer.md` → client, `api-code-reviewer.md` → api-server). Edit the canonical files in the subdirectories — the symlinks track them automatically. The frontmatter `name:` fields (`client-code-reviewer`, `api-code-reviewer`) match the symlink filenames, so each resolves to one and only one agent regardless of which directory the session was started from.
 
