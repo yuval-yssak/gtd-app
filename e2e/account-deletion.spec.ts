@@ -3,15 +3,13 @@ import type { Download, Page } from '@playwright/test';
 import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { resetServerForEmails, withOneLoggedInDevice, withTwoAccountsOnOneDevice } from './helpers/context';
+import { API_URL, CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
 
 // Account deletion + data export. Deleted users must evaporate from every device — the one
 // receiving the SSE `account-deleted` event live, AND one that was offline at the time and
 // only learns about it from the unauthenticated tombstone probe (`GET /auth/user-status`) on
 // its next reconnect. Other accounts signed in on the same device must be untouched.
-
-const CLIENT_URL = 'http://localhost:4173';
-const API_URL = 'http://localhost:4000';
 
 /** Timestamp alone collides when two workers start the same case in the same millisecond (`--repeat-each`); the random tail keeps the accounts apart. */
 function uniqueEmail(prefix: string): string {

@@ -1,6 +1,7 @@
 import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { closeContextQuietly, resetServerForEmails } from './helpers/context';
+import { API_URL, CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
 import { loginAs } from './helpers/login';
 
@@ -15,10 +16,9 @@ import { loginAs } from './helpers/login';
 // Inbound GCal payloads use /dev/calendar/simulate-webhook-event (the same hook used by
 // calendar-revive-trashed.spec.ts).
 
-const SETTINGS_URL = 'http://localhost:4173/settings';
-const CLIENT_URL = 'http://localhost:4173';
-const DEV_SEED_CALENDAR_URL = 'http://localhost:4000/dev/calendar/seed-integration';
-const DEV_SIMULATE_WEBHOOK_URL = 'http://localhost:4000/dev/calendar/simulate-webhook-event';
+const SETTINGS_URL = `${CLIENT_URL}/settings`;
+const DEV_SEED_CALENDAR_URL = `${API_URL}/dev/calendar/seed-integration`;
+const DEV_SIMULATE_WEBHOOK_URL = `${API_URL}/dev/calendar/simulate-webhook-event`;
 
 interface SeedCalendarResult {
     integrationId: string;

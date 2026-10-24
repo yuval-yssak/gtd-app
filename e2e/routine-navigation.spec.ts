@@ -2,6 +2,7 @@ import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Routine navigation surface: /routines grouping + URL-backed search + open-page icon,
 // the routine indicator deep link from next-actions, the routine page's next-item link,
@@ -29,7 +30,7 @@ async function seedGroupedRoutines(page: Page) {
 
 test.describe('Routines list — tabs, grouping and search', () => {
     test('tabs split the types with counts, URL-backed selection, and frequency buckets daily → annual', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `routine-groups-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `routine-groups-${uniqueStamp()}@example.com`, async (page) => {
             await seedGroupedRoutines(page);
 
             await page.goto('/routines');
@@ -55,7 +56,7 @@ test.describe('Routines list — tabs, grouping and search', () => {
     });
 
     test('search filters by title, syncs to ?q=, deep-links, and shows a no-match state', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `routine-search-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `routine-search-${uniqueStamp()}@example.com`, async (page) => {
             await seedGroupedRoutines(page);
 
             await page.goto('/routines');
@@ -82,7 +83,7 @@ test.describe('Routines list — tabs, grouping and search', () => {
     });
 
     test('the Edit button opens the routine page; ESC returns to the exact list URL with the page kept in history', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `routine-open-page-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `routine-open-page-${uniqueStamp()}@example.com`, async (page) => {
             const { dailyNa } = await seedGroupedRoutines(page);
 
             await page.goto('/routines?q=water');
@@ -107,7 +108,7 @@ test.describe('Routines list — tabs, grouping and search', () => {
 
 test.describe('Routine deep links from items', () => {
     test('routine icon on a next action, next-item link on the routine page, and the item editor chip all link through', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `routine-links-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `routine-links-${uniqueStamp()}@example.com`, async (page) => {
             const today = dayjs().format('YYYY-MM-DD');
             const routine = await gtd.createRoutine(page, {
                 title: 'Workout',
@@ -144,7 +145,7 @@ test.describe('Routine deep links from items', () => {
     });
 
     test('ESC from an item reached via a routine page returns to the list, not the routine page', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `routine-esc-chain-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `routine-esc-chain-${uniqueStamp()}@example.com`, async (page) => {
             const today = dayjs().format('YYYY-MM-DD');
             const routine = await gtd.createRoutine(page, {
                 title: 'Workout',
@@ -175,7 +176,7 @@ test.describe('Routine deep links from items', () => {
     });
 
     test('a past-but-undone calendar occurrence stays reachable as OVERDUE and can be marked done in place', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `routine-overdue-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `routine-overdue-${uniqueStamp()}@example.com`, async (page) => {
             const routine = await gtd.createRoutine(page, {
                 title: 'Update Microsoft Keys',
                 routineType: 'calendar',
@@ -233,7 +234,7 @@ test.describe('Routine deep links from items', () => {
     });
 
     test('routine page shows a disabled reason when no next item exists', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `routine-no-next-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `routine-no-next-${uniqueStamp()}@example.com`, async (page) => {
             const paused = await gtd.createRoutine(page, {
                 title: 'Dormant routine',
                 routineType: 'nextAction',

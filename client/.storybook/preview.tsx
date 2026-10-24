@@ -18,7 +18,7 @@ const muiTheme = extendTheme({
 // Stamps the toolbar's scheme the same way lib/colorScheme.ts does in the app, so DS stories render
 // both palettes from the same tokens.
 const withColorScheme: Decorator = (Story, context) => {
-    const scheme = context.globals['colorScheme'] === 'dark' ? 'dark' : 'light';
+    const scheme = context.globals.colorScheme === 'dark' ? 'dark' : 'light';
     useEffect(() => {
         document.documentElement.setAttribute('data-theme', scheme);
         document.documentElement.setAttribute('data-color-scheme', scheme);

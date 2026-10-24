@@ -30,14 +30,14 @@ function markup(dense: boolean) {
 const TICKLER_EXPLAINER = 'Item stays hidden from Next Actions until this date';
 
 describe('NextActionFields dense layout', () => {
-    it('pairs the narrow controls into two columns above the sm breakpoint when dense', () => {
+    it('lays the narrow controls out in a grid when dense', () => {
         // The attribute switches on the two-column grid that keeps the review card from scrolling; the
         // grid's geometry itself is pinned by e2e/weekly-review-dense-fields.spec.ts.
         expect(markup(true)).toContain('data-dense');
         expect(markup(false)).not.toContain('data-dense');
     });
 
-    it('spans the chip clouds across both grid columns when dense', () => {
+    it('spans the chip clouds across every grid column when dense', () => {
         // Contexts and people genuinely use the full width — a half-width column would wrap them
         // more, costing back the vertical space the two-column grid just saved.
         const spans = markup(true).split(styles.fullSpan).length - 1;

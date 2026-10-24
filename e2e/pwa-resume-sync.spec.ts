@@ -1,8 +1,8 @@
 import type { Page } from '@playwright/test';
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withTwoLoggedInDevices } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 /**
  * An installed PWA is frozen while backgrounded and returns with no cold boot, no offline→online
@@ -45,7 +45,7 @@ async function waitForTitleWithoutPulling(page: Page, title: string): Promise<vo
 
 test.describe('PWA resume sync', () => {
     test('a resumed app pulls a change made elsewhere without an explicit pull', async ({ browser }) => {
-        const email = `resume-${dayjs().valueOf()}@example.com`;
+        const email = `resume-${uniqueStamp()}@example.com`;
         await withTwoLoggedInDevices(browser, email, async (page1, page2) => {
             // Device 2 is the "backgrounded phone": sever its live channel so it cannot learn about
             // the change through SSE, which is exactly the state iOS leaves a frozen PWA in.
@@ -64,7 +64,7 @@ test.describe('PWA resume sync', () => {
     });
 
     test('a resume while offline opens no channels — the online transition owns that', async ({ browser }) => {
-        const email = `resume-offline-${dayjs().valueOf()}@example.com`;
+        const email = `resume-offline-${uniqueStamp()}@example.com`;
         await withTwoLoggedInDevices(browser, email, async (_page1, page2) => {
             await page2.evaluate(() => {
                 const harness = (window as unknown as { __gtd: { closeSse?: () => void } }).__gtd;
@@ -82,7 +82,7 @@ test.describe('PWA resume sync', () => {
     });
 
     test('resume rebuilds the SSE channels a freeze tore down', async ({ browser }) => {
-        const email = `resume-sse-${dayjs().valueOf()}@example.com`;
+        const email = `resume-sse-${uniqueStamp()}@example.com`;
         await withTwoLoggedInDevices(browser, email, async (_page1, page2) => {
             await page2.evaluate(() => {
                 const harness = (window as unknown as { __gtd: { closeSse?: () => void } }).__gtd;

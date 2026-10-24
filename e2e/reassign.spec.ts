@@ -1,6 +1,7 @@
 import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { resetServerForEmails, withTwoAccountsOnOneDevice } from './helpers/context';
+import { API_URL, CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
 
 // E2E coverage strategy: assertions read MongoDB through dev endpoints (server-side state) instead
@@ -11,8 +12,8 @@ import { gtd } from './helpers/gtd';
 // Uses `withTwoAccountsOnOneDevice` so the device's multi-session cookie carries both userIds —
 // `auth.api.listDeviceSessions` then sees both as device members, allowing /sync/reassign through.
 
-const INBOX_URL = 'http://localhost:4173/inbox';
-const DEV_SEED_CALENDAR_URL = 'http://localhost:4000/dev/calendar/seed-integration';
+const INBOX_URL = `${CLIENT_URL}/inbox`;
+const DEV_SEED_CALENDAR_URL = `${API_URL}/dev/calendar/seed-integration`;
 
 interface SeedCalendarRequest {
     userId: string;
@@ -41,7 +42,7 @@ async function seedItemOnServer(userId: string, title: string, overrides: Record
     const id = `seed-${Math.random().toString(36).slice(2, 10)}`;
     const now = new Date().toISOString();
     const item = { _id: id, user: userId, status: 'inbox', title, createdTs: now, updatedTs: now, ...overrides };
-    const res = await fetch('http://localhost:4000/dev/reassign/seed-entity', {
+    const res = await fetch(`${API_URL}/dev/reassign/seed-entity`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ collection: 'items', doc: item }),
@@ -55,7 +56,7 @@ async function seedItemOnServer(userId: string, title: string, overrides: Record
 async function seedPersonOnServer(userId: string, name: string): Promise<string> {
     const id = `seedp-${Math.random().toString(36).slice(2, 10)}`;
     const now = new Date().toISOString();
-    const res = await fetch('http://localhost:4000/dev/reassign/seed-entity', {
+    const res = await fetch(`${API_URL}/dev/reassign/seed-entity`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ collection: 'people', doc: { _id: id, user: userId, name, createdTs: now, updatedTs: now } }),
@@ -81,7 +82,7 @@ async function fetchServerEntity(
     collection: 'items' | 'people',
     entityId: string,
 ): Promise<{ _id: string; user: string; peopleIds?: string[]; calendarEventId?: string; calendarIntegrationId?: string; htmlLink?: string } | null> {
-    const res = await fetch(`http://localhost:4000/dev/reassign/find-entity?collection=${collection}&entityId=${entityId}`);
+    const res = await fetch(`${API_URL}/dev/reassign/find-entity?collection=${collection}&entityId=${entityId}`);
     if (!res.ok) {
         return null;
     }

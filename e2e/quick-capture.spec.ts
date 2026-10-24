@@ -1,8 +1,8 @@
 import { expect, type Page, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import type { StoredDraft } from '../client/src/types/MyDB';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Reads the drafts store through the dev-tools harness so specs can wait for the debounced IDB
 // write deterministically instead of sleeping past the debounce interval.
@@ -15,7 +15,7 @@ function readDrafts(page: Page): Promise<StoredDraft[]> {
 
 test.describe('global quick capture', () => {
     test('FAB captures consecutive items from a non-inbox page', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `qc-fab-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `qc-fab-${uniqueStamp()}@example.com`, async (page) => {
             await page.goto('/next-actions');
             await page.getByTestId('quickCaptureFab').click();
 
@@ -40,7 +40,7 @@ test.describe('global quick capture', () => {
     });
 
     test('the "c" shortcut opens the dialog; typing in a text field does not', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `qc-key-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `qc-key-${uniqueStamp()}@example.com`, async (page) => {
             await page.goto('/someday');
             // Wait for hydration — the shortcut listener attaches when the FAB mounts.
             await expect(page.getByTestId('quickCaptureFab')).toBeVisible();
@@ -67,7 +67,7 @@ test.describe('global quick capture', () => {
     });
 
     test('markdown notes + draft: typed text survives close and reload; capture commits and clears', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `qc-draft-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `qc-draft-${uniqueStamp()}@example.com`, async (page) => {
             await page.goto('/someday');
             await page.getByTestId('quickCaptureFab').click();
             await page.getByTestId('quickCaptureInput').fill('Draft me');

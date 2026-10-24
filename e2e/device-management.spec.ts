@@ -1,11 +1,9 @@
 import type { Page } from '@playwright/test';
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { resetServerForEmails, withOneLoggedInDevice, withTwoLoggedInDevices } from './helpers/context';
+import { API_URL, CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
-
-const CLIENT_URL = 'http://localhost:4173';
-const API_URL = 'http://localhost:4000';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Settings → Connected devices: list every device syncing this account, rename, and remove one.
 // Removal is the user-initiated analog of the stale-device reaper — the removed device's next
@@ -38,7 +36,7 @@ function isDeviceRegisteredOnServer(page: Page): Promise<boolean> {
 
 test.describe('Connected devices (settings)', () => {
     test('lists this device with label, rename works', async ({ browser }) => {
-        const email = `devices-rename-${dayjs().valueOf()}@example.com`;
+        const email = `devices-rename-${uniqueStamp()}@example.com`;
         await resetServerForEmails([email]);
 
         await withOneLoggedInDevice(browser, email, async (page) => {
@@ -70,7 +68,7 @@ test.describe('Connected devices (settings)', () => {
     });
 
     test('surfaces load and action errors inline', async ({ browser }) => {
-        const email = `devices-errors-${dayjs().valueOf()}@example.com`;
+        const email = `devices-errors-${uniqueStamp()}@example.com`;
         await resetServerForEmails([email]);
 
         await withOneLoggedInDevice(browser, email, async (page) => {
@@ -97,7 +95,7 @@ test.describe('Connected devices (settings)', () => {
     });
 
     test('removing a second device frees it server-side and it recovers via bootstrap', async ({ browser }) => {
-        const email = `devices-remove-${dayjs().valueOf()}@example.com`;
+        const email = `devices-remove-${uniqueStamp()}@example.com`;
         await resetServerForEmails([email]);
 
         await withTwoLoggedInDevices(browser, email, async (page1, page2) => {

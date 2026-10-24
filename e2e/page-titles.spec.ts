@@ -1,14 +1,14 @@
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { closeContextQuietly, withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // The browser tab title follows the page: "<page> · Done" on list pages, the entity's own title on
 // item/person/routine pages, so a row of open tabs is tellable apart.
 
 test.describe('tab title', () => {
     test('follows the page through in-app navigation and deep links', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `page-titles-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `page-titles-${uniqueStamp()}@example.com`, async (page) => {
             await page.goto('/inbox');
             await expect(page).toHaveTitle('Inbox · Done');
 
@@ -23,7 +23,7 @@ test.describe('tab title', () => {
     });
 
     test('an item page is titled after the item, and follows a rename typed into the open editor', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `page-titles-item-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `page-titles-item-${uniqueStamp()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'Renew passport');
             await gtd.flush(page);
 
@@ -42,7 +42,7 @@ test.describe('tab title', () => {
     });
 
     test('person and routine pages are titled after their entity', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `page-titles-entity-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `page-titles-entity-${uniqueStamp()}@example.com`, async (page) => {
             const userId = (await gtd.getActiveAccountId(page)) as string;
             const person = await gtd.createPerson(page, { name: 'Carmel' });
             const routine = await gtd.createRoutine(page, {

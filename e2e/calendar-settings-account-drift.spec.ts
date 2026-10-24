@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { fetchDevMultiSessionCookies, resetServerForEmails, withTwoAccountsOnOneDevice } from './helpers/context';
+import { API_URL, CLIENT_URL } from './helpers/env';
 
 // Regression test for the settings-page account drift: the calendar rows used to be fetched under
 // the AMBIENT cookie session while the "Managing calendars for …" banner (and every pinned
@@ -9,8 +10,7 @@ import { fetchDevMultiSessionCookies, resetServerForEmails, withTwoAccountsOnOne
 // and row actions then hit the wrong integration. The fix pins the reads to the active account,
 // so banner, rows, and actions always agree.
 
-const CLIENT_URL = 'http://localhost:4173';
-const DEV_SEED_CALENDAR_URL = 'http://localhost:4000/dev/calendar/seed-integration';
+const DEV_SEED_CALENDAR_URL = `${API_URL}/dev/calendar/seed-integration`;
 
 async function seedIntegrationWithCalendar(userId: string, integrationId: string, configId: string, displayName: string): Promise<void> {
     const res = await fetch(DEV_SEED_CALENDAR_URL, {

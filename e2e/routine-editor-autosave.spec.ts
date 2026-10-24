@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withOneLoggedInDevice, withTwoLoggedInDevices } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Routine editor hybrid model: title/notes autosave with Undo; schedule/type/template still
 // commit via the explicit Save button (those edits can split the routine or regenerate items).
@@ -10,7 +10,7 @@ const DAILY = { routineType: 'nextAction' as const, rrule: 'FREQ=DAILY;INTERVAL=
 
 test.describe('routine editor — title/notes autosave', () => {
     test('title autosaves without Save and Undo restores it', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `routine-autosave-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `routine-autosave-${uniqueStamp()}@example.com`, async (page) => {
             await gtd.createRoutine(page, { ...DAILY, title: 'Water the plants' });
             await page.goto('/routines');
 
@@ -28,7 +28,7 @@ test.describe('routine editor — title/notes autosave', () => {
     });
 
     test('schedule edits do NOT autosave — only Save commits them', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `routine-schedule-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `routine-schedule-${uniqueStamp()}@example.com`, async (page) => {
             const routine = await gtd.createRoutine(page, { ...DAILY, title: 'Weekly review' });
             await page.goto('/routines');
 
@@ -50,7 +50,7 @@ test.describe('routine editor — title/notes autosave', () => {
 
 test.describe('routine editor — live merge while open', () => {
     test('remote rename flows into a clean open editor; dirty local field conflicts surface a notice', async ({ browser }) => {
-        const email = `routine-merge-${dayjs().valueOf()}@example.com`;
+        const email = `routine-merge-${uniqueStamp()}@example.com`;
         await withTwoLoggedInDevices(browser, email, async (page1, page2) => {
             const routine = await gtd.createRoutine(page1, { ...DAILY, title: 'Merge routine' });
             await gtd.flush(page1);

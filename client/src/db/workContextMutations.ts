@@ -1,7 +1,7 @@
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import type { MyDB, StoredWorkContext } from '../types/MyDB';
-import { queueSyncOp } from './syncHelpers';
+import { queueDeleteThenRemove, queueSyncOp } from './syncHelpers';
 import { deleteWorkContextById, putWorkContext } from './workContextHelpers';
 
 function nowIso(): string {
@@ -28,12 +28,15 @@ export async function updateWorkContext(db: IDBPDatabase<MyDB>, workContext: Sto
 export async function removeWorkContext(db: IDBPDatabase<MyDB>, workContextId: string): Promise<void> {
     // Read the owning userId before delete so the queued delete op is scoped to the right account.
     const existing = await db.get('workContexts', workContextId);
-    await deleteWorkContextById(db, workContextId);
-    await queueSyncOp(db, {
-        opType: 'delete',
-        entityType: 'workContext',
-        entityId: workContextId,
-        snapshot: null,
-        ...(existing?.userId ? { userId: existing.userId } : {}),
-    });
+    await queueDeleteThenRemove(
+        db,
+        {
+            opType: 'delete',
+            entityType: 'workContext',
+            entityId: workContextId,
+            snapshot: null,
+            ...(existing?.userId ? { userId: existing.userId } : {}),
+        },
+        () => deleteWorkContextById(db, workContextId),
+    );
 }

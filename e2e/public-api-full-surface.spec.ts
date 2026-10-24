@@ -1,9 +1,9 @@
 import { type APIRequestContext, type Browser, type BrowserContext, expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { resetServerForEmails, withOneLoggedInDevice } from './helpers/context';
+import { API_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
-
-const API_URL = 'http://localhost:4000';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 /**
  * Phase 4 e2e for the broadened public /v1 API. Drives a full GTD lifecycle through the
@@ -39,7 +39,7 @@ async function withBearerOnlyContext(browser: Browser, fn: (ctx: BrowserContext)
 
 test.describe('public /v1 full-surface lifecycle', () => {
     test('capture → clarify nextAction → schedule calendar → complete via POST', async ({ browser }) => {
-        const email = `public-api-full-${dayjs().valueOf()}@example.com`;
+        const email = `public-api-full-${uniqueStamp()}@example.com`;
         await resetServerForEmails([email]);
 
         await withOneLoggedInDevice(browser, email, async (page) => {
@@ -97,7 +97,7 @@ test.describe('public /v1 full-surface lifecycle', () => {
     });
 
     test('PATCH { status: "calendar", ignoreBefore } returns 400 status_field_violation with extra carrying the offending cell', async ({ browser }) => {
-        const email = `public-api-neg-${dayjs().valueOf()}@example.com`;
+        const email = `public-api-neg-${uniqueStamp()}@example.com`;
         await resetServerForEmails([email]);
 
         await withOneLoggedInDevice(browser, email, async (page) => {
@@ -119,7 +119,7 @@ test.describe('public /v1 full-surface lifecycle', () => {
     });
 
     test('PATCH { status: "trash" } is rejected with invalid_transition (in-app UI only)', async ({ browser }) => {
-        const email = `public-api-trash-${dayjs().valueOf()}@example.com`;
+        const email = `public-api-trash-${uniqueStamp()}@example.com`;
         await resetServerForEmails([email]);
 
         await withOneLoggedInDevice(browser, email, async (page) => {
@@ -138,7 +138,7 @@ test.describe('public /v1 full-surface lifecycle', () => {
     // must reach a device as an absent key (not be no-op'd or reinstated from the device's copy),
     // and a later in-app edit on that device must push a snapshot that still lacks the key.
     test('PATCH { waitingForPersonId: null } clears the person and the cleared state survives a client sync round-trip', async ({ browser }) => {
-        const email = `public-api-clear-${dayjs().valueOf()}@example.com`;
+        const email = `public-api-clear-${uniqueStamp()}@example.com`;
         await resetServerForEmails([email]);
 
         await withOneLoggedInDevice(browser, email, async (page) => {

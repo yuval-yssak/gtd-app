@@ -2,13 +2,14 @@ import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Tests item mutations after initial clarification:
 // metadata updates, title/notes changes, and cross-status moves.
 
 test.describe('item updates', () => {
     test('update next-action metadata', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `update-meta-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `update-meta-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'Update me');
             const na = await gtd.clarifyToNextAction(page, inbox, { energy: 'low', time: 5 });
 
@@ -28,7 +29,7 @@ test.describe('item updates', () => {
     });
 
     test('update item title and notes', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `update-title-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `update-title-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'Original title');
             const na = await gtd.clarifyToNextAction(page, inbox);
 
@@ -46,7 +47,7 @@ test.describe('item updates', () => {
     });
 
     test('move next-action to done', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `na-done-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `na-done-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'Finish this');
             const na = await gtd.clarifyToNextAction(page, inbox, { energy: 'medium' });
             await gtd.flush(page);
@@ -61,7 +62,7 @@ test.describe('item updates', () => {
     });
 
     test('move next-action to waiting-for', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `na-wf-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `na-wf-${uniqueStamp()}@example.com`, async (page) => {
             const person = await gtd.createPerson(page, { name: 'Bob' });
             const inbox = await gtd.collect(page, 'Delegate to Bob');
             const na = await gtd.clarifyToNextAction(page, inbox, { energy: 'low' });
@@ -82,7 +83,7 @@ test.describe('item updates', () => {
     });
 
     test('move calendar item to trash', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `cal-trash-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `cal-trash-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'Cancel meeting');
             const timeStart = dayjs().add(2, 'day').hour(14).minute(0).second(0).toISOString();
             const timeEnd = dayjs().add(2, 'day').hour(15).minute(0).second(0).toISOString();
@@ -99,7 +100,7 @@ test.describe('item updates', () => {
     });
 
     test('move inbox item to someday/maybe', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `inbox-someday-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `inbox-someday-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'Learn a new instrument');
 
             const someday = await gtd.clarifyToSomedayMaybe(page, inbox);
@@ -113,7 +114,7 @@ test.describe('item updates', () => {
     });
 
     test('move next-action to someday/maybe — status-specific fields stripped', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `na-someday-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `na-someday-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'Maybe someday');
             const na = await gtd.clarifyToNextAction(page, inbox, { energy: 'high', time: 45, urgent: true });
             await gtd.flush(page);
@@ -134,7 +135,7 @@ test.describe('item updates', () => {
     });
 
     test('move someday/maybe back to inbox', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `someday-inbox-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `someday-inbox-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'Reconsider this');
             const someday = await gtd.clarifyToSomedayMaybe(page, inbox);
             await gtd.flush(page);

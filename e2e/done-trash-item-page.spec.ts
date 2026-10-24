@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Done & trash items used to render a "This item has already been processed." dead-end at
 // /item/:id, so a user clicking a row on /done or /trash had no way to inspect or revive the
@@ -9,7 +9,7 @@ import { gtd } from './helpers/gtd';
 // or restore them.
 test.describe('Item page mode — done & trash items', () => {
     test('clicking a /done row opens the editor with done chip selected', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `done-page-open-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `done-page-open-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'Done page-mode target');
             await gtd.clarifyToDone(page, inbox);
 
@@ -30,7 +30,7 @@ test.describe('Item page mode — done & trash items', () => {
     });
 
     test('user can restore a done item to next-action via the editor', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `done-page-restore-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `done-page-restore-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'Restore me');
             await gtd.clarifyToDone(page, inbox);
 
@@ -50,7 +50,7 @@ test.describe('Item page mode — done & trash items', () => {
     });
 
     test('Go back from a done item returns to /done (not /inbox)', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `done-page-back-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `done-page-back-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'Back-button target');
             await gtd.clarifyToDone(page, inbox);
 
@@ -63,7 +63,7 @@ test.describe('Item page mode — done & trash items', () => {
     });
 
     test('clicking a /trash row opens the editor and back returns to /trash', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `trash-page-open-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `trash-page-open-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'Trash page-mode target');
             await gtd.clarifyToTrash(page, inbox);
 

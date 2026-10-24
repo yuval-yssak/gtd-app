@@ -2,13 +2,14 @@ import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Tests query helpers that filter items by GTD metadata:
 // energy, time, work context, and the tickler (ignoreBefore) pattern.
 
 test.describe('filtering', () => {
     test('listNextActions filters by energy', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `filter-energy-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `filter-energy-${uniqueStamp()}@example.com`, async (page) => {
             const a = await gtd.collect(page, 'Low energy task');
             const b = await gtd.collect(page, 'High energy task');
             await gtd.clarifyToNextAction(page, a, { energy: 'low' });
@@ -22,7 +23,7 @@ test.describe('filtering', () => {
     });
 
     test('listNextActions filters by work context', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `filter-ctx-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `filter-ctx-${uniqueStamp()}@example.com`, async (page) => {
             const ctx = await gtd.createWorkContext(page, 'At home');
             const a = await gtd.collect(page, 'Home task');
             const b = await gtd.collect(page, 'Anywhere task');
@@ -36,7 +37,7 @@ test.describe('filtering', () => {
     });
 
     test('listNextActions filters by max time', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `filter-time-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `filter-time-${uniqueStamp()}@example.com`, async (page) => {
             const quick = await gtd.collect(page, 'Quick task');
             const long = await gtd.collect(page, 'Long task');
             await gtd.clarifyToNextAction(page, quick, { time: 5 });
@@ -49,7 +50,7 @@ test.describe('filtering', () => {
     });
 
     test('tickler items hidden before ignoreBefore date', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `tickler-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `tickler-${uniqueStamp()}@example.com`, async (page) => {
             const futureItem = await gtd.collect(page, 'Future task');
             const todayItem = await gtd.collect(page, 'Today task');
 
@@ -66,7 +67,7 @@ test.describe('filtering', () => {
     });
 
     test('listCalendar returns calendar items sorted by timeStart', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `cal-list-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `cal-list-${uniqueStamp()}@example.com`, async (page) => {
             const a = await gtd.collect(page, 'Later meeting');
             const b = await gtd.collect(page, 'Earlier meeting');
 

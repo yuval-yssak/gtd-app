@@ -1,9 +1,9 @@
 import { type APIRequestContext, type Browser, type BrowserContext, expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { resetServerForEmails, withOneLoggedInDevice } from './helpers/context';
+import { API_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
-
-const API_URL = 'http://localhost:4000';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 /**
  * Phase 4 e2e for /v1/operations/batch. Asserts: heterogeneous batch happy-path (workContext +
@@ -35,7 +35,7 @@ const NOW = '2099-04-01T00:00:00.000Z';
 
 test.describe('public /v1/operations/batch', () => {
     test('heterogeneous batch: workContext + 3 items referencing it land atomically', async ({ browser }) => {
-        const email = `public-api-batch-${dayjs().valueOf()}@example.com`;
+        const email = `public-api-batch-${uniqueStamp()}@example.com`;
         await resetServerForEmails([email]);
 
         await withOneLoggedInDevice(browser, email, async (page) => {
@@ -73,7 +73,7 @@ test.describe('public /v1/operations/batch', () => {
     });
 
     test('a nextAction created through the batch (no rank minted) lands ABOVE the ranked rows of its section in the app', async ({ browser }) => {
-        const email = `public-api-batch-rank-${dayjs().valueOf()}@example.com`;
+        const email = `public-api-batch-rank-${uniqueStamp()}@example.com`;
         await resetServerForEmails([email]);
 
         await withOneLoggedInDevice(browser, email, async (page) => {
@@ -112,7 +112,7 @@ test.describe('public /v1/operations/batch', () => {
     });
 
     test('403 atomicity: missing scope rejects the entire batch with no partial writes', async ({ browser }) => {
-        const email = `public-api-batch-403-${dayjs().valueOf()}@example.com`;
+        const email = `public-api-batch-403-${uniqueStamp()}@example.com`;
         await resetServerForEmails([email]);
 
         await withOneLoggedInDevice(browser, email, async (page) => {
@@ -156,7 +156,7 @@ test.describe('public /v1/operations/batch', () => {
     });
 
     test('400 atomicity: a Zod-failing op rejects the entire batch with no partial writes', async ({ browser }) => {
-        const email = `public-api-batch-400-${dayjs().valueOf()}@example.com`;
+        const email = `public-api-batch-400-${uniqueStamp()}@example.com`;
         await resetServerForEmails([email]);
 
         await withOneLoggedInDevice(browser, email, async (page) => {

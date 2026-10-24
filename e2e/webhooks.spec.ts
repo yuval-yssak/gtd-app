@@ -1,9 +1,8 @@
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { type APIRequestContext, type Browser, type BrowserContext, expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { resetServerForEmails, withOneLoggedInDevice } from './helpers/context';
-
-const API_URL = 'http://localhost:4000';
+import { API_URL } from './helpers/env';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 /**
  * Ends-to-end webhook delivery test (issue #19 step 8).
@@ -59,7 +58,7 @@ async function mintToken(request: APIRequestContext, scopes: string[]): Promise<
 
 test.describe('webhooks', () => {
     test('item.created event fires a signed POST to the registered URL', async ({ browser }) => {
-        const email = `webhooks-${dayjs().valueOf()}@example.com`;
+        const email = `webhooks-${uniqueStamp()}@example.com`;
         await resetServerForEmails([email]);
 
         const receiver = await startReceiver();

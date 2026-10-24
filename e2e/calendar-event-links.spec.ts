@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Exercises the CalendarEventLinks read-only block on a calendar item: the conferencing join link
 // (labeled per provider), the location, and the "Open in Google Calendar" deep link. We seed a
@@ -11,7 +12,7 @@ import { gtd } from './helpers/gtd';
 
 test.describe('Calendar — event links (meeting link, location, open-in-GCal)', () => {
     test('shows the Meet join link, location, and open-in-Google-Calendar link', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `event-links-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `event-links-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'Weekly standup');
             const start = dayjs().add(1, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
             const end = dayjs(start).add(15, 'minute').toISOString();
@@ -49,7 +50,7 @@ test.describe('Calendar — event links (meeting link, location, open-in-GCal)',
     });
 
     test('renders no meeting-link / location affordances when the item carries none', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `event-links-empty-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `event-links-empty-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'Solo focus block');
             const start = dayjs().add(1, 'day').hour(14).minute(0).second(0).millisecond(0).toISOString();
             const end = dayjs(start).add(1, 'hour').toISOString();

@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { closeContextQuietly, resetServerForEmails } from './helpers/context';
+import { API_URL } from './helpers/env';
 import { loginAs } from './helpers/login';
 
 // Regression for the duplicate-`gtd*`-master bug: on connect/reconnect, the outbound backfill could
@@ -13,10 +14,10 @@ import { loginAs } from './helpers/login';
 // `masters` set standing in for provider.listEventsFull (no live Google account needed). End-to-end
 // assertion: the seeded naked routine relinks onto the real native event id — no `gtd*` clone minted.
 
-const DEV_SEED_CALENDAR_URL = 'http://localhost:4000/dev/calendar/seed-integration';
-const DEV_SEED_ENTITY_URL = 'http://localhost:4000/dev/reassign/seed-entity';
-const DEV_SIMULATE_BACKFILL_URL = 'http://localhost:4000/dev/calendar/simulate-backfill-relink';
-const DEV_FIND_ENTITY_URL = 'http://localhost:4000/dev/reassign/find-entity';
+const DEV_SEED_CALENDAR_URL = `${API_URL}/dev/calendar/seed-integration`;
+const DEV_SEED_ENTITY_URL = `${API_URL}/dev/reassign/seed-entity`;
+const DEV_SIMULATE_BACKFILL_URL = `${API_URL}/dev/calendar/simulate-backfill-relink`;
+const DEV_FIND_ENTITY_URL = `${API_URL}/dev/reassign/find-entity`;
 
 async function seedNakedRoutine(userId: string, routineId: string): Promise<void> {
     const now = dayjs().toISOString();

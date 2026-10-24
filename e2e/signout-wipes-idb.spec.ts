@@ -1,13 +1,12 @@
 import { expect, type Page, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
+import { CLIENT_URL } from './helpers/env';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Verifies that signing out wipes the previous user's IDB rows so the next user on the same
 // device cannot see them. Pre-fix, items/routines/people/workContexts/syncCursors and queued
 // syncOperations all leaked across sign-outs because removeAccount() only cleared the account
 // directory.
-
-const CLIENT_URL = 'http://localhost:4173';
 
 interface IdbCounts {
     items: number;
@@ -71,7 +70,7 @@ async function openAccountMenu(page: Page): Promise<void> {
 
 test.describe("sign-out wipes the previous user's IDB rows", () => {
     test('items / routines / people / workContexts / syncCursor / syncOperations are gone after sign-out; deviceMeta survives', async ({ browser }) => {
-        const email = `signout-wipe-${dayjs().valueOf()}@example.com`;
+        const email = `signout-wipe-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             await page.goto(`${CLIENT_URL}/inbox`);
             // mountDevTools runs after an async openAppDB in main.tsx — page.goto resolves on the

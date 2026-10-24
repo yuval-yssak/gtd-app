@@ -3,10 +3,12 @@ import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import type { StoredItem } from '../client/src/types/MyDB';
 import { closeContextQuietly, withTwoAccountsOnOneDevice } from './helpers/context';
+import { API_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
 import { loginAs } from './helpers/login';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
-const API_SERVER = 'http://localhost:4000';
+const API_SERVER = API_URL;
 
 async function waitForChannelCount(page: Page, expected: number): Promise<string[]> {
     return page.evaluate(async (target) => {
@@ -47,7 +49,7 @@ async function waitForItemTitle(page: Page, title: string): Promise<StoredItem> 
 
 test.describe('multi-account sync', () => {
     test('GET /sync/events?userId= rejects users that are not sessions on this device with 403', async ({ browser }) => {
-        const email = `sse-403-${dayjs().valueOf()}@example.com`;
+        const email = `sse-403-${uniqueStamp()}@example.com`;
         const ctx = await browser.newContext();
         try {
             await loginAs(ctx, email);

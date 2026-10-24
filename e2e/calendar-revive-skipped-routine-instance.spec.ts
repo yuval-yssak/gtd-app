@@ -3,7 +3,9 @@ import dayjs from 'dayjs';
 import timezone from 'dayjs/plugin/timezone.js';
 import utc from 'dayjs/plugin/utc.js';
 import { withOneLoggedInDevice } from './helpers/context';
+import { API_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -24,8 +26,8 @@ dayjs.extend(timezone);
 // which needs a live Google account). End-to-end assertion: the item disappears from /calendar then
 // reappears at master time after the revival, with the skipped exception gone.
 
-const DEV_SEED_INTEGRATION_URL = 'http://localhost:4000/dev/calendar/seed-integration';
-const DEV_SIMULATE_SYNC_URL = 'http://localhost:4000/dev/calendar/simulate-routine-exception-sync';
+const DEV_SEED_INTEGRATION_URL = `${API_URL}/dev/calendar/seed-integration`;
+const DEV_SIMULATE_SYNC_URL = `${API_URL}/dev/calendar/simulate-routine-exception-sync`;
 
 interface SeedResponse {
     integrationId: string;
@@ -76,7 +78,7 @@ function nextMonday(): string {
 
 test.describe('calendar — un-deleted (revived) routine instance from GCal', () => {
     test('reviving a GCal-deleted occurrence restores the trashed item to master time and drops the skipped exception', async ({ browser }) => {
-        const email = `revive-skipped-${dayjs().valueOf()}@example.com`;
+        const email = `revive-skipped-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             const userId = (await gtd.getActiveAccountId(page)) as string;
             const seeded = await seedIntegration(userId);

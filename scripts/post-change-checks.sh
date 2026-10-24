@@ -127,7 +127,8 @@ start_with_deadline() {
         if kill -0 "$pid" 2>/dev/null; then
             touch "$TMPDIR/$name.timedout"
             # SIGINT first: Playwright starts its dev servers in their own process group, so only its
-            # own Ctrl-C handling stops them — killing our group outright would orphan them on :4173.
+            # own Ctrl-C handling stops them — killing our group outright would orphan them on the e2e
+            # ports (4100/4273, e2e/helpers/env.ts) and fail the next run's startup.
             kill -INT -- "-$pid" 2>/dev/null
             for _ in 1 2 3 4 5 6 7 8 9 10; do
                 kill -0 "$pid" 2>/dev/null || exit 0

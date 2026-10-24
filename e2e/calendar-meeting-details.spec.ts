@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Exercises the Phase 6 MeetingDetails accordion. We seed a calendar item with attendees +
 // organizer via gtd.updateItem (no GCal round-trip required) and verify the accordion mounts,
@@ -11,7 +12,7 @@ import { gtd } from './helpers/gtd';
 
 test.describe('Calendar — MeetingDetails accordion', () => {
     test('renders with organizer + attendees, shows tally, and colors chips by responseStatus', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `meeting-details-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `meeting-details-${uniqueStamp()}@example.com`, async (page) => {
             // Seed a timed calendar item first via the standard clarify flow so its baseline shape
             // (status, calendar* fields) matches what the inbound parser would have produced.
             const inbox = await gtd.collect(page, 'Quarterly planning');
@@ -77,7 +78,7 @@ test.describe('Calendar — MeetingDetails accordion', () => {
     });
 
     test('the attendee editor adds by suggestion or typed email, asks for a missing email, and removes', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `meeting-attendees-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `meeting-attendees-${uniqueStamp()}@example.com`, async (page) => {
             await gtd.createPerson(page, { name: 'Dana Levi', email: 'dana@example.com' });
             await gtd.createPerson(page, { name: 'Noam Nomail' });
             const inbox = await gtd.collect(page, 'Design review');

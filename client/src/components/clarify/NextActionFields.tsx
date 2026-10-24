@@ -47,75 +47,78 @@ export function NextActionFields({ value, onChange, workContexts, people, usage 
     const fullSpan = dense ? styles.fullSpan : undefined;
 
     return (
-        <div className={styles.fields} data-dense={dense || undefined}>
-            {/* Tickler field shown first — "ignoreBefore" hides the item until that date.
+        <div className={styles.root} data-dense={dense || undefined}>
+            <div className={styles.fields}>
+                {/* Tickler field shown first — "ignoreBefore" hides the item until that date.
                 Placing it at the top makes the snooze intent explicit before filling other fields. */}
-            <div>
-                <Text as="span" variant="caption" tone="secondary" className={styles.caption}>
-                    Tickler — hide until
-                </Text>
-                {/* The explainer costs a full line; in the review the label alone carries it. */}
-                {!dense && (
-                    <Text as="span" variant="caption" tone="secondary" className={styles.explainer}>
-                        Item stays hidden from Next Actions until this date
+                <div>
+                    <Text as="span" variant="caption" tone="secondary" className={styles.caption}>
+                        Tickler — hide until
                     </Text>
+                    {/* The explainer costs a full line; in the review the label alone carries it. */}
+                    {!dense && (
+                        <Text as="span" variant="caption" tone="secondary" className={styles.explainer}>
+                            Item stays hidden from Next Actions until this date
+                        </Text>
+                    )}
+                    <DateField accessibleName="Tickler date" value={value.ignoreBefore} onChange={(ignoreBefore) => onChange({ ignoreBefore })} />
+                </div>
+                {/* The two dates sit together, so the dense grid can pair them on one row. */}
+                <DateField label="Expected by" value={value.expectedBy} onChange={(expectedBy) => onChange({ expectedBy })} />
+                {workContexts.length > 0 && (
+                    <FieldSection label="Work contexts" className={fullSpan}>
+                        <CollapsibleChipGroup
+                            ranked={rankedContexts}
+                            alphabetical={alphabeticalContexts}
+                            selectedIds={selectedContextIds}
+                            keyOf={(ctx) => ctx._id}
+                            testId="editorWorkContextChip"
+                            renderChip={(ctx) => (
+                                <Chip
+                                    label={ctx.name}
+                                    data-testid="editorWorkContextChip"
+                                    variant="outline"
+                                    selected={value.workContextIds.includes(ctx._id)}
+                                    onClick={() => toggleWorkContext(ctx._id)}
+                                />
+                            )}
+                        />
+                    </FieldSection>
                 )}
-                <DateField accessibleName="Tickler date" value={value.ignoreBefore} onChange={(ignoreBefore) => onChange({ ignoreBefore })} />
+                {people.length > 0 && (
+                    <FieldSection label="People" className={fullSpan}>
+                        <CollapsibleChipGroup
+                            ranked={rankedPeople}
+                            alphabetical={alphabeticalPeople}
+                            selectedIds={selectedPeopleIds}
+                            keyOf={(p) => p._id}
+                            testId="editorPersonChip"
+                            renderChip={(p) => (
+                                <Chip
+                                    label={p.name}
+                                    data-testid="editorPersonChip"
+                                    variant="outline"
+                                    selected={value.peopleIds.includes(p._id)}
+                                    onClick={() => togglePerson(p._id)}
+                                />
+                            )}
+                        />
+                    </FieldSection>
+                )}
+                <FieldSection label="Energy">
+                    {/* No energy is a valid choice: pressing the active level clears it. */}
+                    <ToggleGroup allowDeselect value={value.energy} onValueChange={(energy) => onChange({ energy })} options={ENERGY_OPTIONS} />
+                </FieldSection>
+                <TextField
+                    label="Time estimate (min)"
+                    value={value.time}
+                    onChange={(e) => onChange({ time: e.target.value })}
+                    type="number"
+                    className={styles.timeField}
+                    inputProps={{ min: 1 }}
+                />
+                <Checkbox checked={value.urgent} onCheckedChange={(urgent) => onChange({ urgent })} label="Urgent" />
             </div>
-            {workContexts.length > 0 && (
-                <FieldSection label="Work contexts" className={fullSpan}>
-                    <CollapsibleChipGroup
-                        ranked={rankedContexts}
-                        alphabetical={alphabeticalContexts}
-                        selectedIds={selectedContextIds}
-                        keyOf={(ctx) => ctx._id}
-                        testId="editorWorkContextChip"
-                        renderChip={(ctx) => (
-                            <Chip
-                                label={ctx.name}
-                                data-testid="editorWorkContextChip"
-                                variant="outline"
-                                selected={value.workContextIds.includes(ctx._id)}
-                                onClick={() => toggleWorkContext(ctx._id)}
-                            />
-                        )}
-                    />
-                </FieldSection>
-            )}
-            {people.length > 0 && (
-                <FieldSection label="People" className={fullSpan}>
-                    <CollapsibleChipGroup
-                        ranked={rankedPeople}
-                        alphabetical={alphabeticalPeople}
-                        selectedIds={selectedPeopleIds}
-                        keyOf={(p) => p._id}
-                        testId="editorPersonChip"
-                        renderChip={(p) => (
-                            <Chip
-                                label={p.name}
-                                data-testid="editorPersonChip"
-                                variant="outline"
-                                selected={value.peopleIds.includes(p._id)}
-                                onClick={() => togglePerson(p._id)}
-                            />
-                        )}
-                    />
-                </FieldSection>
-            )}
-            <FieldSection label="Energy">
-                {/* No energy is a valid choice: pressing the active level clears it. */}
-                <ToggleGroup allowDeselect value={value.energy} onValueChange={(energy) => onChange({ energy })} options={ENERGY_OPTIONS} />
-            </FieldSection>
-            <TextField
-                label="Time estimate (min)"
-                value={value.time}
-                onChange={(e) => onChange({ time: e.target.value })}
-                type="number"
-                className={styles.timeField}
-                inputProps={{ min: 1 }}
-            />
-            <Checkbox checked={value.urgent} onCheckedChange={(urgent) => onChange({ urgent })} label="Urgent" />
-            <DateField label="Expected by" value={value.expectedBy} onChange={(expectedBy) => onChange({ expectedBy })} />
         </div>
     );
 }

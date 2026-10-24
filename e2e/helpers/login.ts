@@ -1,7 +1,7 @@
 import type { BrowserContext, Page } from '@playwright/test';
+import { API_URL, CLIENT_URL } from './env';
 
-const DEV_LOGIN_URL = 'http://localhost:4000/dev/login';
-const CLIENT_URL = 'http://localhost:4173';
+const DEV_LOGIN_URL = `${API_URL}/dev/login`;
 
 interface DevLoginResponse {
     ok: boolean;

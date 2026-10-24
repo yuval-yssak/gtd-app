@@ -1,6 +1,5 @@
 import { expect, test } from '@playwright/test';
-
-const API_URL = 'http://localhost:4000';
+import { API_URL } from './helpers/env';
 
 // GET /health is the Cloud Run startup-probe target (deploy-api.yml) and what an uptime check should
 // assert on: a live API with a working Mongo connection answers 200 { status: 'ok' }. The 503 branch

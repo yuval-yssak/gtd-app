@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { resetServerForEmails, withOneLoggedInDevice } from './helpers/context';
+import { API_URL, CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
 
 // Sync Issues panel — informative rows. Stages the real entity_missing scenario: an item that a
@@ -8,8 +9,6 @@ import { gtd } from './helpers/gtd';
 // update push is rejected (graceful-block) and must surface in the panel with the item's TITLE,
 // entity type, and timestamp — not just a generic "Update failed" line.
 
-const API_URL = 'http://localhost:4000';
-const CLIENT_URL = 'http://localhost:4173';
 const EMAIL = 'sync-issues-panel@test.com';
 const ITEM_TITLE = 'Ghost item for sync issues panel';
 const SYNC_GLOB = '**/sync/**';

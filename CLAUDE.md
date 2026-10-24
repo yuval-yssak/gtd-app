@@ -62,13 +62,13 @@ npm run lint:fix                # Biome format + lint
 npm run cleanup-e2e-seeds       # Drop calendar integrations leaked by /dev/calendar/seed-integration (mongosh, reads api-server/.env)
 ```
 
-Playwright's `webServer` starts the API with `TZ=UTC BRIEF_FAKE_MODEL=1` and the client via `npm run dev`, but both entries set `reuseExistingServer: true`: a dev server you already have running keeps **its** environment. Timezone specs then run against your local TZ, and `item-brief-generate.spec.ts` gets `503 agent_unavailable` — restart the API under those env vars before working on those specs. `global-setup.ts` runs `vite build` (not `npm run build`) and builds `tools/mcp-gtd` and `mcp-server` once before workers spawn.
+The e2e stack runs on **its own ports** — API `4100`, client `4273` (`e2e/helpers/env.ts`; override with `GTD_E2E_API_PORT` / `GTD_E2E_CLIENT_PORT` to run two worktrees side by side) — and Playwright always starts both itself (`reuseExistingServer: false`), so your dev servers on 4000/4173 are never touched or reused. The API runs with `TZ=UTC BRIEF_FAKE_MODEL=1`; the client is a `vite build` into `client/dist-e2e` against the e2e API, then `vite preview`. A port already taken fails the run loudly. Specs reach the stack through `API_URL` / `CLIENT_URL` from `helpers/env.ts` — never a hardcoded port; code inside `page.evaluate` runs in the browser and takes the URL as an argument. `global-setup.ts` builds `tools/mcp-gtd` and `mcp-server` once before workers spawn. `retries: 0` — a test that only passes on a retry is flaky and must be fixed. Prove a fix with `--repeat-each=N --workers=4`; test emails take `uniqueStamp()` (`helpers/uniqueStamp.ts`), because a bare `dayjs().valueOf()` collides when repeats start in the same millisecond and two runs then share one user's data.
 
 Manual Google Calendar smoke-test plans (one Claude session per case, driven through Chrome) live under `e2e/gcal-sync-smoke/`; `CONTINUE_HERE.md` at the root is their index.
 
 **Always `await gtd.flush()` before `page.goto()`** after a `gtd.*` mutation — navigating mid-flush wedges the IndexedDB flush lock for 30s.
 
-If e2e fails although the change is present in the built bundle, port 4173 is being served by a stale `vite preview` (it caches the startup `index.html`) or by another worktree's dev server. Restart the preview and verify the served bundle hash.
+If e2e cannot start because 4100 or 4273 is taken, an earlier run left a server behind (or another worktree's suite is running): stop it, or set the port variables above.
 
 ### MCP server (`cd mcp-server`)
 ```bash
@@ -215,7 +215,7 @@ Do not write comments that paraphrase the code, restate the function name, or na
 
 ### Lint suppressions
 
-A `biome-ignore` is a documented exception, never a shortcut to a green turn: it names the narrowest rule, carries the reason on the same line, and is written only when the code cannot reasonably be restructured. The accepted cases in this repo are bracket access on index-signature types in tests (`useLiteralKeys`) and a context whose non-null default is provably safe. `useExhaustiveDependencies` is never suppressed — see `client/CLAUDE.md` § React.
+A `biome-ignore` is a documented exception, never a shortcut to a green turn: it names the narrowest rule, carries the reason on the same line, and is written only when the code cannot reasonably be restructured. The accepted cases in this repo are bracket access on index-signature types in tests (`useLiteralKeys`), a context whose non-null default is provably safe, a scrollable region made focusable so keyboard users can scroll it (`noNoninteractiveTabindex` — WCAG scrollable-region-focusable outranks the lint), and a non-control wrapper that delegates its children's keyboard events through a React handler (`noStaticElementInteractions`, e.g. the item editor's shortcut scope). A wrapper that groups a field with its own buttons is not an exception: make it a labelled `<fieldset>`. `useExhaustiveDependencies` is never suppressed — see `client/CLAUDE.md` § React.
 
 ### Functions
 - ≤ 5 meaningful actions per function, typically ~5 lines.

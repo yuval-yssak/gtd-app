@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // The item page (/item/:id) is read-mostly: it should not auto-focus the title
 // (which would scroll the start of long titles out of view) and should default the notes section
@@ -9,7 +9,7 @@ import { gtd } from './helpers/gtd';
 // behaviour of the item page.
 test.describe('Item editor — item page UX', () => {
     test('does not auto-focus the title input on mount', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `page-no-autofocus-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `page-no-autofocus-${uniqueStamp()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'A very long title that would otherwise be clipped if the input scrolled to the cursor at the end');
 
             await page.goto(`/item/${item._id}`);
@@ -24,7 +24,7 @@ test.describe('Item editor — item page UX', () => {
     });
 
     test('notes default to preview when non-empty; explicit Edit button switches to editor; blur returns to preview', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `page-notes-cycle-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `page-notes-cycle-${uniqueStamp()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'Item with notes');
             await gtd.updateItem(page, { ...item, notes: 'Hello **world**' });
 
@@ -63,7 +63,7 @@ test.describe('Item editor — item page UX', () => {
     });
 
     test('the preview is read-only: clicking, selecting text, Enter and Space never open the editor', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `page-notes-readonly-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `page-notes-readonly-${uniqueStamp()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'Read-only preview target');
             await gtd.updateItem(page, { ...item, notes: 'Copy this phrase from the notes' });
 
@@ -103,7 +103,7 @@ test.describe('Item editor — item page UX', () => {
     });
 
     test('the Done button returns to the preview and the edit is autosaved', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `page-notes-done-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `page-notes-done-${uniqueStamp()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'Done button target');
             await gtd.updateItem(page, { ...item, notes: 'Before' });
 
@@ -141,7 +141,7 @@ test.describe('Item editor — item page UX', () => {
     });
 
     test('clearing notes mid-edit and blurring keeps the editor visible (does not flip back to preview)', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `page-notes-clear-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `page-notes-clear-${uniqueStamp()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'Item with clearable notes');
             await gtd.updateItem(page, { ...item, notes: 'Clear me' });
 
@@ -171,7 +171,7 @@ test.describe('Item editor — item page UX', () => {
     });
 
     test('typing into an empty editor and blurring collapses to preview (empty → non-empty → blur)', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `page-notes-empty-to-filled-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `page-notes-empty-to-filled-${uniqueStamp()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'Item that gets notes');
 
             await page.goto(`/item/${item._id}`);
@@ -191,7 +191,7 @@ test.describe('Item editor — item page UX', () => {
     });
 
     test('notes default to editor when empty (so the editing affordance is obvious) and does not steal focus on mount', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `page-notes-empty-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `page-notes-empty-${uniqueStamp()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'Item without notes');
 
             await page.goto(`/item/${item._id}`);
@@ -209,7 +209,7 @@ test.describe('Item editor — item page UX', () => {
     });
 
     test('page-mode wrapper renders at the wider 56rem cap on a wide viewport', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `page-width-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `page-width-${uniqueStamp()}@example.com`, async (page) => {
             // Use a wide viewport so the cap, not the viewport, governs the wrapper width.
             await page.setViewportSize({ width: 1600, height: 900 });
             const item = await gtd.collect(page, 'Wrapper width check');
@@ -229,7 +229,7 @@ test.describe('Item editor — item page UX', () => {
     });
 
     test('ESC navigates back to the originating list', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `page-esc-back-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `page-esc-back-${uniqueStamp()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'Escape target');
 
             await page.goto('/inbox');
@@ -252,7 +252,7 @@ test.describe('Item editor — item page UX', () => {
     });
 
     test('ESC closes an open Select popup first; second ESC leaves the page', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `page-esc-select-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `page-esc-select-${uniqueStamp()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'Escape with popup');
             // Pre-set waitingFor so the person Select is on the page without a structural edit
             // (which would put the second ESC behind the unsaved-changes guard).
@@ -278,7 +278,7 @@ test.describe('Item editor — item page UX', () => {
     });
 
     test('ESC in the notes editor returns to preview first; second ESC leaves the page', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `page-esc-notes-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `page-esc-notes-${uniqueStamp()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'Escape from notes');
             await gtd.updateItem(page, { ...item, notes: 'Some notes' });
 
@@ -302,7 +302,7 @@ test.describe('Item editor — item page UX', () => {
     });
 
     test('honours mode setting end-to-end: clicking a row in page mode navigates to /item/:id', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `page-mode-nav-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `page-mode-nav-${uniqueStamp()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'Nav target');
 
             await page.goto('/inbox');
@@ -314,7 +314,7 @@ test.describe('Item editor — item page UX', () => {
     });
 
     test('clicking a link in the notes preview opens it in a new tab and stays in preview', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `page-notes-link-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `page-notes-link-${uniqueStamp()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'Item with a linked note');
             await gtd.updateItem(page, { ...item, notes: 'See [the docs](https://example.com/docs) for details' });
             // Hermetic: the new tab never leaves the test machine. Registered on the context so the
@@ -364,7 +364,7 @@ test.describe('Item editor — item page UX', () => {
     });
 
     test('very long notes scroll inside a capped preview and the bottom of the editor stays reachable', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `page-notes-long-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `page-notes-long-${uniqueStamp()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'Item with very long notes');
             const longNotes = Array.from({ length: 200 }, (_, i) => `Line ${i + 1} of a very long note`).join('\n\n');
             await gtd.updateItem(page, { ...item, notes: longNotes });
@@ -393,7 +393,7 @@ test.describe('Item editor — item page UX', () => {
     });
 
     test('calendar item renders date/time fields between the title and the notes', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `page-cal-order-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `page-cal-order-${uniqueStamp()}@example.com`, async (page) => {
             const captured = await gtd.collect(page, 'Dentist appointment');
             const calItem = await gtd.clarifyToCalendar(page, captured, { timeStart: '2026-09-01T10:00:00', timeEnd: '2026-09-01T10:30:00' });
             await gtd.updateItem(page, { ...calItem, notes: 'Bring the referral letter' });

@@ -3,12 +3,13 @@ import dayjs from 'dayjs';
 import { hasAtLeastOne } from '../client/src/lib/typeUtils';
 import { withOneLoggedInDevice, withTwoLoggedInDevices } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Tests calendar routine horizon-based item generation, cross-device sync, and rrule edit regeneration.
 
 test.describe('calendar routine horizon', () => {
     test('generates multiple items up to horizon and syncs to server', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `cal-horizon-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `cal-horizon-${uniqueStamp()}@example.com`, async (page) => {
             const routine = await gtd.createRoutine(page, {
                 title: 'Weekly standup',
                 routineType: 'calendar',
@@ -42,7 +43,7 @@ test.describe('calendar routine horizon', () => {
     });
 
     test('completion extends horizon and syncs across devices', async ({ browser }) => {
-        const email = `cal-horizon-sync-${dayjs().valueOf()}@example.com`;
+        const email = `cal-horizon-sync-${uniqueStamp()}@example.com`;
 
         await withTwoLoggedInDevices(browser, email, async (page1, page2) => {
             // Device 1: create routine + generate items
@@ -84,7 +85,7 @@ test.describe('calendar routine horizon', () => {
     });
 
     test('rrule edit regenerates items and syncs to server', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `cal-horizon-edit-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `cal-horizon-edit-${uniqueStamp()}@example.com`, async (page) => {
             // Create a weekly routine
             const routine = await gtd.createRoutine(page, {
                 title: 'Team sync',
@@ -137,7 +138,7 @@ test.describe('calendar routine horizon', () => {
     });
 
     test('future startDate produces no items before the startDate', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `cal-future-start-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `cal-future-start-${uniqueStamp()}@example.com`, async (page) => {
             const futureStart = dayjs().add(21, 'day').format('YYYY-MM-DD');
             const routine = await gtd.createRoutine(page, {
                 title: 'Future cal',
@@ -159,7 +160,7 @@ test.describe('calendar routine horizon', () => {
     });
 
     test('paused calendar routine: horizon generator no-ops', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `cal-paused-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `cal-paused-${uniqueStamp()}@example.com`, async (page) => {
             const routine = await gtd.createRoutine(page, {
                 title: 'Paused cal',
                 routineType: 'calendar',

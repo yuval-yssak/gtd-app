@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { resetServerForEmails, withTwoAccountsOnOneDevice } from './helpers/context';
+import { API_URL, CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
 
 // Regression for the "item disappears after cross-account move" bug. The reassign endpoint emits
@@ -13,8 +14,8 @@ import { gtd } from './helpers/gtd';
 // local row's userId is dropped. We assert end-to-end that the row survives in IDB regardless of
 // which orchestrator iteration order Playwright happened to land on.
 
-const DEV_SEED_CALENDAR_URL = 'http://localhost:4000/dev/calendar/seed-integration';
-const INBOX_URL = 'http://localhost:4173/inbox';
+const DEV_SEED_CALENDAR_URL = `${API_URL}/dev/calendar/seed-integration`;
+const INBOX_URL = `${CLIENT_URL}/inbox`;
 
 test.describe('cross-account reassign — item survives delete-op clobber', () => {
     // Each test scopes its /dev/reset to its unique stamped emails so concurrent specs in
@@ -153,7 +154,7 @@ async function seedItemOnServer(userId: string, title: string, overrides: Record
     const id = `seed-${Math.random().toString(36).slice(2, 10)}`;
     const now = dayjs().toISOString();
     const doc = { _id: id, user: userId, status: 'inbox', title, createdTs: now, updatedTs: now, ...overrides };
-    const res = await fetch('http://localhost:4000/dev/reassign/seed-entity', {
+    const res = await fetch(`${API_URL}/dev/reassign/seed-entity`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ collection: 'items', doc }),

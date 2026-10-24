@@ -1,13 +1,13 @@
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withOneLoggedInDevice, withTwoLoggedInDevices } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Advanced offline scenarios: multi-entity offline mutations and offline conflict resolution.
 
 test.describe('offline advanced', () => {
     test('offline edits to multiple entity types flush together on reconnect', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `offline-multi-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `offline-multi-${uniqueStamp()}@example.com`, async (page) => {
             await page.context().setOffline(true);
 
             // Create entities across all types while offline
@@ -50,7 +50,7 @@ test.describe('offline advanced', () => {
     });
 
     test('offline conflict resolves correctly on reconnect', async ({ browser }) => {
-        const email = `offline-conflict-${dayjs().valueOf()}@example.com`;
+        const email = `offline-conflict-${uniqueStamp()}@example.com`;
         await withTwoLoggedInDevices(browser, email, async (page1, page2) => {
             // Create and sync an item to both devices
             const inbox = await gtd.collect(page1, 'Contested offline');

@@ -1,10 +1,10 @@
 import * as path from 'node:path';
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { resetServerForEmails, withOneLoggedInDevice } from './helpers/context';
+import { API_URL } from './helpers/env';
 import { callTool, initializeMcp, McpStdioClient } from './helpers/mcpStdioClient';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
-const API_URL = 'http://localhost:4000';
 // Resolved against this file's directory at run time so the spec works regardless of cwd.
 // This spec covers the SUPERSEDED four-tool binary (see the root CLAUDE.md); the current
 // `mcp-server` package is exercised by mcp-field-guidance.spec.ts with the same client.
@@ -15,7 +15,7 @@ const spawnLegacyMcp = (token: string) => new McpStdioClient({ distPath: MCP_DIS
 
 test.describe('MCP server (mcp-gtd)', () => {
     test('drives the four tools end-to-end against a real /v1 server', async ({ browser }) => {
-        const email = `mcp-${dayjs().valueOf()}@example.com`;
+        const email = `mcp-${uniqueStamp()}@example.com`;
         await resetServerForEmails([email]);
 
         await withOneLoggedInDevice(browser, email, async (page) => {

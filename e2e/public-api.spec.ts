@@ -1,8 +1,8 @@
 import { type APIRequestContext, type Browser, type BrowserContext, expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { resetServerForEmails, withOneLoggedInDevice } from './helpers/context';
-
-const API_URL = 'http://localhost:4000';
+import { API_URL } from './helpers/env';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 /**
  * End-to-end coverage for the public /v1 API. The critical assertion is that a write driven
@@ -47,7 +47,7 @@ async function withBearerOnlyContext(browser: Browser, fn: (ctx: BrowserContext)
 
 test.describe('public /v1 API', () => {
     test('mint → POST → GET → complete → SSE → revoke roundtrip', async ({ browser }) => {
-        const email = `public-api-${dayjs().valueOf()}@example.com`;
+        const email = `public-api-${uniqueStamp()}@example.com`;
         await resetServerForEmails([email]);
 
         await withOneLoggedInDevice(browser, email, async (page) => {
@@ -168,7 +168,7 @@ test.describe('public /v1 API', () => {
     });
 
     test('content-hash dedupe collapses unkeyed duplicates within 24h window', async ({ browser }) => {
-        const email = `content-dedupe-${dayjs().valueOf()}@example.com`;
+        const email = `content-dedupe-${uniqueStamp()}@example.com`;
         await resetServerForEmails([email]);
 
         await withOneLoggedInDevice(browser, email, async (page) => {
@@ -197,7 +197,7 @@ test.describe('public /v1 API', () => {
     });
 
     test('PATCH clarifies an inbox item; capture-only token gets 403 forbidden_scope', async ({ browser }) => {
-        const email = `patch-${dayjs().valueOf()}@example.com`;
+        const email = `patch-${uniqueStamp()}@example.com`;
         await resetServerForEmails([email]);
 
         await withOneLoggedInDevice(browser, email, async (page) => {
@@ -241,7 +241,7 @@ test.describe('public /v1 API', () => {
     });
 
     test('rank: a created item carries one; PATCH rejects rank with forbidden_field and drops the deprecated focus flag', async ({ browser }) => {
-        const email = `rank-${dayjs().valueOf()}@example.com`;
+        const email = `rank-${uniqueStamp()}@example.com`;
         await resetServerForEmails([email]);
 
         await withOneLoggedInDevice(browser, email, async (page) => {
@@ -276,7 +276,7 @@ test.describe('public /v1 API', () => {
     });
 
     test('PATCH refuses a second link to a Google Calendar event another item owns; GET ?calendarEventId finds the owner', async ({ browser }) => {
-        const email = `cal-link-${dayjs().valueOf()}@example.com`;
+        const email = `cal-link-${uniqueStamp()}@example.com`;
         await resetServerForEmails([email]);
 
         await withOneLoggedInDevice(browser, email, async (page) => {
@@ -329,7 +329,7 @@ test.describe('public /v1 API', () => {
     });
 
     test('bulk import creates many items in one call and is idempotent on re-run', async ({ browser }) => {
-        const email = `bulk-${dayjs().valueOf()}@example.com`;
+        const email = `bulk-${uniqueStamp()}@example.com`;
         await resetServerForEmails([email]);
 
         await withOneLoggedInDevice(browser, email, async (page) => {
@@ -352,7 +352,7 @@ test.describe('public /v1 API', () => {
     });
 
     test('revoked token returns 401; new token from the same user works', async ({ browser }) => {
-        const email = `revoke-and-remint-${dayjs().valueOf()}@example.com`;
+        const email = `revoke-and-remint-${uniqueStamp()}@example.com`;
         await resetServerForEmails([email]);
 
         await withOneLoggedInDevice(browser, email, async (page) => {

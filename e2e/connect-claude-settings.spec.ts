@@ -1,8 +1,8 @@
 import { type Browser, expect, type Page, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { resetServerForEmails, withOneLoggedInDevice } from './helpers/context';
+import { CLIENT_URL } from './helpers/env';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
-const CLIENT_URL = 'http://localhost:4173';
 // RFC 7636 appendix B challenge — any well-formed S256 value lets /authorize render; no token is redeemed here.
 const PKCE_CHALLENGE = 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM';
 
@@ -20,7 +20,7 @@ async function withSettingsPage(
     fn: (page: Page, email: string) => Promise<void>,
     contextOptions?: Parameters<Browser['newContext']>[0],
 ) {
-    const email = `${emailPrefix}-${dayjs().valueOf()}@example.com`;
+    const email = `${emailPrefix}-${uniqueStamp()}@example.com`;
     await resetServerForEmails([email]);
     await withOneLoggedInDevice(
         browser,

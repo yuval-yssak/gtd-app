@@ -31,6 +31,7 @@ import { prefetchCalendarOptions } from '../hooks/useCalendarOptions';
 import { useOnline } from '../hooks/useOnline';
 import { subscribeToAppResume } from '../lib/appResume';
 import { authClient } from '../lib/authClient';
+import { coalesceAsync } from '../lib/coalesceAsync';
 import { isBrowserOffline } from '../lib/onlineStatus';
 import { shouldRaiseInitialSync } from '../lib/syncIndicators';
 import type {
@@ -263,18 +264,24 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
     // than a full syncAndRefresh (which would re-run calendar integration + extra pulls and race
     // concurrent pushes). Clears isInitialSyncing here too: when the boot syncAndRefresh lost the
     // isSyncingRef race and bailed early, this catch-up is the run that actually populates IDB.
-    const runCatchUpPull = useCallback(() => {
-        syncAllLoggedInUsers(db)
-            .then(() => {
-                if (unmountedRef.current) {
-                    return;
-                }
-                setIsInitialSyncing(false);
-                triggerAppResourceRefresh('all');
-                dispatchSyncIssuesRefresh();
-            })
-            .catch((err) => console.error('[sync] catch-up pull failed:', err));
-    }, [db]);
+    // Coalesced: requests landing mid-pull (several SSE channels connecting at once) share one
+    // follow-up pass instead of one pass each.
+    const runCatchUpPull = useMemo(
+        () =>
+            coalesceAsync(() =>
+                syncAllLoggedInUsers(db)
+                    .then(() => {
+                        if (unmountedRef.current) {
+                            return;
+                        }
+                        setIsInitialSyncing(false);
+                        triggerAppResourceRefresh('all');
+                        dispatchSyncIssuesRefresh();
+                    })
+                    .catch((err) => console.error('[sync] catch-up pull failed:', err)),
+            ),
+        [db],
+    );
 
     // Extracted so both the mount effect and the isOnline effect can call it.
     // One deps object for every "this tab's boot account is gone" reload decision (boot sync,
@@ -339,7 +346,7 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             }
             if (syncRequestedWhileBusy.current) {
                 syncRequestedWhileBusy.current = false;
-                runCatchUpPull();
+                void runCatchUpPull();
             }
         }
     }, [db, runCatchUpPull, tabAccountGoneDeps]);
@@ -405,11 +412,22 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
         [db],
     );
 
+    // A channel (re)connected: broadcasts sent while it was down reached no one, so catch up. Never a
+    // per-channel sync — a pass already running owns the catch-up (and its session pivots), and
+    // otherwise every channel connecting at once shares one coalesced orchestrated pull.
+    const onSseConnected = useCallback(() => {
+        if (isSyncingRef.current) {
+            syncRequestedWhileBusy.current = true;
+            return;
+        }
+        void runCatchUpPull();
+    }, [runCatchUpPull]);
+
     // One handlers object per channel set — the device id is only known asynchronously at each
     // open site, so this builds the object there instead of threading three positional callbacks.
     const sseHandlersFor = useCallback(
-        (deviceId: string) => ({ onUpdate: onSseUpdateForUser, localDeviceId: deviceId, onAccountDeleted }),
-        [onSseUpdateForUser, onAccountDeleted],
+        (deviceId: string) => ({ onUpdate: onSseUpdateForUser, onConnected: onSseConnected, localDeviceId: deviceId, onAccountDeleted }),
+        [onSseUpdateForUser, onSseConnected, onAccountDeleted],
     );
 
     // When the SW handles a push event it updates IndexedDB and then messages open tabs.

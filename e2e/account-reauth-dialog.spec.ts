@@ -1,7 +1,8 @@
 import { expect, type Page, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
+import { CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // E2E coverage for the blocking account-reauth dialog. When the sync orchestrator flags an
 // account as needing re-login (no Better Auth multi-session entry on this device), a modal
@@ -9,13 +10,36 @@ import { gtd } from './helpers/gtd';
 // "Not now" closes the dialog but the banner stays as a persistent reminder, and a re-flag on
 // the next sync cycle must NOT re-open the acknowledged dialog.
 
-const CLIENT_URL = 'http://localhost:4173';
-
 /** Fires the same window event the sync orchestrator dispatches when an account can't sync. */
 async function flagAccountNeedsReauth(page: Page, userId: string): Promise<void> {
     await page.evaluate((id) => {
         window.dispatchEvent(new CustomEvent('gtd:account-needs-reauth', { detail: { userId: id } }));
     }, userId);
+}
+
+/**
+ * Resolves once the SSE channel's catch-up pass is under way. A sync pass that succeeds clears any
+ * flag raised before it started (the stale-flag self-heal), and two passes run after a page load —
+ * the boot pass, then the catch-up the channel fires on connect — so a flag raised before the
+ * second one would be healed out from under the test. The boot pass pulls before the channel is
+ * even requested, so the first pull after the `/sync/events` request belongs to the catch-up.
+ */
+function waitForConnectCatchUp(page: Page): Promise<void> {
+    return new Promise((resolve) => {
+        const state = { isChannelRequested: false };
+        // The outgoing document's channel can still request /sync/events before the navigation
+        // commits — only a channel of the document that loads counts.
+        page.on('framenavigated', (frame) => {
+            if (frame === page.mainFrame()) state.isChannelRequested = false;
+        });
+        page.on('request', (request) => {
+            if (request.url().includes('/sync/events')) {
+                state.isChannelRequested = true;
+            } else if (state.isChannelRequested && /\/sync\/pull/.test(request.url())) {
+                resolve();
+            }
+        });
+    });
 }
 
 async function activeAccountId(page: Page): Promise<string> {
@@ -28,15 +52,13 @@ async function activeAccountId(page: Page): Promise<string> {
 
 test.describe('account reauth dialog', () => {
     test('flag opens a blocking dialog; Not now falls back to the banner; re-flag stays closed', async ({ browser }) => {
-        const email = `reauth-dialog-${dayjs().valueOf()}@example.com`;
+        const email = `reauth-dialog-${uniqueStamp()}@example.com`;
 
         await withOneLoggedInDevice(browser, email, async (page) => {
-            // A sync pass that succeeds clears any flag raised before it started (the stale-flag self-heal),
-            // and the page can render before its first pass begins — so flag only once that pass is under way.
-            const initialPull = page.waitForRequest(/\/sync\/pull/);
+            const catchUp = waitForConnectCatchUp(page);
             await page.goto(`${CLIENT_URL}/inbox`);
             await expect(page.getByRole('heading', { name: 'Inbox' })).toBeVisible();
-            await initialPull;
+            await catchUp;
 
             const userId = await activeAccountId(page);
             await flagAccountNeedsReauth(page, userId);
@@ -75,7 +97,7 @@ test.describe('account reauth dialog', () => {
     });
 
     test('re-login resolution in one tab closes the stale dialog in every other tab', async ({ browser }) => {
-        const email = `reauth-cross-tab-${dayjs().valueOf()}@example.com`;
+        const email = `reauth-cross-tab-${uniqueStamp()}@example.com`;
 
         await withOneLoggedInDevice(browser, email, async (page) => {
             await page.goto(`${CLIENT_URL}/inbox`);

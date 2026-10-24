@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Routine edits must propagate to the routine's open generated item IMMEDIATELY (agreed
 // semantics: 3-way content merge — hand-tweaks survive; schedule edits recompute dates
@@ -25,7 +26,7 @@ async function openRoutineEditor(page: Parameters<typeof gtd.listItems>[0], titl
 
 test.describe('Routine edit → open next action propagation', () => {
     test('adding a work context on the routine updates the open next action immediately', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `routine-prop-wc-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `routine-prop-wc-${uniqueStamp()}@example.com`, async (page) => {
             const workContext = await gtd.createWorkContext(page, 'Errands');
             const routine = await gtd.createRoutine(page, {
                 title: 'Water plants',
@@ -47,7 +48,7 @@ test.describe('Routine edit → open next action propagation', () => {
     });
 
     test('hand-tweaked energy survives while other template edits adopt', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `routine-prop-merge-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `routine-prop-merge-${uniqueStamp()}@example.com`, async (page) => {
             const workContext = await gtd.createWorkContext(page, 'Home');
             const routine = await gtd.createRoutine(page, {
                 title: 'Stretch',
@@ -75,7 +76,7 @@ test.describe('Routine edit → open next action propagation', () => {
     });
 
     test('title autosave renames the open next action without pressing Save', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `routine-prop-title-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `routine-prop-title-${uniqueStamp()}@example.com`, async (page) => {
             const routine = await gtd.createRoutine(page, {
                 title: 'Journal',
                 routineType: 'nextAction',
@@ -97,7 +98,7 @@ test.describe('Routine edit → open next action propagation', () => {
     });
 
     test('frequency change recomputes the open item date (manual reschedule overwritten)', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `routine-prop-sched-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `routine-prop-sched-${uniqueStamp()}@example.com`, async (page) => {
             const routine = await gtd.createRoutine(page, {
                 title: 'Weekly review',
                 routineType: 'nextAction',
@@ -127,7 +128,7 @@ test.describe('Routine edit → open next action propagation', () => {
     });
 
     test('startDate change restamps a surviving future open item instead of duplicating it', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `routine-prop-startdate-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `routine-prop-startdate-${uniqueStamp()}@example.com`, async (page) => {
             const routine = await gtd.createRoutine(page, {
                 title: 'Water garden',
                 routineType: 'nextAction',
@@ -158,7 +159,7 @@ test.describe('Routine edit → open next action propagation', () => {
     });
 
     test('calendar routine notes edit updates future generated calendar items in place', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `routine-prop-cal-notes-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `routine-prop-cal-notes-${uniqueStamp()}@example.com`, async (page) => {
             const routine = await gtd.createRoutine(page, {
                 title: 'Morning swim',
                 routineType: 'calendar',

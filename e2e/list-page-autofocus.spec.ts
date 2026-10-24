@@ -1,9 +1,8 @@
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
+import { CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
-
-const CLIENT_URL = 'http://localhost:4173';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Focus is set imperatively (useAutoFocus) in a useEffect once the route mounts past the
 // Suspense boundary for `useAppData()`. On a cold IDB/bootstrap that can take several seconds
@@ -12,21 +11,21 @@ const AUTOFOCUS_TIMEOUT = 20_000;
 
 test.describe('list page input autofocus', () => {
     test('inbox capture field is focused on arrival', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `autofocus-inbox-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `autofocus-inbox-${uniqueStamp()}@example.com`, async (page) => {
             await page.goto(`${CLIENT_URL}/inbox`);
             await expect(page.getByPlaceholder("What's on your mind?")).toBeFocused({ timeout: AUTOFOCUS_TIMEOUT });
         });
     });
 
     test('search field is focused on arrival', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `autofocus-search-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `autofocus-search-${uniqueStamp()}@example.com`, async (page) => {
             await page.goto(`${CLIENT_URL}/search`);
             await expect(page.getByPlaceholder('Search title and notes…')).toBeFocused({ timeout: AUTOFOCUS_TIMEOUT });
         });
     });
 
     test('routines search field is focused on arrival once routines exist', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `autofocus-routines-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `autofocus-routines-${uniqueStamp()}@example.com`, async (page) => {
             await gtd.createRoutine(page, { title: 'Water plants', routineType: 'nextAction', rrule: 'FREQ=DAILY;INTERVAL=1', template: {}, active: true });
             await gtd.flush(page);
 
@@ -38,7 +37,7 @@ test.describe('list page input autofocus', () => {
 
 test.describe('waiting-for sorting', () => {
     test('groups sort alphabetically by person and can switch to date sort', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `waiting-for-sort-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `waiting-for-sort-${uniqueStamp()}@example.com`, async (page) => {
             const zoe = await gtd.createPerson(page, { name: 'Zoe' });
             const alice = await gtd.createPerson(page, { name: 'Alice' });
 

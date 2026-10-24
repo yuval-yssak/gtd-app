@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { resetServerForEmails, withTwoAccountsOnOneDevice } from './helpers/context';
+import { API_URL, CLIENT_URL } from './helpers/env';
 
 // Regression for: opening the item editor on a calendar-linked item, switching the AccountPicker
 // to the secondary account, and finding no calendar selector — only the validation error
@@ -14,9 +15,9 @@ import { resetServerForEmails, withTwoAccountsOnOneDevice } from './helpers/cont
 // The fix relaxes the gate to length >= 1 and pre-fills the target's default/sole config when
 // the owner changes. This test drives the editor UI to confirm both effects.
 
-const DEV_SEED_CALENDAR_URL = 'http://localhost:4000/dev/calendar/seed-integration';
-const DEV_SEED_ENTITY_URL = 'http://localhost:4000/dev/reassign/seed-entity';
-const INBOX_URL = 'http://localhost:4173/inbox';
+const DEV_SEED_CALENDAR_URL = `${API_URL}/dev/calendar/seed-integration`;
+const DEV_SEED_ENTITY_URL = `${API_URL}/dev/reassign/seed-entity`;
+const INBOX_URL = `${CLIENT_URL}/inbox`;
 
 interface SeedCalendarResult {
     integrationId: string;
@@ -98,7 +99,7 @@ test.describe('Item editor cross-account calendar picker', () => {
             await page.evaluate(async () => {
                 await (window as unknown as { __gtd: { pull(): Promise<void> } }).__gtd.pull();
             });
-            await page.goto('http://localhost:4173/calendar');
+            await page.goto(`${CLIENT_URL}/calendar`);
             await expect(page.getByText('Cross-account picker test')).toBeVisible({ timeout: 10_000 });
 
             // Open the editor.

@@ -1,8 +1,8 @@
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
 import { briefInputOf, briefTextOf, openBriefEditor } from './helpers/itemEditorLocators';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Weekly-review presentation of item briefs: a review card with a brief on show leads with the
 // brief line and folds the notes behind "Show notes"; the header's "Show briefs" switch restores
@@ -21,7 +21,7 @@ const LONG_NOTES = [
 
 test.describe('weekly review — briefs', () => {
     test('brief-first card, Show notes disclosure, header toggle, and the stale marker after a notes edit', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wr-brief-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wr-brief-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'Renew passport');
             const item = await gtd.clarifyToNextAction(page, { ...inbox, notes: LONG_NOTES }, {});
             expect(LONG_NOTES.length).toBeGreaterThanOrEqual(400);
@@ -105,7 +105,7 @@ test.describe('weekly review — briefs', () => {
     });
 
     test('a card with no brief to show keeps the current notes preview (no disclosure, no brief line)', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wr-nobrief-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wr-nobrief-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'Plain action');
             await gtd.clarifyToNextAction(page, { ...inbox, notes: 'Short notes, no brief.' }, {});
             await gtd.flush(page);
@@ -117,8 +117,9 @@ test.describe('weekly review — briefs', () => {
             await expect(card.getByTestId('pageNotesPreview')).toContainText('Short notes, no brief.');
             await expect(card.getByTestId('showNotesButton')).toHaveCount(0);
             await expect(card.getByTestId('briefLine')).toHaveCount(0);
-            // The empty read view is still there, with the pencil to author one.
-            await expect(card.getByTestId('briefEmpty')).toHaveCount(1);
+            // The read view is still there — the empty hint, or the declined caption once the sweep
+            // below lands — with the pencil to author one.
+            await expect(card.getByTestId('briefEmpty').or(card.getByTestId('briefDeclinedNote'))).toHaveCount(1);
             await expect(card.getByTestId('briefEditButton')).toBeVisible();
             // Opening the review runs the review-start sweep, which writes a `skipped` row for
             // these short notes — so this card ends up `declined`, worded for that origin. Either
@@ -134,7 +135,7 @@ test.describe('weekly review — briefs', () => {
     // notes and there is nothing worth condensing". Before `declined` existed it rendered exactly
     // like "no brief at all" — an empty field the user could not tell from a broken feature.
     test('a declined brief explains itself, keeps the notes preview, and yields to the first keystroke', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wr-declined-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wr-declined-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'test 1');
             const item = await gtd.clarifyToNextAction(page, { ...inbox, notes: LONG_NOTES }, {});
             // The text-less row a real model produced for the user: long notes, nothing worth
@@ -157,7 +158,7 @@ test.describe('weekly review — briefs', () => {
             await expect(page.getByTestId('briefGenerateButton')).toBeEnabled();
 
             // The declined read view shows no "written automatically" hint — the caption says it.
-            await expect(page.getByTestId('briefEmpty')).toHaveText('');
+            await expect(page.getByTestId('briefEmpty')).toHaveCount(0);
 
             // Typing their own brief clears the caption on the FIRST keystroke — before any blur,
             // commit or save; the stored row is still the text-less one at that instant.
@@ -188,7 +189,7 @@ test.describe('weekly review — briefs', () => {
     // `none` so the next sweep reconsiders, rather than asserting "nothing to summarise" about
     // text the model never read.
     test('a declined brief lapses when the notes move on, and the caption goes with it', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wr-lapse-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wr-lapse-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'test 2');
             const item = await gtd.clarifyToNextAction(page, { ...inbox, notes: LONG_NOTES }, {});
             await gtd.seedDeclinedBrief(page, item, 'model');

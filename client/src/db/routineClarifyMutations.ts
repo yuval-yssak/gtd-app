@@ -3,7 +3,7 @@ import type { MyDB, StoredItem, StoredRoutine } from '../types/MyDB';
 import { clarifyToTrash, removeItem, updateItem } from './itemMutations';
 import { deleteRoutineById } from './routineHelpers';
 import { createRoutineWithFirstItems, type NewRoutineFields } from './routineMutations';
-import { queueSyncOp } from './syncHelpers';
+import { queueDeleteThenRemove } from './syncHelpers';
 
 /**
  * Clarify-to-routine mutations: an inbox item is consumed (trashed) and reborn as a recurring
@@ -56,6 +56,7 @@ async function hardDeleteRoutineWithGeneratedItems(db: IDBPDatabase<MyDB>, routi
     for (const generatedItem of generated) {
         await removeItem(db, generatedItem._id);
     }
-    await deleteRoutineById(db, routine._id);
-    await queueSyncOp(db, { opType: 'delete', entityType: 'routine', entityId: routine._id, snapshot: null, userId: routine.userId });
+    await queueDeleteThenRemove(db, { opType: 'delete', entityType: 'routine', entityId: routine._id, snapshot: null, userId: routine.userId }, () =>
+        deleteRoutineById(db, routine._id),
+    );
 }

@@ -1,10 +1,10 @@
 import type { Page } from '@playwright/test';
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import type { StoredItem } from '../client/src/types/MyDB';
 import { closeContextQuietly, withTwoLoggedInDevices } from './helpers/context';
 import { gtd } from './helpers/gtd';
 import { loginAs } from './helpers/login';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Two BrowserContext instances represent two devices — they share cookies and the server
 // but have fully isolated IndexedDB, localStorage, and service worker registrations.
@@ -47,7 +47,7 @@ async function createSyncedItem(page1: Page, page2: Page, title: string): Promis
 
 test.describe('multi-device sync', () => {
     test('item created on device-1 appears on device-2 via pull', async ({ browser }) => {
-        const email = `pull-${dayjs().valueOf()}@example.com`;
+        const email = `pull-${uniqueStamp()}@example.com`;
         await withTwoLoggedInDevices(browser, email, async (page1, page2) => {
             await gtd.collect(page1, 'Shared item');
             await gtd.flush(page1);
@@ -59,7 +59,7 @@ test.describe('multi-device sync', () => {
     });
 
     test('SSE triggers automatic pull on device-2 without manual pull()', async ({ browser }) => {
-        const email = `sse-${dayjs().valueOf()}@example.com`;
+        const email = `sse-${uniqueStamp()}@example.com`;
         await withTwoLoggedInDevices(browser, email, async (page1, page2) => {
             await gtd.collect(page1, 'SSE item');
             await gtd.flush(page1);
@@ -83,7 +83,7 @@ test.describe('multi-device sync', () => {
     });
 
     test('last-write-wins conflict resolution', async ({ browser }) => {
-        const email = `conflict-${dayjs().valueOf()}@example.com`;
+        const email = `conflict-${uniqueStamp()}@example.com`;
         await withTwoLoggedInDevices(browser, email, async (page1, page2) => {
             const inboxItem = await createSyncedItem(page1, page2, 'Contested');
 
@@ -115,7 +115,7 @@ test.describe('multi-device sync', () => {
     });
 
     test('fresh device bootstraps all items from server', async ({ browser }) => {
-        const email = `bootstrap-${dayjs().valueOf()}@example.com`;
+        const email = `bootstrap-${uniqueStamp()}@example.com`;
         const ctx1 = await browser.newContext();
         const ctx2 = await browser.newContext();
 
@@ -161,7 +161,7 @@ test.describe('multi-device sync', () => {
     });
 
     test('item created on device-2 is visible in server bootstrap', async ({ browser }) => {
-        const email = `d2-create-${dayjs().valueOf()}@example.com`;
+        const email = `d2-create-${uniqueStamp()}@example.com`;
         await withTwoLoggedInDevices(browser, email, async (page1, page2) => {
             await gtd.collect(page2, 'Device-2 item');
             await gtd.flush(page2);

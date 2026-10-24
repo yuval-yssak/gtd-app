@@ -1,14 +1,15 @@
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
+import { API_URL, CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // E2E coverage for Step 2's mandatory post-OAuth calendar choice. After connecting an integration,
 // the user MUST pick at least one calendar — the ChooseCalendarDialog has no "Skip" button. Until
 // they do, the integration row surfaces a "No calendar selected — choose one" CTA.
 
-const SETTINGS_URL = 'http://localhost:4173/settings';
-const DEV_SEED_INTEGRATION_URL = 'http://localhost:4000/dev/calendar/seed-integration';
+const SETTINGS_URL = `${CLIENT_URL}/settings`;
+const DEV_SEED_INTEGRATION_URL = `${API_URL}/dev/calendar/seed-integration`;
 
 interface SeedResponse {
     ok: boolean;
@@ -31,7 +32,7 @@ async function seedIntegrationWithoutConfigs(userId: string): Promise<SeedRespon
 
 test.describe('calendar required-choice', () => {
     test('integration row shows "No calendar selected" CTA when no sync configs exist', async ({ browser }) => {
-        const email = `choose-empty-${dayjs().valueOf()}@example.com`;
+        const email = `choose-empty-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             const userId = (await gtd.getActiveAccountId(page)) as string;
             await seedIntegrationWithoutConfigs(userId);
@@ -47,7 +48,7 @@ test.describe('calendar required-choice', () => {
     });
 
     test('ChooseCalendarDialog has no Skip button — choice is mandatory', async ({ browser }) => {
-        const email = `choose-no-skip-${dayjs().valueOf()}@example.com`;
+        const email = `choose-no-skip-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             const userId = (await gtd.getActiveAccountId(page)) as string;
             await seedIntegrationWithoutConfigs(userId);
@@ -71,7 +72,7 @@ test.describe('calendar required-choice', () => {
         // We don't drive the ChooseCalendarDialog → createSyncConfig flow itself (that would require
         // mocking the GCal calendars list). Instead seed a config server-side and assert the row
         // updates after a settings refresh.
-        const email = `choose-after-${dayjs().valueOf()}@example.com`;
+        const email = `choose-after-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             const userId = (await gtd.getActiveAccountId(page)) as string;
             const seeded = await seedIntegrationWithoutConfigs(userId);
@@ -97,7 +98,7 @@ test.describe('calendar required-choice', () => {
         // The OAuth callback redirects to /settings?calendarConnected=<persistedId>. The picker must
         // open against the row whose _id matches that param — the guard against the disconnect/reconnect
         // 404 where it would otherwise target a stale id that no longer exists server-side.
-        const email = `choose-by-id-${dayjs().valueOf()}@example.com`;
+        const email = `choose-by-id-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             const userId = (await gtd.getActiveAccountId(page)) as string;
             const seeded = await seedIntegrationWithoutConfigs(userId);
@@ -113,7 +114,7 @@ test.describe('calendar required-choice', () => {
         // Legacy/stale redirect path: the param names an id that no longer exists (e.g. a pre-fix "1",
         // or a phantom id from a since-deleted integration). pickConnectedIntegration falls back to the
         // newest live integration so the user can still pick a calendar instead of being stuck.
-        const email = `choose-stale-id-${dayjs().valueOf()}@example.com`;
+        const email = `choose-stale-id-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             const userId = (await gtd.getActiveAccountId(page)) as string;
             await seedIntegrationWithoutConfigs(userId);

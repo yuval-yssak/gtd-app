@@ -1,7 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { closeContextQuietly } from './helpers/context';
-
-const CLIENT_URL = 'http://localhost:4173';
+import { CLIENT_URL } from './helpers/env';
 
 // Verifies the "Sign in with Google / GitHub" buttons show a loading state immediately on click
 // and recover (re-enable + show error) if the underlying signIn.social() POST rejects.

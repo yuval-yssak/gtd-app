@@ -2,6 +2,7 @@ import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { resetServerForEmails, withOneLoggedInDevice, withTwoAccountsOnOneDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Weekly Review wizard: guided multi-step flow — inbox checklist (seeded user-defined external
 // buckets), solo clarify, solo focus stages with a linear skip-past walk, whole-stage skip, quick capture
@@ -11,7 +12,7 @@ import { gtd } from './helpers/gtd';
 
 test.describe('weekly review', () => {
     test('full guided review: checklist → solo stages → mid-review capture → celebration', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wr-full-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wr-full-${uniqueStamp()}@example.com`, async (page) => {
             const loose = await gtd.collect(page, 'Loose thought');
             const action = await gtd.collect(page, 'Call Bob');
             await gtd.clarifyToNextAction(page, action, {});
@@ -164,7 +165,7 @@ test.describe('weekly review', () => {
     });
 
     test('an interrupted review resumes on reload with progress intact', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wr-resume-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wr-resume-${uniqueStamp()}@example.com`, async (page) => {
             await page.goto('/weekly-review');
             await page.getByTestId('startReviewButton').click();
             await expect(page.getByTestId('reviewInboxRow')).toHaveCount(3);
@@ -188,7 +189,7 @@ test.describe('weekly review', () => {
     });
 
     test('deleting every external inbox shows an explicit empty state; adding one back re-arms the tick requirement', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wr-empty-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wr-empty-${uniqueStamp()}@example.com`, async (page) => {
             await page.goto('/weekly-review');
             await page.getByTestId('startReviewButton').click();
             await expect(page.getByTestId('reviewInboxRow')).toHaveCount(3);
@@ -228,7 +229,7 @@ test.describe('weekly review', () => {
     test('decision buttons stay pinned at one screen position: long items scroll inside the stage area, empty-stage Continue lands in the same bar', async ({
         browser,
     }) => {
-        await withOneLoggedInDevice(browser, `wr-pinned-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wr-pinned-${uniqueStamp()}@example.com`, async (page) => {
             // One item long enough to force internal scrolling, one short — the action bar must
             // not move between them, and the page itself must never scroll.
             const longNotes = Array.from({ length: 120 }, (_, i) => `Note line ${i + 1}`).join('\n\n');
@@ -355,7 +356,7 @@ test.describe('weekly review', () => {
     });
 
     test('next-actions stage walks items in the Next Actions page order (expected day ascending, undated last)', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wr-na-order-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wr-na-order-${uniqueStamp()}@example.com`, async (page) => {
             // Created oldest-first as undated → later → soon, so createdTs order would present
             // 'Plain undated' first — the page comparator must present 'Due soon' first.
             const plain = await gtd.collect(page, 'Plain undated');
@@ -380,7 +381,7 @@ test.describe('weekly review', () => {
     });
 
     test('waiting-for stage walks items chronologically by expectedBy, not grouped by person', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wr-wf-order-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wr-wf-order-${uniqueStamp()}@example.com`, async (page) => {
             // Person-grouped (the page's default view) would present both of Alice's items back to
             // back and Zoe's last; the review must interleave them by date instead.
             const alice = await gtd.createPerson(page, { name: 'Alice' });
@@ -413,7 +414,7 @@ test.describe('weekly review', () => {
     });
 
     test('clarify stage walks inbox items newest-first (LIFO), matching the inbox page', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wr-clarify-order-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wr-clarify-order-${uniqueStamp()}@example.com`, async (page) => {
             // Each collect is a separate round-trip, so createdTs values are distinct — the older
             // capture lands first and must come up SECOND in the walk.
             await gtd.collect(page, 'Older thought');
@@ -433,7 +434,7 @@ test.describe('weekly review', () => {
     });
 
     test('header shows full only at review start; the strip everywhere else, with a sticky expand toggle', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wr-collapse-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wr-collapse-${uniqueStamp()}@example.com`, async (page) => {
             const first = await gtd.collect(page, 'First action');
             await gtd.clarifyToNextAction(page, first, { expectedBy: dayjs().add(7, 'day').format('YYYY-MM-DD') });
             const second = await gtd.collect(page, 'Second action');
@@ -535,7 +536,7 @@ test.describe('weekly review', () => {
     });
 
     test('items that become eligible mid-stage join the walk live: the total grows and the arrival is offered', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wr-live-append-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wr-live-append-${uniqueStamp()}@example.com`, async (page) => {
             const first = await gtd.collect(page, 'First thought');
             await gtd.flush(page); // never navigate mid-flush — see clarify-to-routine.spec.ts
 
@@ -566,7 +567,7 @@ test.describe('weekly review', () => {
     });
 
     test('pre-celebration sweep: a finished stage that gained items re-offers them before the review ends', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wr-sweep-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wr-sweep-${uniqueStamp()}@example.com`, async (page) => {
             await gtd.collect(page, 'Waiting seed');
             await gtd.flush(page); // never navigate mid-flush — see clarify-to-routine.spec.ts
 
@@ -616,7 +617,7 @@ test.describe('weekly review', () => {
     });
 
     test('pre-celebration sweep: "Finish anyway" celebrates over the arrivals and deletes the draft', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wr-sweep-finish-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wr-sweep-finish-${uniqueStamp()}@example.com`, async (page) => {
             await gtd.collect(page, 'Skipped arrival');
             await gtd.flush(page); // never navigate mid-flush — see clarify-to-routine.spec.ts
 
@@ -743,7 +744,7 @@ test.describe('weekly review', () => {
     });
 
     test('back arrow revisits decisions with one-click undo; text edits flip the primary to "Save & next"', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wr-undo-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wr-undo-${uniqueStamp()}@example.com`, async (page) => {
             // Distinct expectedBy dates pin the walk order: undated same-tier items tie under the
             // Next Actions page comparator and would come up in arbitrary (IDB key) order.
             const first = await gtd.collect(page, 'First action');
@@ -887,7 +888,7 @@ test.describe('weekly review', () => {
     });
 
     test('a clarify-to-routine decision offers no undo — the compound write cannot be snapshot-restored', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wr-routine-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wr-routine-${uniqueStamp()}@example.com`, async (page) => {
             const capture = await gtd.collect(page, 'Water the plants');
             await gtd.flush(page); // never navigate mid-flush — see clarify-to-routine.spec.ts
 
@@ -934,7 +935,7 @@ test.describe('weekly review', () => {
     });
 
     test('timeline stepper: free jumps sync the URL, revisits offer undecided + new items, inline edit saves', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wr-timeline-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wr-timeline-${uniqueStamp()}@example.com`, async (page) => {
             // Distinct expectedBy dates pin the walk order: undated same-tier items tie under the
             // Next Actions page comparator and would come up in arbitrary (IDB key) order.
             const first = await gtd.collect(page, 'First action');
@@ -996,7 +997,7 @@ test.describe('weekly review', () => {
     });
 
     test('calendar routines review ONCE as a routine card; pause/undo work; exceptions and nextAction routine items carry a banner', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wr-routines-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wr-routines-${uniqueStamp()}@example.com`, async (page) => {
             // Two calendar routines: a DAILY 06:00 one (always the earliest occurrence, so its card
             // leads the walk deterministically) and a weekly Thursday one.
             const gymRoutine = await gtd.createRoutine(page, {
@@ -1115,7 +1116,7 @@ test.describe('weekly review', () => {
     });
 
     test('calendar stage: Done holds one screen slot, directly left of "Looks good", on routine and one-off cards alike', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wr-cal-done-slot-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wr-cal-done-slot-${uniqueStamp()}@example.com`, async (page) => {
             const routine = await gtd.createRoutine(page, {
                 title: 'Morning gym',
                 routineType: 'calendar',
@@ -1159,7 +1160,7 @@ test.describe('weekly review', () => {
     });
 
     test('the routine card completes its lead occurrence in place, overdue included', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wr-routine-done-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wr-routine-done-${uniqueStamp()}@example.com`, async (page) => {
             const routine = await gtd.createRoutine(page, {
                 title: 'Update Microsoft Keys',
                 routineType: 'calendar',
@@ -1217,7 +1218,7 @@ test.describe('weekly review', () => {
     });
 
     test('a draft persisted with raw occurrence ids resumes into the collapsed walk', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wr-normalize-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wr-normalize-${uniqueStamp()}@example.com`, async (page) => {
             const routine = await gtd.createRoutine(page, {
                 title: 'Standup',
                 routineType: 'calendar',

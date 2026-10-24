@@ -1,7 +1,7 @@
 import { expect, type Page, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // /next-actions filter chips persist in URL search params (context / person / energy / time),
 // people get their own chip row, chip rows are alphabetical, and rows flag focus + under-clarified state.
@@ -34,7 +34,7 @@ async function seedFilterFixtures(page: Page) {
 
 test.describe('Next actions — URL-backed filter chips', () => {
     test('chip clicks write the URL, filter the list, and clear on second click', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `na-filters-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `na-filters-${uniqueStamp()}@example.com`, async (page) => {
             const { phone, alice } = await seedFilterFixtures(page);
 
             await page.goto('/next-actions');
@@ -64,7 +64,7 @@ test.describe('Next actions — URL-backed filter chips', () => {
     });
 
     test('deep links restore filters; invalid params are stripped without crashing', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `na-deeplink-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `na-deeplink-${uniqueStamp()}@example.com`, async (page) => {
             await seedFilterFixtures(page);
 
             // energy + time arrive from the URL and immediately filter the list.
@@ -82,7 +82,7 @@ test.describe('Next actions — URL-backed filter chips', () => {
 
 test.describe('Next actions — row indicators', () => {
     test('under-clarified warning respects the work-context nuance', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `na-indicators-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `na-indicators-${uniqueStamp()}@example.com`, async (page) => {
             // No work contexts exist yet — the missing-work-context criterion must not fire.
             await gtd.clarifyToNextAction(page, await gtd.collect(page, 'Fully clarified'), { energy: 'low', time: 5 });
             await gtd.clarifyToNextAction(page, await gtd.collect(page, 'Bare item'), {});

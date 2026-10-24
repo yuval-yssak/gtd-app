@@ -26,6 +26,7 @@ import { getOrCreateDeviceId, getSyncCursor, setSyncCursor } from './deviceId';
 import { dispatchOpFlush } from './dispatchOpFlush';
 import { bulkPutItems } from './itemHelpers';
 import { mergeServerOwnedRank } from './rankMerge';
+import { confirmDelete, entityKey, isAwaitingDeleteEcho, rememberPushedDeletes } from './unconfirmedDeletes';
 
 interface BaseSyncOpParams {
     entityType: EntityType;
@@ -162,6 +163,17 @@ export async function queueSyncOp(db: IDBPDatabase<MyDB>, op: SyncOpParams): Pro
     // snapshot's userId. Same-account ops keep the lightweight path.
     void dispatchOpFlush(db, userId).catch((e) => console.warn('Failed to flush sync queue after adding op', e));
     registerBackgroundSync();
+}
+
+/**
+ * Hard-deletes a synced row: the delete op is queued BEFORE the row goes. A pull applying between
+ * the two steps then sees the queued delete and holds back stale re-deliveries of the entity; in
+ * the other order it finds neither row nor op and resurrects what the user just deleted. Should the
+ * context die in between, the server still deletes and the pulled-back delete removes the row.
+ */
+export async function queueDeleteThenRemove(db: IDBPDatabase<MyDB>, op: SyncOpParams, removeRow: () => Promise<void>): Promise<void> {
+    await queueSyncOp(db, op);
+    await removeRow();
 }
 
 /**
@@ -334,6 +346,8 @@ async function pushBatch(db: IDBPDatabase<MyDB>, ops: SyncOperation[], options: 
     );
     const deviceId = await getOrCreateDeviceId(db);
     await pushSyncOps(deviceId, ops);
+    // Before dequeuing: from here until its echo is pulled, the delete is held only in memory.
+    rememberPushedDeletes(ops);
     console.log(`[sync-flush] push succeeded, removed ${ops.length} ops from queue`);
     await deleteSentOps(db, ops);
 }
@@ -567,11 +581,38 @@ async function doPull(db: IDBPDatabase<MyDB>, userId: string): Promise<void> {
     // every other context's sync; the per-op transaction in `applyEntityOp` is the second layer
     // for browsers without Web Locks.
     await withCrossContextLock(SYNC_APPLY_LOCK, async () => {
-        for (const op of ops) {
-            await applyServerOp(db, userId, op);
-        }
+        await applyPulledOps(db, userId, ops);
         await advanceSyncCursor(db, userId, serverTs, serverId ?? '');
     });
+}
+
+/**
+ * Applies a pull's ops in server order, skipping stale re-deliveries for entities this device has
+ * deleted: the server re-sends the last few seconds of ops on every pull (the holdback window), and
+ * a pull fetched before a local delete can land after it. With the row gone there is nothing for
+ * LWW to compare against, so applying it would resurrect what the user just deleted. Held back
+ * while the delete is still queued, and after it is pushed until the server's own delete op comes
+ * back (see unconfirmedDeletes.ts). In order, so an op after that echo — a genuine re-create — applies.
+ */
+async function applyPulledOps(db: IDBPDatabase<MyDB>, userId: string, ops: ServerOp[]): Promise<void> {
+    const queuedDeletes = await readQueuedDeleteKeys(db);
+    for (const op of ops) {
+        const key = entityKey(op.entityType, op.entityId);
+        if (op.opType !== 'delete' && (queuedDeletes.has(key) || isAwaitingDeleteEcho(key))) {
+            continue;
+        }
+        await applyServerOp(db, userId, op);
+        // Released only once applied: a delete whose apply threw keeps holding until a pull re-delivers it.
+        if (op.opType === 'delete') {
+            confirmDelete(key);
+        }
+    }
+}
+
+/** Entities this device deleted locally and has not pushed yet. Read inside the apply lock, per pull. */
+async function readQueuedDeleteKeys(db: IDBPDatabase<MyDB>): Promise<Set<string>> {
+    const queued = await db.getAll('syncOperations');
+    return new Set(queued.filter((op) => op.opType === 'delete').map((op) => entityKey(op.entityType, op.entityId)));
 }
 
 /**

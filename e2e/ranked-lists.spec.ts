@@ -5,6 +5,7 @@ import type { StoredItem } from '../client/src/types/MyDB';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
 import { centerOf, glide, LONG_PRESS_MS, longPressDrag, PHONE, touch } from './helpers/touch';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Manual order beyond Next Actions (docs/plans/priority-everywhere.md, Phase A): the Inbox, Someday / Maybe and
 // Waiting For's "By date" view (inside a day) reorder with the same drag, keyboard grab, Alt+arrows and Move to
@@ -38,7 +39,7 @@ const statusChip = (page: Page, label: string) => page.getByTestId('itemEditorSt
 
 test.describe('Ranked lists: Inbox, Someday / Maybe, Waiting For by date', () => {
     test('inbox: Space grabs a row, ↑ moves it, Space drops; the order persists; Alt+Shift+↓ sends a row to the bottom', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `rl-inbox-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `rl-inbox-${uniqueStamp()}@example.com`, async (page) => {
             for (const title of ['Alpha', 'Bravo', 'Charlie']) {
                 await gtd.collect(page, title);
             }
@@ -68,7 +69,7 @@ test.describe('Ranked lists: Inbox, Someday / Maybe, Waiting For by date', () =>
     });
 
     test('inbox: the Move to button and a mouse drag of the handle both reorder', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `rl-inbox-mouse-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `rl-inbox-mouse-${uniqueStamp()}@example.com`, async (page) => {
             const [alpha] = [await gtd.collect(page, 'Alpha'), await gtd.collect(page, 'Bravo'), await gtd.collect(page, 'Charlie')];
             if (!alpha) throw new Error('seed');
             await gtd.flush(page);
@@ -98,7 +99,7 @@ test.describe('Ranked lists: Inbox, Someday / Maybe, Waiting For by date', () =>
     test('inbox on a phone: the bottom sheet offers Move to…', async ({ browser }) => {
         await withOneLoggedInDevice(
             browser,
-            `rl-inbox-phone-${dayjs().valueOf()}@example.com`,
+            `rl-inbox-phone-${uniqueStamp()}@example.com`,
             async (page) => {
                 for (const title of ['Alpha', 'Bravo']) {
                     await gtd.collect(page, title);
@@ -120,7 +121,7 @@ test.describe('Ranked lists: Inbox, Someday / Maybe, Waiting For by date', () =>
     });
 
     test('someday: Alt+↑ commits one slot; the order survives a reload', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `rl-someday-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `rl-someday-${uniqueStamp()}@example.com`, async (page) => {
             for (const title of ['Alpha', 'Bravo', 'Charlie']) {
                 await gtd.clarifyToSomedayMaybe(page, await gtd.collect(page, title), {});
             }
@@ -139,7 +140,7 @@ test.describe('Ranked lists: Inbox, Someday / Maybe, Waiting For by date', () =>
     });
 
     test('waiting for by date: day sections, reorder inside a day, a jump never leaves its day; by person has no handles', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `rl-waiting-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `rl-waiting-${uniqueStamp()}@example.com`, async (page) => {
             const day = dayjs().add(3, 'day').format('YYYY-MM-DD');
             const later = dayjs().add(5, 'day').format('YYYY-MM-DD');
             for (const [title, expectedBy] of [
@@ -174,7 +175,7 @@ test.describe('Ranked lists: Inbox, Someday / Maybe, Waiting For by date', () =>
     });
 
     test('the calendar stays chronological: no drag handles, no Move to', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `rl-calendar-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `rl-calendar-${uniqueStamp()}@example.com`, async (page) => {
             const start = dayjs().add(1, 'day').hour(9).minute(0).second(0);
             await gtd.clarifyToCalendar(page, await gtd.collect(page, 'Meeting'), {
                 timeStart: start.toISOString(),
@@ -191,7 +192,7 @@ test.describe('Ranked lists: Inbox, Someday / Maybe, Waiting For by date', () =>
 
 test.describe('Item editor shortcuts and the legend everywhere', () => {
     test('a status letter picks its chip (outside a text field), Cmd/Ctrl+Enter saves, chips name their key', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `ed-keys-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `ed-keys-${uniqueStamp()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'Decide later');
             await gtd.flush(page);
             await page.goto(`/item/${item._id}`);
@@ -224,7 +225,7 @@ test.describe('Item editor shortcuts and the legend everywhere', () => {
     });
 
     test("after a click on the editor's empty space (focus leaves the title), a status letter still picks its chip", async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `ed-blank-click-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `ed-blank-click-${uniqueStamp()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'Click away');
             await gtd.flush(page);
             await page.goto(`/item/${item._id}`);
@@ -240,7 +241,7 @@ test.describe('Item editor shortcuts and the legend everywhere', () => {
     });
 
     test('in an inbox item, Alt+Shift+↓ (focus outside a text field) moves it to the bottom of the inbox', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `ed-position-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `ed-position-${uniqueStamp()}@example.com`, async (page) => {
             const items = [];
             for (const title of ['Alpha', 'Bravo', 'Charlie']) {
                 items.push(await gtd.collect(page, title));
@@ -261,7 +262,7 @@ test.describe('Item editor shortcuts and the legend everywhere', () => {
     });
 
     test('the keyboard-shortcuts button is on every screen and opens the legend', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `legend-all-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `legend-all-${uniqueStamp()}@example.com`, async (page) => {
             for (const path of ['/inbox', '/calendar', '/routines', '/people', '/settings']) {
                 await page.goto(path);
                 const button = page.locator('[data-testid="keyboardShortcutsButton"]:visible');
@@ -275,7 +276,7 @@ test.describe('Item editor shortcuts and the legend everywhere', () => {
     });
 
     test('a letter typed in an open dropdown inside the editor jumps the menu — it never switches the status', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `ed-portal-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `ed-portal-${uniqueStamp()}@example.com`, async (page) => {
             await gtd.createPerson(page, { name: 'Sam' });
             const item = await gtd.clarifyToWaitingFor(page, await gtd.collect(page, 'Waiting on a reply'), {});
             await gtd.flush(page);
@@ -291,7 +292,7 @@ test.describe('Item editor shortcuts and the legend everywhere', () => {
     });
 
     test('in the Process Inbox wizard Cmd/Ctrl+Enter does nothing (the wizard owns its save) and no Position row shows', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `ed-wizard-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `ed-wizard-${uniqueStamp()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'Wizard target');
             await gtd.flush(page);
             await page.goto('/process-inbox');
@@ -309,7 +310,7 @@ test.describe('Item editor shortcuts and the legend everywhere', () => {
     test('on a phone, no keyboard-shortcuts button is shown (touch has no shortcuts)', async ({ browser }) => {
         await withOneLoggedInDevice(
             browser,
-            `legend-phone-${dayjs().valueOf()}@example.com`,
+            `legend-phone-${uniqueStamp()}@example.com`,
             async (page) => {
                 await page.goto('/inbox');
                 // The app bar is up (so the absence below is not vacuous)…
@@ -323,7 +324,7 @@ test.describe('Item editor shortcuts and the legend everywhere', () => {
 
 test.describe('Ranked lists: keyboard grab downwards keeps focus; Waiting For by person keeps its letters', () => {
     test('inbox and waiting-for (by date): Space, ↓ ↓, Space moves the row down and it keeps focus', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `rl-down-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `rl-down-${uniqueStamp()}@example.com`, async (page) => {
             for (const title of ['Alpha', 'Bravo', 'Charlie']) {
                 await gtd.collect(page, title);
             }
@@ -357,7 +358,7 @@ test.describe('Ranked lists: keyboard grab downwards keeps focus; Waiting For by
     });
 
     test('waiting for by person: E opens the editor and C copies the id on a focused row', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `rl-person-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `rl-person-${uniqueStamp()}@example.com`, async (page) => {
             await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
             const item = await gtd.clarifyToWaitingFor(page, await gtd.collect(page, 'Owed by nobody'), {});
             await gtd.flush(page);
@@ -396,7 +397,7 @@ test.describe('Inbox on a phone: long-press drag', () => {
     test('the swipe row has a handle; a long press on it drags the row, without swiping or opening the editor', async ({ browser }) => {
         await withOneLoggedInDevice(
             browser,
-            `rl-inbox-phone-drag-${dayjs().valueOf()}@example.com`,
+            `rl-inbox-phone-drag-${uniqueStamp()}@example.com`,
             async (page) => {
                 const alpha = await seedInbox(page);
                 await expect(handleOf(page, alpha._id)).toBeVisible();
@@ -418,7 +419,7 @@ test.describe('Inbox on a phone: long-press drag', () => {
     test('a handle drag after an earlier body touch on the row never slides it or trashes it', async ({ browser }) => {
         await withOneLoggedInDevice(
             browser,
-            `rl-inbox-phone-stale-${dayjs().valueOf()}@example.com`,
+            `rl-inbox-phone-stale-${uniqueStamp()}@example.com`,
             async (page) => {
                 const alpha = await seedInbox(page);
                 const row = page.locator(`[data-item-id="${alpha._id}"]`);
@@ -453,7 +454,7 @@ test.describe('Inbox on a phone: long-press drag', () => {
     test('a plain tap on the handle neither opens the editor nor swipes', async ({ browser }) => {
         await withOneLoggedInDevice(
             browser,
-            `rl-inbox-phone-tap-${dayjs().valueOf()}@example.com`,
+            `rl-inbox-phone-tap-${uniqueStamp()}@example.com`,
             async (page) => {
                 const alpha = await seedInbox(page);
                 await handleOf(page, alpha._id).tap();
@@ -469,7 +470,7 @@ test.describe('Inbox on a phone: long-press drag', () => {
     test('a horizontal swipe on the row body still works beside the handle (right swipe → Next Action editor)', async ({ browser }) => {
         await withOneLoggedInDevice(
             browser,
-            `rl-inbox-phone-swipe-${dayjs().valueOf()}@example.com`,
+            `rl-inbox-phone-swipe-${uniqueStamp()}@example.com`,
             async (page) => {
                 const item = await gtd.collect(page, 'Swipe me');
                 await gtd.flush(page);

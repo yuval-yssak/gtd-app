@@ -1,8 +1,8 @@
 import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { resetServerForEmails, withOneLoggedInDevice } from './helpers/context';
-
-const CLIENT_URL = 'http://localhost:4173';
+import { API_URL, CLIENT_URL } from './helpers/env';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Cover the user-visible flow end-to-end: navigate to settings, mint a token, observe the
 // one-shot reveal, copy plaintext, revoke from the list, and verify the row stays visible
@@ -12,7 +12,7 @@ const CLIENT_URL = 'http://localhost:4173';
 
 test.describe('Personal API tokens (settings)', () => {
     test('mint, reveal, revoke', async ({ browser }) => {
-        const email = `tokens-${dayjs().valueOf()}@example.com`;
+        const email = `tokens-${uniqueStamp()}@example.com`;
         await resetServerForEmails([email]);
 
         await withOneLoggedInDevice(browser, email, async (page) => {
@@ -59,7 +59,7 @@ test.describe('Personal API tokens (settings)', () => {
     });
 
     test('label is required; create button surfaces the validation error inline', async ({ browser }) => {
-        const email = `label-required-${dayjs().valueOf()}@example.com`;
+        const email = `label-required-${uniqueStamp()}@example.com`;
         await resetServerForEmails([email]);
 
         await withOneLoggedInDevice(browser, email, async (page) => {
@@ -75,7 +75,7 @@ test.describe('Personal API tokens (settings)', () => {
     });
 
     test('copy-to-clipboard failure surfaces an inline error and keeps the reveal dialog open', async ({ browser }) => {
-        const email = `copy-fail-${dayjs().valueOf()}@example.com`;
+        const email = `copy-fail-${uniqueStamp()}@example.com`;
         await resetServerForEmails([email]);
 
         await withOneLoggedInDevice(browser, email, async (page) => {
@@ -106,7 +106,7 @@ test.describe('Personal API tokens (settings)', () => {
     });
 
     test('renders an "unused" chip on tokens that have never been used or are older than 90 days', async ({ browser }) => {
-        const email = `unused-chip-${dayjs().valueOf()}@example.com`;
+        const email = `unused-chip-${uniqueStamp()}@example.com`;
         await resetServerForEmails([email]);
 
         await withOneLoggedInDevice(browser, email, async (page) => {
@@ -127,7 +127,7 @@ test.describe('Personal API tokens (settings)', () => {
             await expect(page.getByTestId('unusedTokenChip')).toHaveCount(2);
 
             // 2. Look up the stale token's id from the list endpoint, then push lastUsedTs back 100 days.
-            const listRes = await page.context().request.get('http://localhost:4000/account/tokens');
+            const listRes = await page.context().request.get(`${API_URL}/account/tokens`);
             const { tokens } = (await listRes.json()) as { tokens: Array<{ id: string; label: string }> };
             const staleId = tokens.find((t) => t.label === 'Stale token')?.id;
             const freshId = tokens.find((t) => t.label === 'Fresh token')?.id;
@@ -136,9 +136,9 @@ test.describe('Personal API tokens (settings)', () => {
 
             const oldTs = dayjs().subtract(100, 'day').toISOString();
             const recentTs = dayjs().subtract(1, 'day').toISOString();
-            const stalePoke = await page.context().request.post(`http://localhost:4000/dev/api-tokens/${staleId}/touch`, { data: { lastUsedTs: oldTs } });
+            const stalePoke = await page.context().request.post(`${API_URL}/dev/api-tokens/${staleId}/touch`, { data: { lastUsedTs: oldTs } });
             expect(stalePoke.status()).toBe(200);
-            const freshPoke = await page.context().request.post(`http://localhost:4000/dev/api-tokens/${freshId}/touch`, { data: { lastUsedTs: recentTs } });
+            const freshPoke = await page.context().request.post(`${API_URL}/dev/api-tokens/${freshId}/touch`, { data: { lastUsedTs: recentTs } });
             expect(freshPoke.status()).toBe(200);
 
             await page.reload();
@@ -154,7 +154,7 @@ test.describe('Personal API tokens (settings)', () => {
     });
 
     test('mints a reassign.accept token and renders it as a scope chip on the row', async ({ browser }) => {
-        const email = `reassign-accept-${dayjs().valueOf()}@example.com`;
+        const email = `reassign-accept-${uniqueStamp()}@example.com`;
         await resetServerForEmails([email]);
 
         await withOneLoggedInDevice(browser, email, async (page) => {
@@ -182,7 +182,7 @@ test.describe('Personal API tokens (settings)', () => {
     });
 
     test('reveal dialog cannot be dismissed by Escape or backdrop click', async ({ browser }) => {
-        const email = `reveal-pin-${dayjs().valueOf()}@example.com`;
+        const email = `reveal-pin-${uniqueStamp()}@example.com`;
         await resetServerForEmails([email]);
 
         await withOneLoggedInDevice(browser, email, async (page) => {

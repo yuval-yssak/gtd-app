@@ -2,6 +2,7 @@ import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Mirrors SYNC_FLUSH_LOCK in client/src/db/crossContextLock.ts — the Web Lock every context's
 // flushSyncQueue serializes on. Holding it from the page models a Service Worker / sibling tab mid-flush.
@@ -29,7 +30,7 @@ async function openCalendarWithItem(page: Page, title: string, hour: number) {
 // stranded the user on /done). Both surfaces should now keep the user on /calendar.
 test.describe('Calendar list — mark done', () => {
     test('row-level Mark done button completes the item without leaving /calendar', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `cal-row-done-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `cal-row-done-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'Mark done from row');
             const calItem = await gtd.clarifyToCalendar(page, inbox, {
                 timeStart: dayjs().add(1, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString(),
@@ -56,7 +57,7 @@ test.describe('Calendar list — mark done', () => {
     // because the user navigated. The op's immediate dispatch had found the cross-context flush lock
     // held (a Service Worker flush stuck on a hung request) and silently skipped — nothing retried.
     test('row-level Mark done pushes its op right away — no navigation or manual flush', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `cal-row-done-push-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `cal-row-done-push-${uniqueStamp()}@example.com`, async (page) => {
             const calItem = await openCalendarWithItem(page, 'Push on row done', 11);
 
             await page.getByTestId('calendarItemMarkDoneButton').first().click();
@@ -70,7 +71,7 @@ test.describe('Calendar list — mark done', () => {
     });
 
     test("row-level Mark done queues behind another context's flush and pushes once it frees — never stranded", async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `cal-row-done-lock-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `cal-row-done-lock-${uniqueStamp()}@example.com`, async (page) => {
             const calItem = await openCalendarWithItem(page, 'Push waits for lock', 12);
 
             // "Another context" holds the flush lock (a SW mid-push, in production); release it later.
@@ -101,7 +102,7 @@ test.describe('Calendar list — mark done', () => {
     });
 
     test('page-mode save of calendar → done returns to /calendar (not /done)', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `cal-page-done-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `cal-page-done-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'Page-mode calendar done');
             const calItem = await gtd.clarifyToCalendar(page, inbox, {
                 timeStart: dayjs().add(1, 'day').hour(10).minute(0).second(0).millisecond(0).toISOString(),

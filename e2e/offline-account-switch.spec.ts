@@ -1,6 +1,7 @@
 import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { resetServerForEmails, withTwoAccountsOnOneDevice } from './helpers/context';
+import { API_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
 
 // Active-account switching is now local-first ONLY (IDB write + hard reload — no network), so it
@@ -9,7 +10,7 @@ import { gtd } from './helpers/gtd';
 // once the network returns. These tests pin that contract, plus the expired-session variant where
 // the reconcile surfaces the reauth dialog instead of silently showing stale data.
 
-const API_ORIGIN = 'http://localhost:4000';
+const API_ORIGIN = API_URL;
 const DEV_SEED_ENTITY_URL = `${API_ORIGIN}/dev/reassign/seed-entity`;
 
 /**

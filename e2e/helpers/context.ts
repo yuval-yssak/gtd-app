@@ -1,9 +1,9 @@
 import type { Browser, BrowserContext, Page } from '@playwright/test';
+import { API_URL, CLIENT_URL } from './env';
 import { fetchDevSessionCookie, loginAs } from './login';
 
-const DEV_MULTI_LOGIN_URL = 'http://localhost:4000/dev/multi-login';
-const DEV_RESET_URL = 'http://localhost:4000/dev/reset';
-const CLIENT_URL = 'http://localhost:4173';
+const DEV_MULTI_LOGIN_URL = `${API_URL}/dev/multi-login`;
+const DEV_RESET_URL = `${API_URL}/dev/reset`;
 
 /**
  * Email-scoped server reset. Use this in `beforeEach` for specs that need a clean DB slate

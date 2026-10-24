@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Clarify-to-routine: the item editor's Routine status chip converts an inbox item into a
 // recurring routine — the item is consumed (trashed) and the routine seeds its first item.
@@ -10,7 +10,7 @@ import { gtd } from './helpers/gtd';
 
 test.describe('clarify inbox item to routine', () => {
     test('Routine chip converts the item: routine created, item trashed, first item seeded', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `clar-routine-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `clar-routine-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'Water the plants');
             // Drain the capture's fire-and-forget flush BEFORE navigating — a goto mid-flush
             // destroys the JS context while it holds the cross-context flush lock (30s TTL),
@@ -52,7 +52,7 @@ test.describe('clarify inbox item to routine', () => {
     });
 
     test('calendar-type routine from clarify generates horizon calendar items', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `clar-routine-cal-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `clar-routine-cal-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'Morning swim');
             await gtd.flush(page); // see the flush-lock note in the first test
             await page.goto('/inbox');
@@ -87,7 +87,7 @@ test.describe('clarify inbox item to routine', () => {
     });
 
     test('undo restores the inbox item and deletes the routine with its generated items', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `clar-routine-undo-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `clar-routine-undo-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'Weekly review');
             await gtd.flush(page); // see the flush-lock note in the first test
             await page.goto('/inbox');
@@ -116,7 +116,7 @@ test.describe('clarify inbox item to routine', () => {
     });
 
     test('Routine chip is not offered for non-inbox items', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `clar-routine-hidden-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `clar-routine-hidden-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'Already actionable');
             await gtd.clarifyToNextAction(page, inbox, {});
             await gtd.flush(page); // see the flush-lock note in the first test

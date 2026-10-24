@@ -1,9 +1,9 @@
 import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { resetServerForEmails, withTwoLoggedInDevices } from './helpers/context';
+import { API_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
-
-const API_URL = 'http://localhost:4000';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 /**
  * Regression coverage for calendar → active-status detach (orphaned-GCal-event bug).
@@ -18,7 +18,7 @@ const API_URL = 'http://localhost:4000';
  */
 test.describe('calendar item detach (calendar → nextAction)', () => {
     test('linked calendar item PATCHed to nextAction syncs to a second device', async ({ browser }) => {
-        const email = `cal-detach-${dayjs().valueOf()}@example.com`;
+        const email = `cal-detach-${uniqueStamp()}@example.com`;
         await resetServerForEmails([email]);
 
         await withTwoLoggedInDevices(browser, email, async (page1, page2) => {

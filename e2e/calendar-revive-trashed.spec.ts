@@ -1,6 +1,7 @@
 import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { closeContextQuietly, resetServerForEmails } from './helpers/context';
+import { API_URL, CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
 import { loginAs } from './helpers/login';
 
@@ -16,9 +17,8 @@ import { loginAs } from './helpers/login';
 // shape a real Google Calendar webhook would deliver. End-to-end UI assertion: the item appears
 // on /calendar after the revive.
 
-const DEV_SEED_CALENDAR_URL = 'http://localhost:4000/dev/calendar/seed-integration';
-const DEV_SIMULATE_WEBHOOK_URL = 'http://localhost:4000/dev/calendar/simulate-webhook-event';
-const CLIENT_URL = 'http://localhost:4173';
+const DEV_SEED_CALENDAR_URL = `${API_URL}/dev/calendar/seed-integration`;
+const DEV_SIMULATE_WEBHOOK_URL = `${API_URL}/dev/calendar/simulate-webhook-event`;
 
 interface SeedCalendarResult {
     integrationId: string;

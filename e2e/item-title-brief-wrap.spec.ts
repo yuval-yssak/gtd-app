@@ -1,8 +1,8 @@
 import { expect, type Locator, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
 import { briefTextOf, openBriefEditor, titleInputOf } from './helpers/itemEditorLocators';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // A long title and a long brief must be readable in full in a single view — in the item editor
 // and in the weekly review, which renders the same editor body. They used to be single-line
@@ -37,7 +37,7 @@ async function expectWrappedAndFullyVisible(field: Locator) {
 
 test.describe('Item title and brief wrap instead of clipping to one line', () => {
     test('item page shows a long title and a long brief in full', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wrap-page-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wrap-page-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, LONG_TITLE);
             const item = await gtd.clarifyToNextAction(page, { ...inbox, notes: LONG_NOTES }, {});
             await gtd.setUserBrief(page, item, LONG_BRIEF);
@@ -60,7 +60,7 @@ test.describe('Item title and brief wrap instead of clipping to one line', () =>
     });
 
     test('Enter in the title commits without inserting a newline', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wrap-enter-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wrap-enter-${uniqueStamp()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'Short title');
             await gtd.flush(page);
 
@@ -78,7 +78,7 @@ test.describe('Item title and brief wrap instead of clipping to one line', () =>
     });
 
     test('a pasted multi-line title collapses to one line', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wrap-paste-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wrap-paste-${uniqueStamp()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'Placeholder');
             await gtd.flush(page);
 
@@ -99,7 +99,7 @@ test.describe('Item title and brief wrap instead of clipping to one line', () =>
     });
 
     test('Enter in the brief commits it without inserting a newline', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wrap-brief-enter-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wrap-brief-enter-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'Brief Enter guard');
             const item = await gtd.clarifyToNextAction(page, { ...inbox, notes: LONG_NOTES }, {});
             await gtd.flush(page);
@@ -119,7 +119,7 @@ test.describe('Item title and brief wrap instead of clipping to one line', () =>
     });
 
     test('a long routine title wraps in the routine editor', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wrap-routine-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wrap-routine-${uniqueStamp()}@example.com`, async (page) => {
             await gtd.createRoutine(page, { routineType: 'nextAction', rrule: 'FREQ=DAILY;INTERVAL=1', template: {}, active: true, title: LONG_TITLE });
             await gtd.flush(page);
 
@@ -133,7 +133,7 @@ test.describe('Item title and brief wrap instead of clipping to one line', () =>
     });
 
     test('weekly review card shows a long title in full', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wrap-review-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wrap-review-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, LONG_TITLE);
             const item = await gtd.clarifyToNextAction(page, { ...inbox, notes: LONG_NOTES }, {});
             await gtd.setUserBrief(page, item, LONG_BRIEF);

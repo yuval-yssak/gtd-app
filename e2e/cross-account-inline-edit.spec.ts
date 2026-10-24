@@ -3,6 +3,7 @@ import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import type { StoredItem } from '../client/src/types/MyDB';
 import { resetServerForEmails, withTwoAccountsOnOneDevice } from './helpers/context';
+import { API_URL, CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
 
 // Regression: editing an item owned by a non-active Better Auth account through the regular
@@ -16,9 +17,9 @@ import { gtd } from './helpers/gtd';
 // item owned by bob in IDB, an inline edit via `__gtd.updateItem`. Pre-fix, the recorded sync
 // push response was 400. Post-fix, it is 200 and the server reflects the edit.
 
-const DEV_SEED_ENTITY_URL = 'http://localhost:4000/dev/reassign/seed-entity';
-const DEV_FIND_ENTITY_URL = 'http://localhost:4000/dev/reassign/find-entity';
-const INBOX_URL = 'http://localhost:4173/inbox';
+const DEV_SEED_ENTITY_URL = `${API_URL}/dev/reassign/seed-entity`;
+const DEV_FIND_ENTITY_URL = `${API_URL}/dev/reassign/find-entity`;
+const INBOX_URL = `${CLIENT_URL}/inbox`;
 
 interface ServerItem {
     _id: string;
@@ -71,8 +72,10 @@ function captureSyncPushResponses(page: Page): { responses: number[] } {
 async function waitForBothSseChannels(page: Page, userIdA: string, userIdB: string): Promise<void> {
     await page.waitForFunction(
         ([a, b]) => {
-            const harness = (window as unknown as { __gtd: { sseChannelUserIds(): string[] } }).__gtd;
-            const ids = new Set(harness.sseChannelUserIds());
+            // __gtd mounts from a lazy chunk after boot; a predicate that throws aborts the wait
+            // instead of retrying, so report "not yet" until the harness exists.
+            const harness = (window as unknown as { __gtd?: { sseChannelUserIds(): string[] } }).__gtd;
+            const ids = new Set(harness?.sseChannelUserIds() ?? []);
             return ids.has(a as string) && ids.has(b as string);
         },
         [userIdA, userIdB] as const,
@@ -157,9 +160,10 @@ test.describe('Cross-account inline edit dispatches through syncSingleUser', () 
             }
 
             // The active session must be restored to alice — `syncSingleUser`'s try/finally puts
-            // the cookie back so subsequent UI work continues under the user-selected account.
-            const activeAfter = await gtd.getActiveAccountId(page);
-            expect(activeAfter).toBe(alice.userId);
+            // the cookie back so subsequent UI work continues under the user-selected account. Polled:
+            // the server reflects the edit as soon as bob's push lands, but the restore runs in that
+            // pass's `finally`, after its pull — and a concurrent sync pass pivots the same pointer.
+            await expect.poll(async () => await gtd.getActiveAccountId(page)).toBe(alice.userId);
         });
     });
 });

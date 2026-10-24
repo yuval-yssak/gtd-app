@@ -1,5 +1,5 @@
 import { Tooltip as BaseTooltip } from '@base-ui/react/tooltip';
-import type { ReactElement, ReactNode } from 'react';
+import { type ReactElement, type ReactNode, useState } from 'react';
 import styles from './Tooltip.module.css';
 import { TooltipTriggerProvider } from './tooltipTriggerContext';
 
@@ -26,9 +26,19 @@ type TooltipProps = {
  * open on touch — information a phone user needs must not live only here.
  */
 export function Tooltip({ title, children, placement = 'bottom', disabled }: TooltipProps) {
-    if (title === '' || title === null || title === undefined) return children;
+    const [isOpen, setIsOpen] = useState(false);
+    if (title === '' || title === null || title === undefined) {
+        return children;
+    }
     return (
-        <BaseTooltip.Root disabled={disabled ?? false}>
+        <BaseTooltip.Root
+            disabled={disabled ?? false}
+            open={isOpen}
+            onOpenChange={(next, details) => {
+                letEscapeReachPage(next, details);
+                setIsOpen(next);
+            }}
+        >
             <TooltipTriggerProvider value={true}>
                 <BaseTooltip.Trigger delay={OPEN_DELAY_MS} closeDelay={0} render={children} {...accessibleNameFor(title, children)} />
             </TooltipTriggerProvider>
@@ -41,6 +51,20 @@ export function Tooltip({ title, children, placement = 'bottom', disabled }: Too
             </BaseTooltip.Portal>
         </BaseTooltip.Root>
     );
+}
+
+/**
+ * Escape closes the tooltip AND reaches the page untouched (MUI parity): a tooltip is a hint, not a
+ * layer, so it must not swallow the page's Escape-to-leave when it shows on focus. Base UI's own
+ * close would preventDefault and stopPropagation the key; cancelling it skips both, and the
+ * controlled `open` closes the tooltip instead. (The cancel also skips Base UI's close bookkeeping —
+ * its focus re-open block and instant close — so the tooltip fades out; harmless, blur resets it.)
+ */
+function letEscapeReachPage(isOpening: boolean, details: BaseTooltip.Root.ChangeEventDetails) {
+    if (!isOpening && details.reason === 'escape-key') {
+        details.cancel();
+        details.allowPropagation();
+    }
 }
 
 // A wrapper element (the <span> around a disabled button) is not the control; naming it would put

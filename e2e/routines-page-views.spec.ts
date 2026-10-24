@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // New /routines page surfaces: the collapsed Paused section (per tab), the URL-backed Week view
 // that lays fixed-weekly routines on a Mon–Sun grid with a "Less frequent" list underneath, and
@@ -9,7 +10,7 @@ import { gtd } from './helpers/gtd';
 
 test.describe('Routines page — empty state', () => {
     test('a fresh account gets no tab/search/view chrome — just the empty-state copy', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `routines-empty-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `routines-empty-${uniqueStamp()}@example.com`, async (page) => {
             await page.goto('/routines');
             await expect(page.getByTestId('routinesEmptyState')).toHaveText('No routines yet. Routines auto-generate next actions on a schedule.');
             await expect(page.getByTestId('routinesTabNextAction')).toHaveCount(0);
@@ -20,7 +21,7 @@ test.describe('Routines page — empty state', () => {
 
 test.describe('Routines page — paused section', () => {
     test('paused routines live in a collapsed section, out of the main list', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `routines-paused-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `routines-paused-${uniqueStamp()}@example.com`, async (page) => {
             await gtd.createRoutine(page, { title: 'Water plants', routineType: 'nextAction', rrule: 'FREQ=DAILY', template: {}, active: true });
             await gtd.createRoutine(page, { title: 'Old habit', routineType: 'nextAction', rrule: 'FREQ=DAILY', template: {}, active: false });
             await gtd.createRoutine(page, {
@@ -57,7 +58,7 @@ test.describe('Routines page — paused section', () => {
 
 test.describe('Routines page — week view', () => {
     test('week view lays fixed-weekly routines on the grid, lists the rest below, and is URL-backed', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `routines-week-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `routines-week-${uniqueStamp()}@example.com`, async (page) => {
             await gtd.createRoutine(page, { title: 'Morning pages', routineType: 'nextAction', rrule: 'FREQ=DAILY', template: {}, active: true });
             await gtd.createRoutine(page, { title: 'Pay rent', routineType: 'nextAction', rrule: 'FREQ=MONTHLY;BYMONTHDAY=1', template: {}, active: true });
             await gtd.createRoutine(page, {
@@ -104,7 +105,7 @@ test.describe('Routines page — week view', () => {
 
 test.describe('Routines page — compact row labels', () => {
     test('rows show the readable schedule plus the next occurrence date', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `routines-row-label-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `routines-row-label-${uniqueStamp()}@example.com`, async (page) => {
             const today = dayjs().format('YYYY-MM-DD');
             await gtd.createRoutine(page, {
                 title: 'Workout',

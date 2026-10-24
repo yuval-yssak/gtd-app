@@ -3,7 +3,9 @@ import dayjs from 'dayjs';
 import timezone from 'dayjs/plugin/timezone';
 import utc from 'dayjs/plugin/utc';
 import { withOneLoggedInDevice } from './helpers/context';
+import { API_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -15,7 +17,6 @@ dayjs.extend(timezone);
 // pinned to a zone whose local date currently DISAGREES with UTC, so a server that stamped its
 // own day would produce a date one off from the client's.
 //
-const API_URL = 'http://localhost:4000';
 
 // Zone choice is dynamic: Kiritimati (UTC+14) reads tomorrow from 10:00Z onward; Pago Pago
 // (UTC-11) reads yesterday until 11:00Z. Between them, at least one disagrees with UTC at any
@@ -31,7 +32,7 @@ function timezoneDisagreeingWithUtcNow(): string {
 test.describe('Tickler timezone parity — client stamps vs server stamps', () => {
     test('completing sibling routine items via the client and via the public API stamps the same user-local date', async ({ browser }) => {
         const timezoneId = timezoneDisagreeingWithUtcNow();
-        const email = `tickler-tz-parity-${dayjs().valueOf()}@example.com`;
+        const email = `tickler-tz-parity-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(
             browser,
             email,

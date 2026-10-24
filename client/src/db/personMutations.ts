@@ -2,7 +2,7 @@ import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import type { MyDB, StoredPerson } from '../types/MyDB';
 import { deletePersonById, putPerson } from './personHelpers';
-import { queueSyncOp } from './syncHelpers';
+import { queueDeleteThenRemove, queueSyncOp } from './syncHelpers';
 
 function nowIso(): string {
     return dayjs().toISOString();
@@ -29,12 +29,15 @@ export async function removePerson(db: IDBPDatabase<MyDB>, personId: string): Pr
     // Read the owning userId before delete so the queued op is scoped to the right account
     // even when the person belongs to a non-active session.
     const existing = await db.get('people', personId);
-    await deletePersonById(db, personId);
-    await queueSyncOp(db, {
-        opType: 'delete',
-        entityType: 'person',
-        entityId: personId,
-        snapshot: null,
-        ...(existing?.userId ? { userId: existing.userId } : {}),
-    });
+    await queueDeleteThenRemove(
+        db,
+        {
+            opType: 'delete',
+            entityType: 'person',
+            entityId: personId,
+            snapshot: null,
+            ...(existing?.userId ? { userId: existing.userId } : {}),
+        },
+        () => deletePersonById(db, personId),
+    );
 }

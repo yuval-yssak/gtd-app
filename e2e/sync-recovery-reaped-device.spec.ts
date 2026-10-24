@@ -3,7 +3,9 @@ import type { Download, Page } from '@playwright/test';
 import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
+import { API_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Reaped-device recovery flow. When the server's stale-device reaper deletes a device's
 // deviceSyncState row, the device's next /sync/pull gets 409 {bootstrapRequired:true}:
@@ -14,7 +16,6 @@ import { gtd } from './helpers/gtd';
 // The reap is simulated with the dev-only POST /dev/reap-device endpoint (test-side fetch, so
 // page-level request interception never affects it).
 
-const API_URL = 'http://localhost:4000';
 const SYNC_GLOB = '**/sync/**';
 const RAW_JSON_SEPARATOR = '--- RAW JSON ---';
 
@@ -100,7 +101,7 @@ function parseRawJsonTail(content: string): unknown {
 
 test.describe('sync recovery for a reaped device', () => {
     test('case 1: clean device auto-recovers with a full bootstrap', async ({ browser }) => {
-        const email = `reap-case1-${dayjs().valueOf()}@example.com`;
+        const email = `reap-case1-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             await gtd.collect(page, 'Pre-reap item');
             await gtd.flush(page);
@@ -130,7 +131,7 @@ test.describe('sync recovery for a reaped device', () => {
     });
 
     test('case 2 push path: queued offline changes reach the server, then full sync', async ({ browser }) => {
-        const email = `reap-case2-push-${dayjs().valueOf()}@example.com`;
+        const email = `reap-case2-push-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             await stageReapedDeviceWithQueuedOp(page, email, 'Offline push item');
             const dialog = await expectCase2ChoiceDialog(page, 1);
@@ -148,7 +149,7 @@ test.describe('sync recovery for a reaped device', () => {
     });
 
     test('case 2 discard path: queued changes are dropped, pre-offline data is intact', async ({ browser }) => {
-        const email = `reap-case2-discard-${dayjs().valueOf()}@example.com`;
+        const email = `reap-case2-discard-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             await gtd.collect(page, 'Pre-offline keeper');
             await gtd.flush(page);
@@ -172,7 +173,7 @@ test.describe('sync recovery for a reaped device', () => {
     });
 
     test('case 2 export: downloads both files and keeps the dialog open', async ({ browser }) => {
-        const email = `reap-case2-export-${dayjs().valueOf()}@example.com`;
+        const email = `reap-case2-export-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             await stageReapedDeviceWithQueuedOp(page, email, 'Exported offline item');
             const dialog = await expectCase2ChoiceDialog(page, 1);

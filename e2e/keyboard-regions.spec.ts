@@ -3,6 +3,7 @@ import dayjs from 'dayjs';
 import type { StoredItem } from '../client/src/types/MyDB';
 import { withOneLoggedInDevice, withTwoAccountsOnOneDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // App-wide keyboard navigation (branch exp/keyboard-regions): the sidebar menu, the account
 // avatars, the Next Actions filter bar and its list are each ONE tab stop with arrow keys inside;
@@ -30,7 +31,7 @@ const rowOf = (page: Page, title: string) => page.getByTestId('nextActionItemRow
 
 test.describe('Keyboard regions and global shortcuts', () => {
     test('the menu is one tab stop entered on the current page; ↓ then Enter navigates; Tab leaves it in one press', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `kb-menu-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `kb-menu-${uniqueStamp()}@example.com`, async (page) => {
             await page.goto('/next-actions');
             await page.waitForSelector('[data-testid="mainMenu"]');
 
@@ -64,7 +65,7 @@ test.describe('Keyboard regions and global shortcuts', () => {
     });
 
     test('the filter bar is one tab stop: arrows walk the chips, Space toggles a filter, Tab moves on to the list', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `kb-filters-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `kb-filters-${uniqueStamp()}@example.com`, async (page) => {
             await seedUndated(page, ['Alpha', 'Bravo']);
             await page.goto('/next-actions');
             await page.waitForSelector('text=Alpha');
@@ -131,7 +132,7 @@ test.describe('Keyboard regions and global shortcuts', () => {
     });
 
     test('g jumps to a page; the hint shows while g is pending; a slow second key and text fields do nothing', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `kb-goto-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `kb-goto-${uniqueStamp()}@example.com`, async (page) => {
             await page.goto('/next-actions');
             await page.waitForSelector('[data-testid="mainMenu"]');
             await page.locator('body').click();
@@ -181,7 +182,7 @@ test.describe('Keyboard regions and global shortcuts', () => {
     });
 
     test('on a focused list row, g d goes to Done — it never marks the row done; g c goes to Calendar, not copy-id', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `kb-goto-row-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `kb-goto-row-${uniqueStamp()}@example.com`, async (page) => {
             const [alpha] = await seedUndated(page, ['Alpha']);
             if (!alpha) throw new Error('seed');
             await page.goto('/next-actions');
@@ -205,7 +206,7 @@ test.describe('Keyboard regions and global shortcuts', () => {
     });
 
     test('? opens the legend anywhere; / opens and focuses the list search; F6 / Shift+F6 cycle the regions', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `kb-f6-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `kb-f6-${uniqueStamp()}@example.com`, async (page) => {
             await seedUndated(page, ['Alpha']);
             await page.goto('/next-actions');
             await page.waitForSelector('text=Alpha');
@@ -239,7 +240,7 @@ test.describe('Keyboard regions and global shortcuts', () => {
     });
 
     test('after a g jump the menu is entered on the page you are on, not on the link walked to before', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `kb-menu-entry-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `kb-menu-entry-${uniqueStamp()}@example.com`, async (page) => {
             await page.goto('/next-actions');
             await page.waitForSelector('[data-testid="mainMenu"]');
             await page.locator('body').focus();
@@ -257,7 +258,7 @@ test.describe('Keyboard regions and global shortcuts', () => {
     });
 
     test('a keyboard-pressed "+N more" chip unmounts itself; the filter bar stays reachable by Tab and Shift+Tab', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `kb-showmore-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `kb-showmore-${uniqueStamp()}@example.com`, async (page) => {
             // More referenced contexts than the fold (8 + slack 2) so the row collapses behind "+N more".
             const contexts = [];
             for (let i = 1; i <= 12; i++) {
@@ -285,7 +286,7 @@ test.describe('Keyboard regions and global shortcuts', () => {
     test('F6 at a narrow (800 px) viewport cycles the visible regions and never sticks on the hidden drawer', async ({ browser }) => {
         await withOneLoggedInDevice(
             browser,
-            `kb-f6-narrow-${dayjs().valueOf()}@example.com`,
+            `kb-f6-narrow-${uniqueStamp()}@example.com`,
             async (page) => {
                 await seedUndated(page, ['Alpha']);
                 await page.goto('/next-actions');
@@ -306,7 +307,7 @@ test.describe('Keyboard regions and global shortcuts', () => {
     });
 
     test('F6 under an open dialog leaves focus in the dialog; after a mouse click F6 lands on an item, not the bare container', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `kb-f6-modal-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `kb-f6-modal-${uniqueStamp()}@example.com`, async (page) => {
             await seedUndated(page, ['Alpha']);
             await page.goto('/next-actions');
             await page.waitForSelector('text=Alpha');
@@ -337,7 +338,7 @@ test.describe('Keyboard regions and global shortcuts', () => {
     });
 
     test('with the "Show tags" switch focused, the letter shortcuts still work (a switch is not a text field)', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `kb-switch-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `kb-switch-${uniqueStamp()}@example.com`, async (page) => {
             await page.goto('/next-actions');
             await page.waitForSelector('[data-testid="mainMenu"]');
             await page.getByTestId('nextActionsShowTagsToggle').locator('input').focus();

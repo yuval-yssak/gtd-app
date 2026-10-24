@@ -72,9 +72,9 @@ export function getOpenSseUserIds(): string[] {
 }
 
 /**
- * The userIds whose channel is CONNECTED (readyState OPEN), not merely created: a change broadcast
- * while a channel is still connecting never reaches it (opening does not pull), so an e2e spec
- * that relies on live delivery waits for this first.
+ * The userIds whose channel is CONNECTED (readyState OPEN), not merely created. Opening pulls, so a
+ * change broadcast while connecting still arrives — but only through that catch-up pull; an e2e spec
+ * that asserts live delivery of a later change waits for this first.
  */
 export function getConnectedSseUserIds(): string[] {
     return Array.from(eventSources.entries())
@@ -98,7 +98,13 @@ function openSingleChannel(userId: string, handlers: ChannelHandlers): void {
     const source = new EventSource(url, { withCredentials: true });
 
     source.onmessage = (event) => handleMessage(event, userId, handlers);
-    source.onopen = () => console.log(`[debug-gcal-sync][client] sse open | userId=${userId}`);
+    // Catch up on every (re)connect: a change broadcast while the channel was connecting or between
+    // reconnects reached no one, and nothing else would pull it until the next sync trigger (a
+    // server write right after page load — the review-start brief sweep — was lost exactly so).
+    source.onopen = () => {
+        console.log(`[debug-gcal-sync][client] sse open | userId=${userId}`);
+        handlers.onConnected?.();
+    };
     // EventSource auto-reconnects on transient errors; we only log so we can spot a wedged connection.
     source.onerror = (err) => console.warn(`[debug-gcal-sync][client] sse error | userId=${userId} readyState=${source.readyState}`, err);
 
@@ -108,6 +114,11 @@ function openSingleChannel(userId: string, handlers: ChannelHandlers): void {
 /** What a channel does with each server message. One object shared by every channel of a device. */
 export interface ChannelHandlers {
     onUpdate: OnUpdateCallback;
+    /**
+     * A channel finished (re)connecting. The device may have missed broadcasts while it was down,
+     * so the host runs a catch-up — one coalesced pass for all channels, not one sync per channel.
+     */
+    onConnected?: (() => void) | undefined;
     /** This device's id, so the channel can ignore echoes of its own writes. */
     localDeviceId?: string | undefined;
     onAccountDeleted?: OnAccountDeletedCallback | undefined;

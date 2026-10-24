@@ -1,12 +1,13 @@
 import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice, withTwoAccountsOnOneDevice } from './helpers/context';
+import { CLIENT_URL } from './helpers/env';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // E2E coverage for the per-account visibility toggles: the avatar row next to the account
 // switcher that hides/shows one signed-in account's data across the unified view. Hiding is
 // display-only (localStorage-persisted), so seeding IDB rows directly per userId is enough.
 
-const CLIENT_URL = 'http://localhost:4173';
 const INBOX_URL = `${CLIENT_URL}/inbox`;
 
 /**
@@ -162,7 +163,7 @@ test.describe('account visibility toggles', () => {
     });
 
     test('capturing into a visible account never shows the hidden-account warning', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `vistoggle-capture-visible-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `vistoggle-capture-visible-${uniqueStamp()}@example.com`, async (page) => {
             await reloadInbox(page);
 
             await page.getByPlaceholder("What's on your mind?").fill('Normal capture');

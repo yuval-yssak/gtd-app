@@ -1,7 +1,7 @@
 import { expect, type Page, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Archiving a work context / person soft-retires it: hidden from the next-actions filter rows and
 // editor pickers, but existing item references keep rendering (dimmed) and the entity can be
@@ -13,7 +13,7 @@ function rowFor(page: Page, text: string) {
 
 test.describe('archived work contexts and people', () => {
     test('archiving a context removes it from filters and pickers; unarchiving restores it', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `arch-ctx-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `arch-ctx-${uniqueStamp()}@example.com`, async (page) => {
             const phone = await gtd.createWorkContext(page, 'Phone');
             const errands = await gtd.createWorkContext(page, 'Errands');
             await gtd.clarifyToNextAction(page, await gtd.collect(page, 'Call landlord'), { workContextIds: [phone._id] });
@@ -56,7 +56,7 @@ test.describe('archived work contexts and people', () => {
     });
 
     test('archiving a person hides them from the person filter row and marks the row Archived', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `arch-person-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `arch-person-${uniqueStamp()}@example.com`, async (page) => {
             const alice = await gtd.createPerson(page, { name: 'Alice' });
             const bob = await gtd.createPerson(page, { name: 'Bob' });
             await gtd.clarifyToNextAction(page, await gtd.collect(page, 'Ping Alice'), { peopleIds: [alice._id] });
@@ -80,7 +80,7 @@ test.describe('archived work contexts and people', () => {
     });
 
     test('unused badge marks entities with no item references', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `unused-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `unused-${uniqueStamp()}@example.com`, async (page) => {
             const used = await gtd.createWorkContext(page, 'Used context');
             await gtd.createWorkContext(page, 'Dormant context');
             await gtd.clarifyToNextAction(page, await gtd.collect(page, 'Do something'), { workContextIds: [used._id] });
@@ -94,7 +94,7 @@ test.describe('archived work contexts and people', () => {
 
 test.describe('person notes', () => {
     test('notes can be added on create, surface as a row snippet, and edit via the dialog autosaves', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `person-notes-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `person-notes-${uniqueStamp()}@example.com`, async (page) => {
             await page.goto('/people');
             await page.getByRole('button', { name: 'Add person' }).click();
             await page.getByLabel('Name').fill('Nadia');

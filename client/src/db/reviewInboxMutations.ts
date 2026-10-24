@@ -2,7 +2,7 @@ import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import type { MyDB, StoredReviewInbox } from '../types/MyDB';
 import { deleteReviewInboxById, getReviewInboxesByUser, putReviewInbox } from './reviewInboxHelpers';
-import { queueSyncOp } from './syncHelpers';
+import { queueDeleteThenRemove, queueSyncOp } from './syncHelpers';
 
 function nowIso(): string {
     return dayjs().toISOString();
@@ -29,14 +29,17 @@ export async function updateReviewInbox(db: IDBPDatabase<MyDB>, reviewInbox: Sto
 export async function removeReviewInbox(db: IDBPDatabase<MyDB>, reviewInboxId: string): Promise<void> {
     // Read the owning userId before delete so the queued delete op is scoped to the right account.
     const existing = await db.get('reviewInboxes', reviewInboxId);
-    await deleteReviewInboxById(db, reviewInboxId);
-    await queueSyncOp(db, {
-        opType: 'delete',
-        entityType: 'reviewInbox',
-        entityId: reviewInboxId,
-        snapshot: null,
-        ...(existing?.userId ? { userId: existing.userId } : {}),
-    });
+    await queueDeleteThenRemove(
+        db,
+        {
+            opType: 'delete',
+            entityType: 'reviewInbox',
+            entityId: reviewInboxId,
+            snapshot: null,
+            ...(existing?.userId ? { userId: existing.userId } : {}),
+        },
+        () => deleteReviewInboxById(db, reviewInboxId),
+    );
 }
 
 /** Persists a new checklist ordering: every row whose position moved gets an update op. */

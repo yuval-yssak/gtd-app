@@ -22,8 +22,10 @@ import { gtd } from './helpers/gtd';
 async function waitForBothSseChannels(page: Page, userIdA: string, userIdB: string): Promise<void> {
     await page.waitForFunction(
         ([a, b]) => {
-            const harness = (window as unknown as { __gtd: { sseChannelUserIds(): string[] } }).__gtd;
-            const ids = new Set(harness.sseChannelUserIds());
+            // __gtd mounts from a lazy chunk after boot; a predicate that throws aborts the wait
+            // instead of retrying, so report "not yet" until the harness exists.
+            const harness = (window as unknown as { __gtd?: { sseChannelUserIds(): string[] } }).__gtd;
+            const ids = new Set(harness?.sseChannelUserIds() ?? []);
             return ids.has(a as string) && ids.has(b as string);
         },
         [userIdA, userIdB] as const,

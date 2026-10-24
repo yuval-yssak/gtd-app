@@ -1,9 +1,8 @@
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { closeContextQuietly, withOneLoggedInDevice } from './helpers/context';
+import { API_URL, CLIENT_URL } from './helpers/env';
 import { fetchDevSessionCookie } from './helpers/login';
-
-const CLIENT_URL = 'http://localhost:4173';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 /** The four scopes the API server requests on connect (unit-pinned against calendar.ts). */
 const REQUESTED_SCOPES = [
@@ -87,7 +86,7 @@ test.describe('public homepage', () => {
     });
 
     test('a signed-in visitor of / lands in the inbox', async ({ browser }) => {
-        const email = `landing-signed-in-${dayjs().valueOf()}@example.com`;
+        const email = `landing-signed-in-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             await page.goto(CLIENT_URL);
             await expect(page).toHaveURL(`${CLIENT_URL}/inbox`);
@@ -99,9 +98,9 @@ test.describe('public homepage', () => {
         // PWA start_url is '/': an installed app opened with no connectivity must still reach the
         // inbox. Every API request is aborted (context offline would also block the static client
         // itself, which is served by the dev server rather than the service worker here).
-        const email = `landing-no-api-${dayjs().valueOf()}@example.com`;
+        const email = `landing-no-api-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
-            await page.context().route('http://localhost:4000/**', (route) => route.abort());
+            await page.context().route(`${API_URL}/**`, (route) => route.abort());
             await page.goto(CLIENT_URL);
             await expect(page).toHaveURL(`${CLIENT_URL}/inbox`);
         });
@@ -138,7 +137,7 @@ test.describe('public homepage', () => {
     test('a visitor with only a server session cookie (site data cleared) is recovered into the inbox', async ({ browser }) => {
         // /login redirects such a visitor to '/'; the homepage must hydrate the account from the
         // cookie and continue to the inbox instead of showing a Sign in button that loops back.
-        const email = `landing-cookie-only-${dayjs().valueOf()}@example.com`;
+        const email = `landing-cookie-only-${uniqueStamp()}@example.com`;
         const { cookie } = await fetchDevSessionCookie(email);
         const ctx = await browser.newContext();
         try {

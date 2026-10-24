@@ -1,14 +1,14 @@
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withOneLoggedInDevice, withTwoLoggedInDevices } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Tests CRUD operations for people and work contexts,
 // and verifies they sync correctly across devices.
 
 test.describe('people and work contexts', () => {
     test('create person and use in waiting-for item', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `person-wf-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `person-wf-${uniqueStamp()}@example.com`, async (page) => {
             const person = await gtd.createPerson(page, { name: 'Carol', email: 'carol@example.com', phone: '555-1234' });
             expect(person.name).toBe('Carol');
             expect(person.email).toBe('carol@example.com');
@@ -25,7 +25,7 @@ test.describe('people and work contexts', () => {
     });
 
     test('create work context and assign to next-action', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `ctx-na-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `ctx-na-${uniqueStamp()}@example.com`, async (page) => {
             const ctx = await gtd.createWorkContext(page, 'At the office');
             expect(ctx.name).toBe('At the office');
 
@@ -42,7 +42,7 @@ test.describe('people and work contexts', () => {
     });
 
     test('person syncs across devices', async ({ browser }) => {
-        const email = `person-sync-${dayjs().valueOf()}@example.com`;
+        const email = `person-sync-${uniqueStamp()}@example.com`;
         await withTwoLoggedInDevices(browser, email, async (page1, page2) => {
             const person = await gtd.createPerson(page1, { name: 'Dave' });
             await gtd.flush(page1);
@@ -56,7 +56,7 @@ test.describe('people and work contexts', () => {
     });
 
     test('work context syncs across devices', async ({ browser }) => {
-        const email = `ctx-sync-${dayjs().valueOf()}@example.com`;
+        const email = `ctx-sync-${uniqueStamp()}@example.com`;
         await withTwoLoggedInDevices(browser, email, async (page1, page2) => {
             const ctx = await gtd.createWorkContext(page1, 'Errands');
             await gtd.flush(page1);

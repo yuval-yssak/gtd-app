@@ -1,7 +1,7 @@
 import { expect, type Page, type Request, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 /**
  * Review-start brief sweep (`docs/plans/item-brief.md` § 3.1, open decision 5): opening the
@@ -33,7 +33,7 @@ async function startReview(page: Page): Promise<void> {
 
 test.describe('weekly review — brief sweep on start', () => {
     test('opening the review fires exactly one sweep-mine POST, and walking the review fires no more', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wr-sweep-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wr-sweep-${uniqueStamp()}@example.com`, async (page) => {
             const captured = await gtd.collect(page, 'Renew passport');
             await gtd.clarifyToNextAction(page, { ...captured, notes: 'Short notes so the sweep writes a skip row.' }, {});
             const second = await gtd.collect(page, 'Book the dentist');
@@ -66,7 +66,7 @@ test.describe('weekly review — brief sweep on start', () => {
     });
 
     test('the sweep briefs the open items and never the done or trashed ones', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wr-sweep-scope-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wr-sweep-scope-${uniqueStamp()}@example.com`, async (page) => {
             // Long enough to reach the (fake) model rather than the short-notes skip rule.
             const notes =
                 'Renewal form is half filled in — the personal details section is done but the travel history page is still blank. ' +
@@ -90,7 +90,7 @@ test.describe('weekly review — brief sweep on start', () => {
     });
 
     test('the wizard opens and stays usable when the sweep request fails', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wr-sweep-fail-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wr-sweep-fail-${uniqueStamp()}@example.com`, async (page) => {
             const captured = await gtd.collect(page, 'Renew passport');
             const item = await gtd.clarifyToNextAction(page, { ...captured, notes: 'Notes that will never be swept.' }, {});
             await gtd.flush(page);
@@ -117,7 +117,7 @@ test.describe('weekly review — brief sweep on start', () => {
         });
     });
     test('a review opened offline issues no sweep, and sweeps once connectivity returns', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wr-sweep-offline-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wr-sweep-offline-${uniqueStamp()}@example.com`, async (page) => {
             const captured = await gtd.collect(page, 'Renew passport');
             await gtd.clarifyToNextAction(page, { ...captured, notes: 'Short notes, offline review.' }, {});
             await gtd.flush(page);

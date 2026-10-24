@@ -3,6 +3,7 @@ declare const styles: {
     readonly explainer: string;
     readonly fields: string;
     readonly fullSpan: string;
+    readonly root: string;
     readonly timeField: string;
 };
 export = styles;

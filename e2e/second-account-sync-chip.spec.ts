@@ -1,10 +1,9 @@
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { closeContextQuietly, fetchDevMultiSessionCookies } from './helpers/context';
+import { CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
 import { fetchDevSessionCookie, loginAs } from './helpers/login';
-
-const CLIENT_URL = 'http://localhost:4173';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Adding a SECOND account is the case the empty-state skeleton can't cover: account A's items are
 // already on screen (unified multi-account view), so no list page is "empty" and the skeleton never
@@ -17,8 +16,8 @@ const CLIENT_URL = 'http://localhost:4173';
 // B's bootstrap so the chip is observable; A's item must stay visible throughout.
 test.describe('second-account sync chip', () => {
     test('header chip shows while the newly-added account bootstraps; existing items stay', async ({ browser }) => {
-        const emailA = `acctA-${dayjs().valueOf()}@example.com`;
-        const emailB = `acctB-${dayjs().valueOf()}@example.com`;
+        const emailA = `acctA-${uniqueStamp()}@example.com`;
+        const emailB = `acctB-${uniqueStamp()}@example.com`;
 
         // Seed A's data on the server via a throwaway device.
         const seedCtx = await browser.newContext();

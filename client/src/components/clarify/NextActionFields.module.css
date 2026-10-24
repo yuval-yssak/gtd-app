@@ -4,15 +4,21 @@
     gap: var(--space-4);
 }
 
-/* Dense (weekly review) layout: the small controls — tickler date, energy toggle, time estimate,
- * urgent checkbox, expected-by date — are all far narrower than the card, so they pair into two
- * columns, reclaiming vertical space without shrinking any control. Below the sm breakpoint the
- * column stands — two columns would squeeze the date inputs. */
-@media (width >= 600px) {
-    .fields[data-dense] {
+/* Dense (weekly review) layout: the five small controls — tickler and expected-by dates, energy
+ * toggle, time estimate, urgent checkbox — are far narrower than the card, so they flow three to a
+ * row, reclaiming vertical space without shrinking any control (labels above the inputs made two
+ * columns too tall for the review card at 929px). A container query, not a media query: the card is
+ * capped narrower than the viewport, and below ~34rem three columns would squeeze the date inputs,
+ * so the column stands. `auto` tracks size to the controls; the last takes what is left. */
+.root[data-dense] {
+    container: next-action-fields / inline-size;
+}
+
+@container next-action-fields (inline-size >= 34rem) {
+    .fields {
         display: grid;
-        grid-template-columns: 1fr 1fr;
-        column-gap: var(--space-6);
+        grid-template-columns: auto auto 1fr;
+        gap: var(--space-4) var(--space-6);
         align-items: start;
     }
 }

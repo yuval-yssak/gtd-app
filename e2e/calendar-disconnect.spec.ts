@@ -1,7 +1,9 @@
 import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
+import { API_URL, CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // E2E coverage for Step 2's two-option Disconnect dialog. The dev seed endpoint produces an
 // integration with FAKE OAuth tokens — any real GCal call would fail, so the test asserts that
@@ -10,9 +12,9 @@ import { gtd } from './helpers/gtd';
 // We never drive real Google OAuth from these tests. The integration row is created via
 // /dev/calendar/seed-integration, then linked items/routines are created via the gtd harness.
 
-const SETTINGS_URL = 'http://localhost:4173/settings';
-const DEV_SEED_INTEGRATION_URL = 'http://localhost:4000/dev/calendar/seed-integration';
-const DEV_LIST_INTEGRATIONS_URL = 'http://localhost:4000/dev/calendar/integrations';
+const SETTINGS_URL = `${CLIENT_URL}/settings`;
+const DEV_SEED_INTEGRATION_URL = `${API_URL}/dev/calendar/seed-integration`;
+const DEV_LIST_INTEGRATIONS_URL = `${API_URL}/dev/calendar/integrations`;
 
 interface SeedResponse {
     ok: boolean;
@@ -53,7 +55,7 @@ async function pullIntoLocalDB(page: Page): Promise<void> {
 
 test.describe('calendar disconnect — keepLinkedEntities', () => {
     test('clears calendarIntegrationId on items and routines without trashing them', async ({ browser }) => {
-        const email = `disconnect-keep-${dayjs().valueOf()}@example.com`;
+        const email = `disconnect-keep-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             const userId = (await gtd.getActiveAccountId(page)) as string;
             const seeded = await seedIntegration(userId, [{ calendarId: 'primary', isDefault: true, displayName: 'Primary' }]);
@@ -120,7 +122,7 @@ test.describe('calendar disconnect — keepLinkedEntities', () => {
 
 test.describe('calendar disconnect — lastKnown* rename + reconnect relink', () => {
     test('renames calendar* to lastKnown* on keepLinkedEntities, then relinks on reconnect (no duplicate item)', async ({ browser }) => {
-        const email = `disconnect-relink-${dayjs().valueOf()}@example.com`;
+        const email = `disconnect-relink-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             const userId = (await gtd.getActiveAccountId(page)) as string;
             const seeded = await seedIntegration(userId, [{ calendarId: 'primary', isDefault: true, displayName: 'Primary' }]);
@@ -171,7 +173,7 @@ test.describe('calendar disconnect — lastKnown* rename + reconnect relink', ()
                 updated: dayjs().toISOString(),
                 status: 'confirmed',
             };
-            const simulateRes = await fetch('http://localhost:4000/dev/calendar/simulate-webhook-event', {
+            const simulateRes = await fetch(`${API_URL}/dev/calendar/simulate-webhook-event`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ userId, integrationId: reseeded.integrationId, syncConfigId: reseeded.configIds[0], event: inboundEvent }),
@@ -205,7 +207,7 @@ test.describe('calendar disconnect — lastKnown* rename + reconnect relink', ()
 
 test.describe('calendar disconnect — removeLinkedEntities', () => {
     test('trashes items and cascades routine-generated items, never invoking GCal', async ({ browser }) => {
-        const email = `disconnect-remove-${dayjs().valueOf()}@example.com`;
+        const email = `disconnect-remove-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             const userId = (await gtd.getActiveAccountId(page)) as string;
             const seeded = await seedIntegration(userId, [{ calendarId: 'primary', isDefault: true, displayName: 'Primary' }]);

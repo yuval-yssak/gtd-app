@@ -2,13 +2,14 @@ import { expect, type Locator, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // A next action with no usable brief and multi-line notes used to overflow the weekly-review
 // card: the reviewer could see down to the tickler field but not the work contexts, people,
 // energy, urgency, focus or expected-by below it. The card is the full item editor, whose
 // metadata rows each owned a full-width line however narrow the control was.
 //
-// The dense layout pairs those narrow controls into two columns, halves the section gap and
+// The dense layout flows those narrow controls three to a row, halves the section gap and
 // drops the notes-preview height floor. This spec pins the outcome the user actually cares
 // about — the whole item visible at once — rather than any one of those mechanisms.
 
@@ -31,7 +32,7 @@ const scrollerOf = (stage: Locator) => stage.getByTestId('stageCardScroller');
 
 test.describe('Weekly review card fits without scrolling', () => {
     test('a next action with notes and no brief shows its metadata without scrolling', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `review-fits-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `review-fits-${uniqueStamp()}@example.com`, async (page) => {
             // The reported display: 1920x929. The card's budget is viewport-height driven, so the
             // height is the part that matters — pin both so the assertion means something.
             await page.setViewportSize({ width: 1920, height: 929 });
@@ -69,7 +70,7 @@ test.describe('Weekly review card fits without scrolling', () => {
     });
 
     test('very long notes stay capped so the rest of the item keeps its place', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `review-longnotes-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `review-longnotes-${uniqueStamp()}@example.com`, async (page) => {
             await page.setViewportSize({ width: 1920, height: 929 });
 
             // An inbox capture with runaway notes — the shape that still overflowed after the
@@ -99,7 +100,7 @@ test.describe('Weekly review card fits without scrolling', () => {
     });
 
     test('stepping back into an already-reviewed item keeps the review density', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `review-revisit-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `review-revisit-${uniqueStamp()}@example.com`, async (page) => {
             await page.setViewportSize({ width: 1920, height: 929 });
 
             // The revisit view renders the same editor for a real item. Without the review
@@ -131,7 +132,7 @@ test.describe('Weekly review card fits without scrolling', () => {
     });
 
     test('an empty stage keeps its card top reachable on a short viewport', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `review-short-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `review-short-${uniqueStamp()}@example.com`, async (page) => {
             // Landscape phone. The empty-state card centers in .centeredArea; plain `align-items:
             // center` would put its top at a NEGATIVE offset, which scrollTop (floored at 0) can
             // never reach — and with overflow:auto those pixels are clipped rather than painted.
@@ -152,7 +153,7 @@ test.describe('Weekly review card fits without scrolling', () => {
     });
 
     test('the inbox checklist scrolls from the gutters beside its card', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `review-checklist-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `review-checklist-${uniqueStamp()}@example.com`, async (page) => {
             // Short enough that the seeded buckets plus the ones added below overflow the stage.
             await page.setViewportSize({ width: 1280, height: 400 });
 
@@ -196,7 +197,7 @@ test.describe('Weekly review card fits without scrolling', () => {
     });
 
     test('scrolling with the pointer in the side margin scrolls the review content', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `review-margin-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `review-margin-${uniqueStamp()}@example.com`, async (page) => {
             await page.setViewportSize({ width: 1920, height: 929 });
 
             // Long enough to overflow even the dense card, so there is something to scroll. A very

@@ -1,7 +1,7 @@
 import { expect, type Page, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // cmd+click (macOS) / ctrl+click (Windows, Linux) on an entity row must open that entity's
 // page in a NEW tab — matching the browser's native link gesture — instead of running the
@@ -33,7 +33,7 @@ async function expectModifiedClickOpensNewTab(page: Page, { rowTestId, rowText, 
 
 test.describe('cmd/ctrl+click opens entity pages in a new tab', () => {
     test('next-actions: modified row click opens /item/<id> in a new tab without an in-tab dialog', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `newtab-na-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `newtab-na-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'New tab target');
             const item = await gtd.clarifyToNextAction(page, inbox, { energy: 'low', time: 5 });
 
@@ -49,7 +49,7 @@ test.describe('cmd/ctrl+click opens entity pages in a new tab', () => {
     });
 
     test('people: modified row click opens /person/<id> in a new tab', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `newtab-people-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `newtab-people-${uniqueStamp()}@example.com`, async (page) => {
             const person = await gtd.createPerson(page, { name: 'Navina Newtab' });
 
             await page.goto('/people');
@@ -64,7 +64,7 @@ test.describe('cmd/ctrl+click opens entity pages in a new tab', () => {
     });
 
     test('routines: modified row click opens /routine/<id> in a new tab instead of the editor', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `newtab-routines-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `newtab-routines-${uniqueStamp()}@example.com`, async (page) => {
             const routine = await gtd.createRoutine(page, {
                 title: 'New tab routine',
                 routineType: 'nextAction',
@@ -85,7 +85,7 @@ test.describe('cmd/ctrl+click opens entity pages in a new tab', () => {
     });
 
     test('undo snackbar: modified View click opens the item in a new tab and keeps the snackbar', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `newtab-undo-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `newtab-undo-${uniqueStamp()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'Undo view new tab');
             await page.goto('/inbox');
             await page.waitForSelector('text=Undo view new tab');

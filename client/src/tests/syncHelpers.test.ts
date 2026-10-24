@@ -21,14 +21,16 @@ import {
     DEFAULT_FLUSH_LOCK_WAIT_MS,
     flushSyncQueue,
     pullFromServer,
+    queueDeleteThenRemove,
     queueSyncOp,
     setFlushLockWaitMs,
     setSessionGateTimeoutMs,
     waitForPendingFlush,
     withSessionGate,
 } from '../db/syncHelpers';
-import type { MyDB, StoredItem, StoredItemBrief, StoredPerson, StoredRoutine, StoredWorkContext } from '../types/MyDB';
 // StoredPerson/Routine/WorkContext are still needed for the db.put() casts below
+import { __resetUnconfirmedDeletesForTests } from '../db/unconfirmedDeletes';
+import type { MyDB, StoredItem, StoredItemBrief, StoredPerson, StoredRoutine, StoredWorkContext, SyncOperation } from '../types/MyDB';
 import { openTestDB } from './openTestDB';
 
 const USER_ID = 'user-1';
@@ -97,6 +99,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+    __resetUnconfirmedDeletesForTests();
     // clearAllMocks resets call history on vi.fn() instances while preserving their default
     // implementations (unlike restoreAllMocks which is for vi.spyOn() spies).
     vi.clearAllMocks();
@@ -182,6 +185,24 @@ describe('queueSyncOp — userId field', () => {
 // Ops queued under a userId that differs from the currently-active Better Auth session must
 // route through `syncSingleUser`, which pivots the cookie before flushing — otherwise the
 // server's misroute guard rejects the push with a 400.
+
+describe('queueDeleteThenRemove', () => {
+    // A pull applying between the two steps must see the queued delete — with the row already gone
+    // and no op queued, it would find nothing to hold a stale re-delivery back with.
+    it('queues the delete op before the row is removed', async () => {
+        vi.mocked(pushSyncOps).mockReturnValue(new Promise(() => {})); // keep the op in the queue
+        const queuedWhenRemoving: SyncOperation[][] = [];
+
+        await queueDeleteThenRemove(db, { opType: 'delete', entityType: 'itemBrief', entityId: 'item-1', snapshot: null, userId: USER_ID }, async () => {
+            queuedWhenRemoving.push(await db.getAll('syncOperations'));
+        });
+
+        expect(queuedWhenRemoving).toHaveLength(1);
+        const [queued] = queuedWhenRemoving;
+        if (!queued) throw new Error('expected the row removal to run');
+        expect(queued.map((op) => `${op.opType}:${op.entityType}:${op.entityId}`)).toEqual(['delete:itemBrief:item-1']);
+    });
+});
 
 describe('queueSyncOp — collapse is keyed on (entityType, entityId), not entityId alone', () => {
     // A sidecar entity (itemBrief) borrows its parent item's id. Matching on the id alone let a
@@ -1467,7 +1488,119 @@ describe('pullFromServer — itemBrief ops', () => {
 
         expect(await db.get('itemBriefs', 'item-4')).toBeUndefined();
     });
+
+    // The server re-delivers the last few seconds of ops on every pull (the holdback window), and a
+    // pull fetched before a local delete can land after it: with no row left to compare against,
+    // the stale create would resurrect what the user just deleted.
+    it('a pulled create does not resurrect a brief whose local delete is still queued', async () => {
+        await queueLocalDelete('itemBrief', 'item-5');
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({
+            ops: [{ entityType: 'itemBrief', entityId: 'item-5', opType: 'create', snapshot: serverItemBrief('item-5') }],
+            serverTs: '2025-06-01T00:00:00.000Z',
+            serverId: '',
+        });
+
+        await pullFromServer(db, USER_ID);
+
+        expect(await db.get('itemBriefs', 'item-5')).toBeUndefined();
+    });
+
+    it('a pulled delete still applies while a local delete is queued', async () => {
+        await db.put('itemBriefs', { ...serverItemBrief('item-8'), userId: USER_ID } as unknown as StoredItemBrief);
+        await queueLocalDelete('itemBrief', 'item-8');
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({
+            ops: [{ entityType: 'itemBrief', entityId: 'item-8', opType: 'delete', snapshot: null }],
+            serverTs: '2025-06-01T00:00:00.000Z',
+            serverId: '',
+        });
+
+        await pullFromServer(db, USER_ID);
+
+        expect(await db.get('itemBriefs', 'item-8')).toBeUndefined();
+    });
+
+    // The same race one step later: the delete was already pushed (and left the queue) when the
+    // earlier-fetched pull applies. This device ignores the SSE echo of its own delete, so nothing
+    // would pull again to remove the resurrected row.
+    it('a pulled create does not resurrect a brief whose delete was pushed but not yet echoed back', async () => {
+        await queueLocalDelete('itemBrief', 'item-9');
+        vi.mocked(pushSyncOps).mockResolvedValue(undefined);
+        await flushSyncQueue(db);
+        expect(await db.count('syncOperations')).toBe(0);
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({
+            ops: [{ entityType: 'itemBrief', entityId: 'item-9', opType: 'create', snapshot: serverItemBrief('item-9') }],
+            serverTs: '2025-06-01T00:00:00.000Z',
+            serverId: '',
+        });
+
+        await pullFromServer(db, USER_ID);
+
+        expect(await db.get('itemBriefs', 'item-9')).toBeUndefined();
+    });
+
+    it('once the server echoes the delete back, a later re-create of the entity applies', async () => {
+        await queueLocalDelete('itemBrief', 'item-10');
+        vi.mocked(pushSyncOps).mockResolvedValue(undefined);
+        await flushSyncQueue(db);
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({
+            ops: [
+                { entityType: 'itemBrief', entityId: 'item-10', opType: 'delete', snapshot: null },
+                { entityType: 'itemBrief', entityId: 'item-10', opType: 'create', snapshot: serverItemBrief('item-10', { text: 'Regenerated' }) },
+            ],
+            serverTs: '2025-06-01T00:00:00.000Z',
+            serverId: '',
+        });
+
+        await pullFromServer(db, USER_ID);
+
+        expect((await db.get('itemBriefs', 'item-10'))?.text).toBe('Regenerated');
+    });
+
+    it('a pushed delete the server never echoes stops holding its entity back after a while', async () => {
+        // Only Date is faked: fake-indexeddb schedules its own work on real timers.
+        vi.useFakeTimers({ toFake: ['Date'] });
+        try {
+            await queueLocalDelete('itemBrief', 'item-11');
+            vi.mocked(pushSyncOps).mockResolvedValue(undefined);
+            await flushSyncQueue(db);
+            vi.setSystemTime(dayjs().add(10, 'minute').valueOf());
+            vi.mocked(fetchSyncOps).mockResolvedValueOnce({
+                ops: [{ entityType: 'itemBrief', entityId: 'item-11', opType: 'create', snapshot: serverItemBrief('item-11') }],
+                serverTs: '2025-06-01T00:00:00.000Z',
+                serverId: '',
+            });
+
+            await pullFromServer(db, USER_ID);
+
+            expect(await db.get('itemBriefs', 'item-11')).toBeDefined();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('a queued delete holds back only its own entity', async () => {
+        await queueLocalDelete('itemBrief', 'item-6');
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({
+            ops: [
+                { entityType: 'itemBrief', entityId: 'item-7', opType: 'create', snapshot: serverItemBrief('item-7') },
+                { entityType: 'item', entityId: 'item-6', opType: 'create', snapshot: serverItem('item-6') },
+            ],
+            serverTs: '2025-06-01T00:00:00.000Z',
+            serverId: '',
+        });
+
+        await pullFromServer(db, USER_ID);
+
+        expect(await db.get('itemBriefs', 'item-7')).toBeDefined();
+        // Same id, different entity type: the brief's pending delete says nothing about the item.
+        expect(await db.get('items', 'item-6')).toBeDefined();
+    });
 });
+
+/** A delete the device queued but has not pushed yet — written straight to the queue so no flush drains it. */
+async function queueLocalDelete(entityType: 'itemBrief' | 'item', entityId: string) {
+    await db.add('syncOperations', { userId: USER_ID, entityType, entityId, opType: 'delete', queuedAt: '2025-06-01T00:00:00.000Z', snapshot: null });
+}
 
 describe('pullFromServer — calendar routine sync', () => {
     function serverCalendarRoutine(id: string, rrule = 'FREQ=DAILY;INTERVAL=1'): Record<string, unknown> & { user: string } {

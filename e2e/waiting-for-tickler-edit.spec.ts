@@ -3,6 +3,7 @@ import dayjs from 'dayjs';
 import type { StoredItem } from '../client/src/types/MyDB';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // A waitingFor item can be snoozed (ignoreBefore) — it lives on /tickler until that day. The editor
 // used to hide the "Ignore before" field for waitingFor and seed it empty, so the date was invisible
@@ -16,7 +17,7 @@ async function savedItem(page: Page, id: string): Promise<StoredItem> {
 
 test.describe('WaitingFor tickler date in the editor', () => {
     test('shows a snoozed waiting item’s Ignore before date and keeps it across a save', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wf-tickler-keep-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wf-tickler-keep-${uniqueStamp()}@example.com`, async (page) => {
             const snoozeUntil = dayjs().add(3, 'day').format('YYYY-MM-DD');
             const person = await gtd.createPerson(page, { name: 'Victor' });
             const captured = await gtd.collect(page, 'Victor: remove leftovers');
@@ -48,7 +49,7 @@ test.describe('WaitingFor tickler date in the editor', () => {
     });
 
     test('clearing Ignore before in the editor returns the item to /waiting-for', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wf-tickler-clear-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wf-tickler-clear-${uniqueStamp()}@example.com`, async (page) => {
             const person = await gtd.createPerson(page, { name: 'Dana' });
             const captured = await gtd.collect(page, 'Dana: send contract');
             await gtd.clarifyToWaitingFor(page, captured, { waitingForPersonId: person._id, ignoreBefore: dayjs().add(5, 'day').format('YYYY-MM-DD') });

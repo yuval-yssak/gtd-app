@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice, withTwoAccountsOnOneDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Structural edits (status, schedule, contexts, …) only persist on explicit Save. Navigating
 // away used to drop them silently — now an unsaved-changes dialog pauses in-app navigation.
@@ -11,7 +12,7 @@ const DAILY = { routineType: 'nextAction' as const, rrule: 'FREQ=DAILY;INTERVAL=
 
 test.describe('unsaved-changes guard — item editor', () => {
     test('status change + navigation prompts; Keep editing stays, Discard leaves without saving', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `guard-item-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `guard-item-${uniqueStamp()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'Guard me');
             await page.goto(`/item/${item._id}`);
             await expect(page.getByRole('textbox', { name: 'Title' })).toBeVisible();
@@ -38,7 +39,7 @@ test.describe('unsaved-changes guard — item editor', () => {
     });
 
     test('ESC with a pending structural edit triggers the guard, same as the back arrow', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `guard-esc-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `guard-esc-${uniqueStamp()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'Guard me via ESC');
             await page.goto(`/item/${item._id}`);
             await expect(page.getByRole('textbox', { name: 'Title' })).toBeVisible();
@@ -68,7 +69,7 @@ test.describe('unsaved-changes guard — item editor', () => {
     });
 
     test('explicit Cancel never prompts — it is a deliberate discard', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `guard-cancel-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `guard-cancel-${uniqueStamp()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'Cancel me');
             await page.goto(`/item/${item._id}`);
             await expect(page.getByRole('textbox', { name: 'Title' })).toBeVisible();
@@ -103,14 +104,14 @@ test.describe('unsaved-changes guard — item editor', () => {
             await page.getByTestId('unsavedChangesDiscard').click();
             await expect(page).toHaveURL(/\/inbox/);
 
-            // The unsaved owner change was discarded — no reassign fired.
-            const after = (await gtd.listItems(page)).find((i) => i._id === item._id);
-            expect(after?.userId).toBe(active.userId);
+            // The unsaved owner change was discarded — no reassign fired. Read by id: the multi-account
+            // sync pass pivots the active pointer, so an active-scoped list can transiently miss the item.
+            expect((await gtd.getItem(page, item._id))?.userId).toBe(active.userId);
         });
     });
 
     test('a title-only edit passes through — autosave flushes it on the way out', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `guard-title-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `guard-title-${uniqueStamp()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'Rename me');
             await page.goto(`/item/${item._id}`);
             await page.getByRole('textbox', { name: 'Title' }).fill('Renamed on the way out');
@@ -126,7 +127,7 @@ test.describe('unsaved-changes guard — item editor', () => {
 
 test.describe('unsaved-changes guard — routine editor', () => {
     test('schedule change + sidebar navigation prompts; Discard leaves the schedule untouched', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `guard-routine-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `guard-routine-${uniqueStamp()}@example.com`, async (page) => {
             const routine = await gtd.createRoutine(page, { ...DAILY, title: 'Guard routine' });
             // Page mode — the dialog chrome's modal backdrop would swallow sidebar clicks.
             await page.goto(`/routine/${routine._id}`);
@@ -152,7 +153,7 @@ test.describe('unsaved-changes guard — routine editor', () => {
     });
 
     test('ESC on the routine page: leaves when clean, prompts on a pending schedule edit', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `guard-routine-esc-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `guard-routine-esc-${uniqueStamp()}@example.com`, async (page) => {
             const routine = await gtd.createRoutine(page, { ...DAILY, title: 'Esc routine' });
 
             // Clean editor: ESC navigates straight back (deep link → /routines fallback).
@@ -176,7 +177,7 @@ test.describe('unsaved-changes guard — routine editor', () => {
     });
 
     test('routine title-only edit passes ESC through — autosave flushes it on the way out', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `guard-routine-title-esc-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `guard-routine-title-esc-${uniqueStamp()}@example.com`, async (page) => {
             const routine = await gtd.createRoutine(page, { ...DAILY, title: 'Rename me routine' });
             await page.goto(`/routine/${routine._id}`);
             await page.getByRole('textbox', { name: 'Title' }).fill('Renamed routine on the way out');

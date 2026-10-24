@@ -1,10 +1,9 @@
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { closeContextQuietly } from './helpers/context';
+import { CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
 import { fetchDevSessionCookie, loginAs } from './helpers/login';
-
-const CLIENT_URL = 'http://localhost:4173';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // First launch on a fresh device runs a full `GET /sync/bootstrap` that can take many seconds.
 // Before this change the list pages rendered their "empty" copy during that window, which read as
@@ -16,7 +15,7 @@ const CLIENT_URL = 'http://localhost:4173';
 // data; the second context bootstraps through the throttled route.
 test.describe('initial-sync skeleton', () => {
     test('fresh device shows skeleton during bootstrap, then items', async ({ browser }) => {
-        const email = `skeleton-${dayjs().valueOf()}@example.com`;
+        const email = `skeleton-${uniqueStamp()}@example.com`;
         // Seed one item via a first context that logs in + settles normally, then flush to the server.
         const { cookie } = await fetchDevSessionCookie(email);
         const seedCtx = await browser.newContext();
@@ -56,7 +55,7 @@ test.describe('initial-sync skeleton', () => {
     });
 
     test('returning device with cached items never shows the skeleton', async ({ browser }) => {
-        const email = `skeleton-cached-${dayjs().valueOf()}@example.com`;
+        const email = `skeleton-cached-${uniqueStamp()}@example.com`;
         const { cookie } = await fetchDevSessionCookie(email);
         const ctx = await browser.newContext();
         try {

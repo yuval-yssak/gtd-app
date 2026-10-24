@@ -91,6 +91,29 @@ describe('openSseConnections', () => {
         expect(onUpdate).toHaveBeenCalledExactlyOnceWith('user-b');
     });
 
+    it('reports a connect through onConnected — a change broadcast before then never reached the channel', () => {
+        const onUpdate = vi.fn();
+        const onConnected = vi.fn();
+        openSseConnections({ onUpdate, onConnected, localDeviceId: 'dev-1' }, ['user-a', 'user-b']);
+        expect(onConnected).not.toHaveBeenCalled();
+
+        created[1]?.onopen?.();
+
+        expect(onConnected).toHaveBeenCalledTimes(1);
+        // A connect is not an update: the per-account update sync must not run once per channel.
+        expect(onUpdate).not.toHaveBeenCalled();
+    });
+
+    it('reports again after an automatic reconnect, which also opens a gap', () => {
+        const onConnected = vi.fn();
+        openSseConnections({ onUpdate: () => {}, onConnected, localDeviceId: 'dev-1' }, ['user-a']);
+        created[0]?.onopen?.();
+        created[0]?.onerror?.(new Event('error'));
+        created[0]?.onopen?.();
+
+        expect(onConnected).toHaveBeenCalledTimes(2);
+    });
+
     it('ignores echoed events (sourceDeviceId matches localDeviceId)', () => {
         const onUpdate = vi.fn();
         openSseConnections({ onUpdate: onUpdate, localDeviceId: 'dev-1' }, ['user-a']);

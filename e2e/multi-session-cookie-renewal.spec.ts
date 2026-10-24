@@ -1,7 +1,9 @@
 import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice, withTwoAccountsOnOneDevice } from './helpers/context';
+import { API_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Better Auth's multiSession plugin sets each account's `_multi-<token>` cookie once, at sign-in,
 // and never refreshes it, so every account on a device used to be signed out a fixed time after
@@ -13,7 +15,7 @@ import { gtd } from './helpers/gtd';
 
 const SESSION_COOKIE_NAME = 'better-auth.session_token';
 const MULTI_COOKIE_PREFIX = `${SESSION_COOKIE_NAME}_multi-`;
-const DEV_SESSION_EXPIRY_URL = 'http://localhost:4000/dev/session-expiry';
+const DEV_SESSION_EXPIRY_URL = `${API_URL}/dev/session-expiry`;
 const DAY_SECONDS = 24 * 60 * 60;
 
 /** Moves the user's DB sessions inside Better Auth's refresh window (expiresIn 7d − updateAge 1d). */
@@ -56,7 +58,7 @@ test.describe('multi-session cookie renewal', () => {
     });
 
     test('a sync request renews the session cookie of a lone account the sync never pivots', async ({ browser }) => {
-        const email = `renew-lone-${dayjs().valueOf()}@example.com`;
+        const email = `renew-lone-${uniqueStamp()}@example.com`;
 
         await withOneLoggedInDevice(browser, email, async (page) => {
             const context = page.context();

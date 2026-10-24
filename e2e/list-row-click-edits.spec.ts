@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Verifies that clicking anywhere on a list row opens the item page (matching the
 // calendar-page UX), and that clicking a button inside `secondaryAction` performs that
@@ -9,7 +10,7 @@ import { gtd } from './helpers/gtd';
 
 test.describe('List row click opens the item editor', () => {
     test('next-actions: row click opens editor; Mark done does not', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `na-row-click-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `na-row-click-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'NA row-click target');
             await gtd.clarifyToNextAction(page, inbox, { energy: 'low', time: 5 });
             const inbox2 = await gtd.collect(page, 'NA secondary-action target');
@@ -34,7 +35,7 @@ test.describe('List row click opens the item editor', () => {
     });
 
     test('waiting-for: row click opens editor; Received does not', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wf-row-click-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wf-row-click-${uniqueStamp()}@example.com`, async (page) => {
             const person = await gtd.createPerson(page, { name: 'Alex' });
             const inbox = await gtd.collect(page, 'WF row-click target');
             await gtd.clarifyToWaitingFor(page, inbox, { waitingForPersonId: person._id });
@@ -59,7 +60,7 @@ test.describe('List row click opens the item editor', () => {
     });
 
     test('tickler: row click opens editor; Release now does not', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `tk-row-click-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `tk-row-click-${uniqueStamp()}@example.com`, async (page) => {
             const future = dayjs().add(7, 'day').format('YYYY-MM-DD');
             const inbox = await gtd.collect(page, 'TK row-click target');
             await gtd.clarifyToNextAction(page, inbox, { ignoreBefore: future });
@@ -85,7 +86,7 @@ test.describe('List row click opens the item editor', () => {
     });
 
     test('someday: row click opens editor', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `sm-row-click-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `sm-row-click-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'SM row-click target');
             await gtd.clarifyToSomedayMaybe(page, inbox);
 
@@ -101,7 +102,7 @@ test.describe('List row click opens the item editor', () => {
     // Inbox previously had no row-body click handler (only chip icons + bottom sheet on mobile).
     // After unifying editors, desktop row click now opens the same editor as everywhere else.
     test('inbox: desktop row click opens editor; chip icons do not bubble', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `ix-row-click-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `ix-row-click-${uniqueStamp()}@example.com`, async (page) => {
             await gtd.collect(page, 'IX row-click target');
             await gtd.collect(page, 'IX chip-action target');
 

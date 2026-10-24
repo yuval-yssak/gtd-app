@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice, withTwoLoggedInDevices } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Hybrid save model in the item editor: title/notes autosave (debounced, undoable) while
 // status/schedule/meta still commit via the explicit Save button. The editor also live-merges
@@ -9,7 +10,7 @@ import { gtd } from './helpers/gtd';
 
 test.describe('item editor — title/notes autosave', () => {
     test('title autosaves without pressing Save, and Undo restores it', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `item-autosave-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `item-autosave-${uniqueStamp()}@example.com`, async (page) => {
             await gtd.collect(page, 'Autosave me');
             await page.goto('/inbox');
             await page.waitForSelector('text=Autosave me');
@@ -30,7 +31,7 @@ test.describe('item editor — title/notes autosave', () => {
     });
 
     test('closing the editor right after typing persists the tail of the burst (flush-on-unmount)', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `item-autosave-flush-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `item-autosave-flush-${uniqueStamp()}@example.com`, async (page) => {
             await gtd.collect(page, 'Quick edit');
             await page.goto('/inbox');
             await page.waitForSelector('text=Quick edit');
@@ -45,7 +46,7 @@ test.describe('item editor — title/notes autosave', () => {
     });
 
     test('Cancel discards structural edits but keeps autosaved text', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `item-autosave-cancel-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `item-autosave-cancel-${uniqueStamp()}@example.com`, async (page) => {
             await gtd.collect(page, 'Structure stays');
             await page.goto('/inbox');
             await page.waitForSelector('text=Structure stays');
@@ -67,7 +68,7 @@ test.describe('item editor — title/notes autosave', () => {
 
 test.describe('item editor — save undo snackbar', () => {
     test('after clarifying an inbox item, the undo snackbar links back to the item', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `clarify-view-link-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `clarify-view-link-${uniqueStamp()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'Clarify and view');
             await page.goto('/inbox');
             await page.waitForSelector('text=Clarify and view');
@@ -91,7 +92,7 @@ test.describe('item editor — save undo snackbar', () => {
     });
 
     test('the close button dismisses the snackbar without undoing the change', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `snackbar-close-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `snackbar-close-${uniqueStamp()}@example.com`, async (page) => {
             await gtd.collect(page, 'Close me');
             await page.goto('/inbox');
             await page.waitForSelector('text=Close me');
@@ -112,7 +113,7 @@ test.describe('item editor — save undo snackbar', () => {
     });
 
     test('closing the snackbar mid-burst does not cancel the still-pending autosave', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `snackbar-close-midburst-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `snackbar-close-midburst-${uniqueStamp()}@example.com`, async (page) => {
             await gtd.collect(page, 'Mid burst');
             await page.goto('/inbox');
             await page.waitForSelector('text=Mid burst');
@@ -132,7 +133,7 @@ test.describe('item editor — save undo snackbar', () => {
 
 test.describe('item editor — creation date', () => {
     test('shows when the item was first created', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `item-created-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `item-created-${uniqueStamp()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'Created stamp');
             await page.goto('/inbox');
             await page.waitForSelector('text=Created stamp');
@@ -155,7 +156,7 @@ test.describe('item editor — creation date', () => {
 
 test.describe('item editor — live merge while open', () => {
     test('a remote rename flows into the open editor when the field is untouched', async ({ browser }) => {
-        const email = `item-merge-${dayjs().valueOf()}@example.com`;
+        const email = `item-merge-${uniqueStamp()}@example.com`;
         await withTwoLoggedInDevices(browser, email, async (page1, page2) => {
             const item = await gtd.collect(page1, 'Merge target');
             await gtd.flush(page1);
@@ -183,7 +184,7 @@ test.describe('item editor — live merge while open', () => {
     });
 
     test('a dirty structural field collides with a remote change → notice + "Use their version"', async ({ browser }) => {
-        const email = `item-conflict-${dayjs().valueOf()}@example.com`;
+        const email = `item-conflict-${uniqueStamp()}@example.com`;
         await withTwoLoggedInDevices(browser, email, async (page1, page2) => {
             const item = await gtd.collect(page1, 'Conflict target');
             await gtd.flush(page1);

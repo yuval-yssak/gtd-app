@@ -94,6 +94,9 @@ export function mountDevTools(db: IDBPDatabase<MyDB>): void {
 
         // ── List / query ─────────────────────────────────────────────────────
         listItems: () => resolveUserId(db).then((uid) => getItemsByUser(db, uid)),
+        // By id, whoever owns it: a multi-account sync pass pivots the active pointer mid-flight, so an
+        // active-scoped read can transiently miss the item.
+        getItem: (itemId: string) => db.get('items', itemId),
         listNextActions: (filters: NextActionFilters = {}) => resolveUserId(db).then((uid) => getActiveNextActions(db, uid, filters)),
         listCalendar: () => resolveUserId(db).then((uid) => getUpcomingCalendarItems(db, uid)),
         listOverdue: () => resolveUserId(db).then((uid) => getOverdueItems(db, uid)),
@@ -254,6 +257,7 @@ export function mountDevTools(db: IDBPDatabase<MyDB>): void {
         '\n\nQuick reference:',
         '\n  __gtd.collect("Buy milk")              → inbox item',
         '\n  __gtd.listItems()                      → all items',
+        '\n  __gtd.getItem(id)                      → one item by id, any owner',
         '\n  __gtd.flush()                          → push queue to server',
         '\n  __gtd.pull()                           → pull from server',
         '\n  __gtd.pullOnly()                       → pull for the active account, no flush first',

@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // The list pages (next-actions, inbox, calendar, routines) render through virtua's
 // WindowVirtualizer, so navigation stays fast regardless of list size — only rows near the
@@ -10,7 +11,7 @@ import { gtd } from './helpers/gtd';
 // halves of that contract: windowed mounting and live search filtering.
 test.describe('Virtualized list pages with in-page search', () => {
     test('next actions render windowed and the header search button filters rows', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `virtual-na-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `virtual-na-${uniqueStamp()}@example.com`, async (page) => {
             // Zero-padded so no title is a prefix of another — keeps text lookups unambiguous.
             for (let i = 1; i <= 60; i++) {
                 const item = await gtd.collect(page, `Errand ${String(i).padStart(2, '0')}`);
@@ -52,7 +53,7 @@ test.describe('Virtualized list pages with in-page search', () => {
     });
 
     test('inbox renders windowed and search distinguishes no-results from inbox zero', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `virtual-inbox-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `virtual-inbox-${uniqueStamp()}@example.com`, async (page) => {
             for (let i = 1; i <= 60; i++) {
                 await gtd.collect(page, `Note ${String(i).padStart(2, '0')}`);
             }
@@ -77,7 +78,7 @@ test.describe('Virtualized list pages with in-page search', () => {
     });
 
     test('someday renders windowed and the header search button filters rows', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `virtual-someday-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `virtual-someday-${uniqueStamp()}@example.com`, async (page) => {
             for (let i = 1; i <= 60; i++) {
                 const item = await gtd.collect(page, `Idea ${String(i).padStart(2, '0')}`);
                 await gtd.clarifyToSomedayMaybe(page, item);
@@ -106,7 +107,7 @@ test.describe('Virtualized list pages with in-page search', () => {
         { status: 'trash', path: '/trash', clarify: gtd.clarifyToTrash, prefix: 'Discarded' },
     ] as const) {
         test(`${archive.status} archive search filters rows and lands the query in the URL`, async ({ browser }) => {
-            await withOneLoggedInDevice(browser, `virtual-${archive.status}-${dayjs().valueOf()}@example.com`, async (page) => {
+            await withOneLoggedInDevice(browser, `virtual-${archive.status}-${uniqueStamp()}@example.com`, async (page) => {
                 for (let i = 1; i <= 10; i++) {
                     const item = await gtd.collect(page, `${archive.prefix} ${String(i).padStart(2, '0')}`);
                     await archive.clarify(page, item);
@@ -141,7 +142,7 @@ test.describe('Virtualized list pages with in-page search', () => {
     }
 
     test('calendar renders day groups windowed and search narrows across days', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `virtual-cal-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `virtual-cal-${uniqueStamp()}@example.com`, async (page) => {
             // One timed item per day for 30 days — every item lands in its own day group.
             for (let i = 1; i <= 30; i++) {
                 const item = await gtd.collect(page, `Meet ${String(i).padStart(2, '0')}`);

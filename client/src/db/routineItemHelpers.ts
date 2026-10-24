@@ -10,7 +10,7 @@ import { GCAL_OWNED_EXCEPTION_KEYS, GCAL_OWNED_ROUTINE_KEYS } from '../types/MyD
 import { ROUTINE_ITEMS_LOCK, withCrossContextLock } from './crossContextLock';
 import { putItem, topRankForUser } from './itemHelpers';
 import { updateRoutine } from './routineMutations';
-import { queueSyncOp } from './syncHelpers';
+import { queueDeleteThenRemove, queueSyncOp } from './syncHelpers';
 
 dayjs.extend(utc);
 
@@ -521,8 +521,9 @@ export async function deleteFutureItemsFromDate(db: IDBPDatabase<MyDB>, userId: 
     const futureItems = allItems.filter((i) => i.routineId === routineId && i.status === 'calendar' && (i.timeStart ?? '') >= fromDate);
 
     for (const item of futureItems) {
-        await db.delete('items', item._id);
-        await queueSyncOp(db, { opType: 'delete', entityType: 'item', entityId: item._id, snapshot: null, userId: item.userId });
+        await queueDeleteThenRemove(db, { opType: 'delete', entityType: 'item', entityId: item._id, snapshot: null, userId: item.userId }, () =>
+            db.delete('items', item._id),
+        );
     }
 }
 
@@ -631,8 +632,9 @@ export async function partitionPastItemsByDoneness(
  *  for the routine at that date range (so nothing valuable is lost). */
 export async function hardDeletePastItems(db: IDBPDatabase<MyDB>, items: StoredItem[]): Promise<void> {
     for (const item of items) {
-        await db.delete('items', item._id);
-        await queueSyncOp(db, { opType: 'delete', entityType: 'item', entityId: item._id, snapshot: null, userId: item.userId });
+        await queueDeleteThenRemove(db, { opType: 'delete', entityType: 'item', entityId: item._id, snapshot: null, userId: item.userId }, () =>
+            db.delete('items', item._id),
+        );
     }
 }
 
@@ -687,8 +689,9 @@ export async function deleteAndRegenerateFutureItems(db: IDBPDatabase<MyDB>, use
     const futureItems = allItems.filter((i) => i.routineId === routine._id && i.status === 'calendar' && (i.timeStart ?? '') >= now);
 
     for (const item of futureItems) {
-        await db.delete('items', item._id);
-        await queueSyncOp(db, { opType: 'delete', entityType: 'item', entityId: item._id, snapshot: null, userId: item.userId });
+        await queueDeleteThenRemove(db, { opType: 'delete', entityType: 'item', entityId: item._id, snapshot: null, userId: item.userId }, () =>
+            db.delete('items', item._id),
+        );
     }
 
     await generateCalendarItemsToHorizon(db, userId, routine);

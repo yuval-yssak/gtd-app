@@ -1,7 +1,8 @@
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
+import { API_URL, CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Regression for the per-calendar sync toggle reverting on navigation. The toggle updated the
 // server + the row's local React state, but did NOT invalidate the module-level integrations
@@ -14,8 +15,8 @@ import { gtd } from './helpers/gtd';
 //
 // No real Google OAuth: the integration + two sync configs are created via /dev/calendar/seed-integration.
 
-const SETTINGS_URL = 'http://localhost:4173/settings';
-const DEV_SEED_INTEGRATION_URL = 'http://localhost:4000/dev/calendar/seed-integration';
+const SETTINGS_URL = `${CLIENT_URL}/settings`;
+const DEV_SEED_INTEGRATION_URL = `${API_URL}/dev/calendar/seed-integration`;
 
 interface SeedResponse {
     ok: boolean;
@@ -45,7 +46,7 @@ async function seedTwoCalendars(userId: string): Promise<SeedResponse> {
 
 test.describe('calendar sync toggle persistence', () => {
     test('toggling a calendar off survives navigating away and back (not just a reload)', async ({ browser }) => {
-        const email = `cal-toggle-persist-${dayjs().valueOf()}@example.com`;
+        const email = `cal-toggle-persist-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             const userId = (await gtd.getActiveAccountId(page)) as string;
             await seedTwoCalendars(userId);

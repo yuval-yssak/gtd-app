@@ -4,6 +4,7 @@ import { compareNextActions } from '../client/src/lib/compareNextActions';
 import type { StoredItem } from '../client/src/types/MyDB';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Keyboard experiment on /next-actions (branch exp/next-actions-keyboard): one tab stop for the
 // whole list with ↑/↓ walking the rows and letters pressing the row buttons; Shift+arrow jumps in
@@ -63,7 +64,7 @@ const focusedTestId = (page: Page) => page.evaluate(() => document.activeElement
 
 test.describe('Next actions — keyboard (one tab stop, jumps, preview order)', () => {
     test('Tab enters the list once; ↑/↓, Home/End walk the rows; → steps into the buttons; Tab leaves in one press', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `na-kb-tab-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `na-kb-tab-${uniqueStamp()}@example.com`, async (page) => {
             await seedUndated(page, ['Alpha', 'Bravo', 'Charlie', 'Delta']); // Delta, Charlie, Bravo, Alpha
             await page.goto('/next-actions');
             await page.waitForSelector('text=Alpha');
@@ -105,7 +106,7 @@ test.describe('Next actions — keyboard (one tab stop, jumps, preview order)', 
     });
 
     test('letters press the row buttons: E opens the editor, C copies the id, M opens Move to…; Enter opens, Space grabs', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `na-kb-letters-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `na-kb-letters-${uniqueStamp()}@example.com`, async (page) => {
             await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
             const [a] = await seedUndated(page, ['Alpha', 'Bravo', 'Charlie']);
             if (!a) throw new Error('seed');
@@ -156,7 +157,7 @@ test.describe('Next actions — keyboard (one tab stop, jumps, preview order)', 
     });
 
     test('keyboard grab renders the grabbed row AT its slot (no overlap); Shift+↓ jumps to the bottom; Escape puts it back', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `na-kb-preview-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `na-kb-preview-${uniqueStamp()}@example.com`, async (page) => {
             await seedUndated(page, ['Alpha', 'Bravo', 'Charlie', 'Delta']); // Delta, Charlie, Bravo, Alpha
             await page.goto('/next-actions');
             await page.waitForSelector('text=Alpha');
@@ -201,7 +202,7 @@ test.describe('Next actions — keyboard (one tab stop, jumps, preview order)', 
     });
 
     test('Alt+Shift+↑ commits a jump to the top of the day, Alt+Shift+↓ to the bottom; the dated section is untouched', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `na-kb-jump-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `na-kb-jump-${uniqueStamp()}@example.com`, async (page) => {
             const today = dayjs().format('YYYY-MM-DD');
             await gtd.clarifyToNextAction(page, await gtd.collect(page, 'Dated today'), { expectedBy: today });
             await seedUndated(page, ['Alpha', 'Bravo', 'Charlie', 'Delta']); // Today: Dated today | No date: Delta, Charlie, Bravo, Alpha
@@ -231,7 +232,7 @@ test.describe('Next actions — keyboard (one tab stop, jumps, preview order)', 
     });
 
     test('desktop: the row overflow button and a right-click on the handle open "Move to…"; Top of section moves the row', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `na-kb-moveto-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `na-kb-moveto-${uniqueStamp()}@example.com`, async (page) => {
             const [a, _b, c] = await seedUndated(page, ['Alpha', 'Bravo', 'Charlie']); // Charlie, Bravo, Alpha
             if (!a || !c) throw new Error('seed');
             await page.goto('/next-actions');
@@ -251,7 +252,7 @@ test.describe('Next actions — keyboard (one tab stop, jumps, preview order)', 
     });
 
     test("the editor's Position row moves the item (opened from the list and by URL); the chord legend opens", async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `na-kb-position-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `na-kb-position-${uniqueStamp()}@example.com`, async (page) => {
             const [a, _b, _c, d] = await seedUndated(page, ['Alpha', 'Bravo', 'Charlie', 'Delta']); // Delta, Charlie, Bravo, Alpha
             if (!a || !d) throw new Error('seed');
             await page.goto('/next-actions');
@@ -301,7 +302,7 @@ test.describe('Next actions — keyboard (one tab stop, jumps, preview order)', 
     });
 
     test('focus survives the moves: Alt+↓ twice without re-focusing moves two slots; a keyboard drop downwards keeps focus', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `na-kb-focus-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `na-kb-focus-${uniqueStamp()}@example.com`, async (page) => {
             await seedUndated(page, ['Alpha', 'Bravo', 'Charlie', 'Delta']); // Delta, Charlie, Bravo, Alpha
             await page.goto('/next-actions');
             await page.waitForSelector('text=Alpha');
@@ -330,7 +331,7 @@ test.describe('Next actions — keyboard (one tab stop, jumps, preview order)', 
     });
 
     test('a grab never steals focus back: Tab out of a grabbed row leaves the list; a click in the search field keeps it', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `na-kb-steal-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `na-kb-steal-${uniqueStamp()}@example.com`, async (page) => {
             await seedUndated(page, ['Alpha', 'Bravo', 'Charlie']);
             await page.goto('/next-actions');
             await page.waitForSelector('text=Alpha');
@@ -362,7 +363,7 @@ test.describe('Next actions — keyboard (one tab stop, jumps, preview order)', 
     });
 
     test('a long list: grab the first row, End, Escape returns it focused; Shift+↓ then Space drops it last', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `na-kb-long-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `na-kb-long-${uniqueStamp()}@example.com`, async (page) => {
             const titles = Array.from({ length: 40 }, (_, i) => `Row ${String(i + 1).padStart(2, '0')}`);
             await seedUndated(page, titles); // newest first: Row 40 … Row 01
             await page.goto('/next-actions');
@@ -392,7 +393,7 @@ test.describe('Next actions — keyboard (one tab stop, jumps, preview order)', 
     });
 
     test("D on a routine's item marks it done once, even when pressed twice; the ghost's buttons are gone", async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `na-kb-done-twice-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `na-kb-done-twice-${uniqueStamp()}@example.com`, async (page) => {
             const today = dayjs().format('YYYY-MM-DD');
             const routine = await gtd.createRoutine(page, {
                 title: 'Water plants',
@@ -425,7 +426,7 @@ test.describe('Next actions — keyboard (one tab stop, jumps, preview order)', 
     test('Shift+Tab from a row leaves the list in one press (no pause on the container), Tab returns to the same row; Space on a button presses it', async ({
         browser,
     }) => {
-        await withOneLoggedInDevice(browser, `na-kb-container-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `na-kb-container-${uniqueStamp()}@example.com`, async (page) => {
             await seedUndated(page, ['Alpha', 'Bravo', 'Charlie']); // Charlie, Bravo, Alpha
             await page.goto('/next-actions');
             await page.waitForSelector('text=Alpha');
@@ -455,7 +456,7 @@ test.describe('Next actions — keyboard (one tab stop, jumps, preview order)', 
     });
 
     test('D then a click into the search field: the field keeps focus (the hand-off never steals it)', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `na-kb-done-focus-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `na-kb-done-focus-${uniqueStamp()}@example.com`, async (page) => {
             await seedUndated(page, ['Alpha', 'Bravo', 'Charlie']);
             await page.goto('/next-actions');
             await page.waitForSelector('text=Alpha');
@@ -472,7 +473,7 @@ test.describe('Next actions — keyboard (one tab stop, jumps, preview order)', 
     test('a slow items read (large account): commits wait for the RENDERED list — Alt+↓ twice moves two slots, a downward drop keeps focus', async ({
         browser,
     }) => {
-        await withOneLoggedInDevice(browser, `na-kb-slow-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `na-kb-slow-${uniqueStamp()}@example.com`, async (page) => {
             await seedUndated(page, ['Alpha', 'Bravo', 'Charlie', 'Delta']); // Delta, Charlie, Bravo, Alpha
             await page.goto('/next-actions');
             await page.waitForSelector('text=Alpha');
@@ -503,7 +504,7 @@ test.describe('Next actions — keyboard (one tab stop, jumps, preview order)', 
     });
 
     test("the editor's Position row: a title typed just before Up survives alongside the move, and Top works offline", async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `na-kb-position-flush-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `na-kb-position-flush-${uniqueStamp()}@example.com`, async (page) => {
             await seedUndated(page, ['Alpha', 'Bravo', 'Charlie']); // Charlie, Bravo, Alpha
             await page.goto('/next-actions');
             await page.waitForSelector('text=Alpha');
@@ -536,7 +537,7 @@ test.describe('Next actions — keyboard (one tab stop, jumps, preview order)', 
     });
 
     test("a slow items read: Done on a routine's only row, pressed twice 50 ms apart, still creates exactly one follow-up", async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `na-kb-done-slow-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `na-kb-done-slow-${uniqueStamp()}@example.com`, async (page) => {
             const today = dayjs().format('YYYY-MM-DD');
             const routine = await gtd.createRoutine(page, {
                 title: 'Water plants',
@@ -568,7 +569,7 @@ test.describe('Next actions — keyboard (one tab stop, jumps, preview order)', 
     });
 
     test("a slow items read: the editor's Position Up, clicked twice quickly, moves two slots in order", async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `na-kb-position-slow-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `na-kb-position-slow-${uniqueStamp()}@example.com`, async (page) => {
             await seedUndated(page, ['Alpha', 'Bravo', 'Charlie', 'Delta']); // Delta, Charlie, Bravo, Alpha
             await page.goto('/next-actions');
             await page.waitForSelector('text=Alpha');
@@ -593,7 +594,7 @@ test.describe('Next actions — keyboard (one tab stop, jumps, preview order)', 
     test('Done still works for a row that changed status on another page moments ago (the ghost guard matches the snapshot, not the id)', async ({
         browser,
     }) => {
-        await withOneLoggedInDevice(browser, `na-kb-done-ghost-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `na-kb-done-ghost-${uniqueStamp()}@example.com`, async (page) => {
             const parked = await gtd.clarifyToSomedayMaybe(page, await gtd.collect(page, 'Parked'), {});
             await gtd.flush(page);
             await page.goto('/someday');

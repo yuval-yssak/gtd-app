@@ -4,6 +4,7 @@ import type { StoredItem } from '../client/src/types/MyDB';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
 import { longPressDrag, PHONE, touch } from './helpers/touch';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Phase 4 — mobile reorder. Playwright's `touchscreen` only taps, so the long-press drag is driven
 // through CDP `Input.dispatchTouchEvent`. A phone context (touch + coarse pointer) also turns on the
@@ -34,7 +35,7 @@ test.describe('Next actions — mobile reorder', () => {
     test('long-press on the handle drags a row to a new slot; the order persists', async ({ browser }) => {
         await withOneLoggedInDevice(
             browser,
-            `na-mobile-drag-${dayjs().valueOf()}@example.com`,
+            `na-mobile-drag-${uniqueStamp()}@example.com`,
             async (page) => {
                 const [a, _b, _c] = await seedUndated(page, ['Alpha', 'Bravo', 'Charlie']); // displayed newest first: Charlie, Bravo, Alpha
                 await page.goto('/next-actions');
@@ -59,7 +60,7 @@ test.describe('Next actions — mobile reorder', () => {
     test('a vertical swipe on the row body scrolls the page instead of dragging', async ({ browser }) => {
         await withOneLoggedInDevice(
             browser,
-            `na-mobile-swipe-${dayjs().valueOf()}@example.com`,
+            `na-mobile-swipe-${uniqueStamp()}@example.com`,
             async (page) => {
                 const titles = Array.from({ length: 30 }, (_, i) => `Scroll row ${String(i).padStart(2, '0')}`);
                 await seedUndated(page, titles);
@@ -92,7 +93,7 @@ test.describe('Next actions — mobile reorder', () => {
     test('"Move to…" sheet: top / bottom / above a picked item, all within the section', async ({ browser }) => {
         await withOneLoggedInDevice(
             browser,
-            `na-mobile-sheet-${dayjs().valueOf()}@example.com`,
+            `na-mobile-sheet-${uniqueStamp()}@example.com`,
             async (page) => {
                 const [a, _b, _c, _d] = await seedUndated(page, ['Alpha', 'Bravo', 'Charlie', 'Delta']); // Delta, Charlie, Bravo, Alpha
                 const today = dayjs().format('YYYY-MM-DD');

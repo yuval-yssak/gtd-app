@@ -10,7 +10,7 @@ import { deleteItemById, getItemsAcrossUsers, putItem, topRankForUser } from './
 import { getRoutineById } from './routineHelpers';
 import { createNextRoutineItem, isCalendarRoutineExhausted, RruleExhaustedError } from './routineItemHelpers';
 import { updateRoutine } from './routineMutations';
-import { queueSyncOp } from './syncHelpers';
+import { queueDeleteThenRemove, queueSyncOp } from './syncHelpers';
 
 function nowIso(): string {
     return dayjs().toISOString();
@@ -683,12 +683,15 @@ export async function removeItem(db: IDBPDatabase<MyDB>, itemId: string): Promis
     if (existing) {
         recordGhostSnapshot(existing);
     }
-    await deleteItemById(db, itemId);
-    await queueSyncOp(db, {
-        opType: 'delete',
-        entityType: 'item',
-        entityId: itemId,
-        snapshot: null,
-        ...(existing?.userId ? { userId: existing.userId } : {}),
-    });
+    await queueDeleteThenRemove(
+        db,
+        {
+            opType: 'delete',
+            entityType: 'item',
+            entityId: itemId,
+            snapshot: null,
+            ...(existing?.userId ? { userId: existing.userId } : {}),
+        },
+        () => deleteItemById(db, itemId),
+    );
 }

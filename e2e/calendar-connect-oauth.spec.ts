@@ -1,6 +1,8 @@
 import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice, withTwoAccountsOnOneDevice } from './helpers/context';
+import { API_URL, CLIENT_URL } from './helpers/env';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // E2E coverage for the active-account-only Calendar Sync flow: clicking "Connect Google Calendar"
 // goes straight to /calendar/auth/google?login_hint=<active.email> with no picker dialog. Also
@@ -12,8 +14,8 @@ import { withOneLoggedInDevice, withTwoAccountsOnOneDevice } from './helpers/con
 //   - For the mismatch UI: hit POST /dev/calendar/simulate-mismatch which performs the same
 //     server-side redirect to /settings?calendarConnectError=mismatch as the real callback.
 
-const SETTINGS_URL = 'http://localhost:4173/settings';
-const DEV_SIMULATE_MISMATCH_URL = 'http://localhost:4000/dev/calendar/simulate-mismatch';
+const SETTINGS_URL = `${CLIENT_URL}/settings`;
+const DEV_SIMULATE_MISMATCH_URL = `${API_URL}/dev/calendar/simulate-mismatch`;
 
 /**
  * Intercept the OAuth start request at the network layer. When the app sets
@@ -31,7 +33,7 @@ async function interceptOAuthStart(page: Page, captured: { href: string | null }
 
 test.describe('calendar connect — active-account flow', () => {
     test('Connect button is labelled with the active account email and visible on settings', async ({ browser }) => {
-        const email = `connect-active-label-${dayjs().valueOf()}@example.com`;
+        const email = `connect-active-label-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             await page.goto(SETTINGS_URL);
             // The button label embeds the active email so the active-account scope is unambiguous.
@@ -58,7 +60,7 @@ test.describe('calendar connect — active-account flow', () => {
     });
 
     test('clicking Connect goes straight to /calendar/auth/google?login_hint=<active.email> (no picker dialog)', async ({ browser }) => {
-        const email = `connect-active-redirect-${dayjs().valueOf()}@example.com`;
+        const email = `connect-active-redirect-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             await page.goto(SETTINGS_URL);
             const captured: { href: string | null } = { href: null };
@@ -83,7 +85,7 @@ test.describe('calendar connect — active-account flow', () => {
 
 test.describe('calendar connect — OAuth mismatch error', () => {
     test('hitting calendarConnectError=mismatch in settings shows the inline error', async ({ browser }) => {
-        const email = `connect-mismatch-${dayjs().valueOf()}@example.com`;
+        const email = `connect-mismatch-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             // Use the dev-only simulate endpoint so the redirect path mirrors production: server
             // responds 302 → /settings?calendarConnectError=mismatch, browser follows the redirect.
@@ -96,7 +98,7 @@ test.describe('calendar connect — OAuth mismatch error', () => {
     });
 
     test('hitting calendarConnectError=scope_missing shows the partial-grant banner and dismiss clears it', async ({ browser }) => {
-        const email = `connect-scope-missing-${dayjs().valueOf()}@example.com`;
+        const email = `connect-scope-missing-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             // The server's partial-grant guard redirects here after revoking the tokens; driving the
             // URL directly exercises the same client path without a dev simulate endpoint.
@@ -112,7 +114,7 @@ test.describe('calendar connect — OAuth mismatch error', () => {
     });
 
     test('dismissing the mismatch error clears the query param so refresh does not re-show it', async ({ browser }) => {
-        const email = `connect-mismatch-dismiss-${dayjs().valueOf()}@example.com`;
+        const email = `connect-mismatch-dismiss-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             await page.goto(DEV_SIMULATE_MISMATCH_URL);
             await page.waitForURL(/calendarConnectError=mismatch/);

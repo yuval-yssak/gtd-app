@@ -70,6 +70,14 @@ describe('BriefSection read view', () => {
         expect(declined).toContain('data-testid="briefDeclinedNote"');
     });
 
+    it('puts a declined caption in the brief row itself, not on a line under an empty one', () => {
+        const declined = renderBrief('', 'declined');
+        expect(declined).not.toContain('data-testid="briefEmpty"');
+        expect(declined).toContain('data-testid="briefDeclinedNote"');
+        // The caption comes before the pencil — the row's own content slot.
+        expect(declined.indexOf('data-testid="briefDeclinedNote"')).toBeLessThan(declined.indexOf('aria-label="Edit brief"'));
+    });
+
     it('never promises an automatic brief on a closed item', () => {
         const html = renderBrief('', 'none', 'field', false);
         expect(html).not.toContain(BRIEF_EMPTY_HINT);

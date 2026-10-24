@@ -2,9 +2,10 @@ import * as path from 'node:path';
 import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { resetServerForEmails, withOneLoggedInDevice } from './helpers/context';
+import { API_URL } from './helpers/env';
 import { callTool, initializeMcp, McpStdioClient } from './helpers/mcpStdioClient';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
-const API_URL = 'http://localhost:4000';
 // The CURRENT MCP package (`mcp-server/`), built by global-setup.ts. Resolved against this file's
 // directory at run time so the spec works regardless of cwd.
 const MCP_DIST = path.resolve(__dirname, '../mcp-server/dist/index.js');
@@ -23,7 +24,7 @@ interface GuidedItem {
  */
 test.describe('MCP server field guidance (mcp-server)', () => {
     test('nudges for energy/time/context, expectedBy and location after gtd_update_item', async ({ browser }) => {
-        const email = `mcp-guidance-${dayjs().valueOf()}@example.com`;
+        const email = `mcp-guidance-${uniqueStamp()}@example.com`;
         await resetServerForEmails([email]);
 
         await withOneLoggedInDevice(browser, email, async (page) => {

@@ -1,6 +1,7 @@
 import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withTwoAccountsOnOneDevice } from './helpers/context';
+import { API_URL, CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
 
 // E2E coverage for Step 3 of the multi-account calendar plan: the unified view that pulls
@@ -8,10 +9,10 @@ import { gtd } from './helpers/gtd';
 // picker. Sync still happens per-active-account in this step, so seeding under the secondary
 // user requires writing IDB rows directly with the secondary's userId.
 
-const INBOX_URL = 'http://localhost:4173/inbox';
+const INBOX_URL = `${CLIENT_URL}/inbox`;
 // Reuse the encrypted-token seed endpoint added by the Step 2 retrofit so the integration
 // reads through the production decrypt path on /calendar/all-sync-configs without 500ing.
-const DEV_SEED_CALENDAR_URL = 'http://localhost:4000/dev/calendar/seed-integration';
+const DEV_SEED_CALENDAR_URL = `${API_URL}/dev/calendar/seed-integration`;
 
 /**
  * Inserts a seed StoredItem directly into the device's IDB tagged with the supplied userId.
@@ -103,8 +104,8 @@ test.describe('unified view — items + AccountChips', () => {
             // disappear after a reload — without it, the next refresh re-mirrors the server list
             // and resurrects the row.
             await page.evaluate(
-                async ({ rawToken, uid }) => {
-                    await fetch('http://localhost:4000/auth/multi-session/revoke', {
+                async ({ rawToken, uid, apiUrl }) => {
+                    await fetch(`${apiUrl}/auth/multi-session/revoke`, {
                         method: 'POST',
                         credentials: 'include',
                         headers: { 'Content-Type': 'application/json' },
@@ -114,7 +115,7 @@ test.describe('unified view — items + AccountChips', () => {
                     const dbHandle = (window as unknown as { __gtd: { db: DBHandle } }).__gtd.db;
                     await dbHandle.delete('accounts', uid);
                 },
-                { rawToken: secondary.rawToken, uid: secondary.userId },
+                { rawToken: secondary.rawToken, uid: secondary.userId, apiUrl: API_URL },
             );
             await reloadInbox(page);
 
@@ -186,7 +187,7 @@ test.describe('unified view — multi-account calendar picker', () => {
             // routine editor reuses the same multi-account picker logic, but it's reachable in
             // one click (Create routine button) so the test is far less timing-sensitive than the
             // chained inbox-row → calendar-action → editor-mount flow.
-            await page.goto(`http://localhost:4173/routines`);
+            await page.goto(`${CLIENT_URL}/routines`);
             await expect(page.getByRole('heading', { name: 'Routines' })).toBeVisible();
             await page.getByRole('button', { name: 'Create routine' }).click();
 

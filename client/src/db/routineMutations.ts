@@ -9,7 +9,7 @@ import {
     trashAllOpenItemsForRoutine,
     trashFutureItemsFromDate,
 } from './routineItemHelpers';
-import { queueSyncOp } from './syncHelpers';
+import { queueDeleteThenRemove, queueSyncOp } from './syncHelpers';
 
 function nowIso(): string {
     return dayjs().toISOString();
@@ -68,14 +68,17 @@ export async function removeRoutine(db: IDBPDatabase<MyDB>, routineId: string): 
     if (existing?.userId) {
         await trashAllOpenItemsForRoutine(db, existing.userId, routineId);
     }
-    await deleteRoutineById(db, routineId);
-    await queueSyncOp(db, {
-        opType: 'delete',
-        entityType: 'routine',
-        entityId: routineId,
-        snapshot: null,
-        ...(existing?.userId ? { userId: existing.userId } : {}),
-    });
+    await queueDeleteThenRemove(
+        db,
+        {
+            opType: 'delete',
+            entityType: 'routine',
+            entityId: routineId,
+            snapshot: null,
+            ...(existing?.userId ? { userId: existing.userId } : {}),
+        },
+        () => deleteRoutineById(db, routineId),
+    );
 }
 
 /**

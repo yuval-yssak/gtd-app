@@ -2,6 +2,7 @@ import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Tooltips teach their keyboard shortcut ("Copy item ID (c)"), and the letters they teach work on a
 // focused row of every list page — not only Next Actions: C copies the id, E opens the editor.
@@ -20,7 +21,7 @@ async function tooltipOf(page: Page, testId: string): Promise<string> {
 
 test.describe('Row shortcut tooltips', () => {
     test('inbox: the row buttons name their key; C on a focused row copies the id (not quick capture), E opens the editor', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `tips-inbox-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `tips-inbox-${uniqueStamp()}@example.com`, async (page) => {
             await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
             const item = await gtd.collect(page, 'Inbox tip target');
             await gtd.flush(page);
@@ -45,7 +46,7 @@ test.describe('Row shortcut tooltips', () => {
     });
 
     test('routines and someday rows answer to the same letters; with a row focused, g c still jumps to Calendar', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `tips-pages-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `tips-pages-${uniqueStamp()}@example.com`, async (page) => {
             await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
             const routine = await gtd.createRoutine(page, { title: 'Tip routine', routineType: 'nextAction', rrule: 'FREQ=DAILY', template: {}, active: true });
             await gtd.clarifyToSomedayMaybe(page, await gtd.collect(page, 'Tip someday'), {});
@@ -76,7 +77,7 @@ test.describe('Row shortcut tooltips', () => {
     });
 
     test('Next Actions tooltips name all four letters; header buttons name theirs', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `tips-na-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `tips-na-${uniqueStamp()}@example.com`, async (page) => {
             await gtd.clarifyToNextAction(page, await gtd.collect(page, 'NA tip'), {});
             await gtd.flush(page);
             await page.goto('/next-actions');
@@ -92,7 +93,7 @@ test.describe('Row shortcut tooltips', () => {
     });
 
     test('every list page tags its row buttons: calendar, waiting for, tickler, people, contexts, search and done', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `tips-all-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `tips-all-${uniqueStamp()}@example.com`, async (page) => {
             const start = dayjs().add(1, 'day').hour(10).minute(0).second(0);
             await gtd.clarifyToCalendar(page, await gtd.collect(page, 'Tip meeting'), {
                 timeStart: start.toISOString(),
@@ -147,7 +148,7 @@ test.describe('Row shortcut tooltips', () => {
     });
 
     test('a fading ghost row presses nothing (and opens no quick capture); row letters in the editor copy nothing', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `tips-ghost-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `tips-ghost-${uniqueStamp()}@example.com`, async (page) => {
             await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
             await gtd.collect(page, 'Ghost target');
             await gtd.collect(page, 'Dialog target');

@@ -2,15 +2,17 @@ import type { Page } from '@playwright/test';
 import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { closeContextQuietly, withOneLoggedInDevice, withTwoAccountsOnOneDevice } from './helpers/context';
+import { API_URL, CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Dev-only endpoints exercised here:
 //   GET  /dev/device-users?deviceId=<id> → server's deviceUsers join rows for the device
 //   POST /dev/drop-push-subscription     → simulate a server-side {registered:false}
 // Both are guarded in api-server/src/routes/devLogin.ts and only mounted when NODE_ENV !== 'production'.
 
-const DEV_DEVICE_USERS_URL = 'http://localhost:4000/dev/device-users';
-const DEV_DROP_PUSH_URL = 'http://localhost:4000/dev/drop-push-subscription';
+const DEV_DEVICE_USERS_URL = `${API_URL}/dev/device-users`;
+const DEV_DROP_PUSH_URL = `${API_URL}/dev/drop-push-subscription`;
 
 interface ServerDeviceUserRow {
     deviceId: string;
@@ -71,10 +73,10 @@ async function waitForDeviceUserRowGone(deviceId: string, userId: string): Promi
 // Drives the full sign-out flow from the page context — the test would otherwise need to
 // reach into Better Auth internals. signOutCurrent() handles the deviceUsers cleanup.
 async function signOutCurrentInPage(page: Page): Promise<void> {
-    await page.evaluate(async () => {
+    // The callback runs in the browser, so the API URL travels in as an argument.
+    await page.evaluate(async (apiServer) => {
         // Run the sign-out path used by the production sign-out menu — it calls /devices/signout
         // before authClient.signOut, exactly the order the production code uses.
-        const apiServer = 'http://localhost:4000';
         type IDBDatabase = { get(store: string, key: string): Promise<{ deviceId: string } | undefined> };
         const dbHandle = (window as unknown as { __gtd: { db: IDBDatabase } }).__gtd.db;
         // Post-v4 the device identity lives in `deviceMeta` (split from per-user `syncCursors`).
@@ -86,12 +88,12 @@ async function signOutCurrentInPage(page: Page): Promise<void> {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ deviceId }),
         });
-    });
+    }, API_URL);
 }
 
 test.describe('deviceUsers join — single account', () => {
     test('signing in writes a (deviceId, userId) row server-side', async ({ browser }) => {
-        const email = `device-users-${dayjs().valueOf()}@example.com`;
+        const email = `device-users-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             const deviceId = await gtd.getDeviceId(page);
             const userId = await gtd.getActiveAccountId(page);
@@ -107,7 +109,7 @@ test.describe('deviceUsers join — single account', () => {
     });
 
     test('signing out drops the row for the active account', async ({ browser }) => {
-        const email = `signout-${dayjs().valueOf()}@example.com`;
+        const email = `signout-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             const deviceId = await gtd.getDeviceId(page);
             const userId = (await gtd.getActiveAccountId(page)) as string;
@@ -140,8 +142,8 @@ test.describe('deviceUsers join — multi-account', () => {
             // Calling it from the page's fetch ensures the rewritten cookie ends up in the
             // BrowserContext jar that all subsequent fetches read from.
             await page.evaluate(
-                async ({ rawToken }) => {
-                    const res = await fetch('http://localhost:4000/auth/multi-session/set-active', {
+                async ({ rawToken, apiUrl }) => {
+                    const res = await fetch(`${apiUrl}/auth/multi-session/set-active`, {
                         method: 'POST',
                         credentials: 'include',
                         headers: { 'Content-Type': 'application/json' },
@@ -151,18 +153,21 @@ test.describe('deviceUsers join — multi-account', () => {
                         throw new Error(`set-active failed: ${res.status}`);
                     }
                 },
-                { rawToken: secondary.rawToken },
+                { rawToken: secondary.rawToken, apiUrl: API_URL },
             );
 
             // Fire an authenticated request under the now-active secondary session. The auth
             // middleware reads X-Device-Id from the header and upserts the (deviceId, secondary)
             // row. /sync/pull is cheap and is already covered by the auth middleware.
-            await page.evaluate(async (id) => {
-                await fetch('http://localhost:4000/sync/pull', {
-                    credentials: 'include',
-                    headers: { 'X-Device-Id': id },
-                });
-            }, deviceId);
+            await page.evaluate(
+                async ({ id, apiUrl }) => {
+                    await fetch(`${apiUrl}/sync/pull`, {
+                        credentials: 'include',
+                        headers: { 'X-Device-Id': id },
+                    });
+                },
+                { id: deviceId, apiUrl: API_URL },
+            );
 
             await waitForDeviceUserRow(deviceId, secondary.userId);
 
@@ -172,14 +177,17 @@ test.describe('deviceUsers join — multi-account', () => {
 
             // /devices/signout reads the active session — secondary is currently active — so it
             // removes only the secondary's row.
-            await page.evaluate(async (id) => {
-                await fetch('http://localhost:4000/devices/signout', {
-                    method: 'POST',
-                    credentials: 'include',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ deviceId: id }),
-                });
-            }, deviceId);
+            await page.evaluate(
+                async ({ id, apiUrl }) => {
+                    await fetch(`${apiUrl}/devices/signout`, {
+                        method: 'POST',
+                        credentials: 'include',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ deviceId: id }),
+                    });
+                },
+                { id: deviceId, apiUrl: API_URL },
+            );
 
             // Take the page offline so no app-originated authenticated request (SSE-triggered sync,
             // push re-registration) carrying X-Device-Id under the still-active secondary cookie can
@@ -239,23 +247,26 @@ async function loginAndOverridePermission(
 async function seedServerSidePushSubscription(page: Page, deviceId: string): Promise<void> {
     // Mirrors the body shape the client's pushApi.registerPushEndpoint sends. Bypasses the
     // real PushManager.subscribe call (which fails in headless Chromium without a push service).
-    await page.evaluate(async (id) => {
-        await fetch('http://localhost:4000/push/subscribe', {
-            method: 'POST',
-            credentials: 'include',
-            headers: { 'Content-Type': 'application/json', 'X-Device-Id': id },
-            body: JSON.stringify({
-                deviceId: id,
-                endpoint: `https://push.example/${id}`,
-                keys: { p256dh: 'p', auth: 'a' },
-            }),
-        });
-    }, deviceId);
+    await page.evaluate(
+        async ({ id, apiUrl }) => {
+            await fetch(`${apiUrl}/push/subscribe`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json', 'X-Device-Id': id },
+                body: JSON.stringify({
+                    deviceId: id,
+                    endpoint: `https://push.example/${id}`,
+                    keys: { p256dh: 'p', auth: 'a' },
+                }),
+            });
+        },
+        { id: deviceId, apiUrl: API_URL },
+    );
 }
 
 test.describe('Settings → Notifications state machine', () => {
     test('shows "Notifications enabled" when permission and registration are both present', async ({ browser }) => {
-        const email = `notif-on-${dayjs().valueOf()}@example.com`;
+        const email = `notif-on-${uniqueStamp()}@example.com`;
         const { ctx, page } = await loginAndOverridePermission(browser, email, 'granted');
         try {
             const deviceId = await gtd.getDeviceId(page);
@@ -264,7 +275,7 @@ test.describe('Settings → Notifications state machine', () => {
             const status = await gtd.getPushStatus(page);
             expect(status.registered).toBe(true);
 
-            await page.goto('http://localhost:4173/settings');
+            await page.goto(`${CLIENT_URL}/settings`);
             // Plain Typography line — match by exact text rather than role/aria.
             await expect(page.getByText('Notifications enabled.', { exact: true })).toBeVisible({ timeout: 10_000 });
         } finally {
@@ -273,7 +284,7 @@ test.describe('Settings → Notifications state machine', () => {
     });
 
     test('flips to "Re-enable notifications" when the server-side subscription is dropped', async ({ browser }) => {
-        const email = `notif-drop-${dayjs().valueOf()}@example.com`;
+        const email = `notif-drop-${uniqueStamp()}@example.com`;
         const { ctx, page } = await loginAndOverridePermission(browser, email, 'granted');
         try {
             const deviceId = await gtd.getDeviceId(page);
@@ -282,7 +293,7 @@ test.describe('Settings → Notifications state machine', () => {
             // Drop server-side subscription — the next /push/status response says registered:false.
             await dropServerPushSubscription(deviceId);
 
-            await page.goto('http://localhost:4173/settings');
+            await page.goto(`${CLIENT_URL}/settings`);
             // Settings polls /push/status on mount via refreshStatus; the button then surfaces.
             await expect(page.getByRole('button', { name: 'Re-enable notifications' })).toBeVisible({ timeout: 10_000 });
         } finally {
@@ -291,10 +302,10 @@ test.describe('Settings → Notifications state machine', () => {
     });
 
     test('shows "Enable notifications" CTA when permission has not been granted', async ({ browser }) => {
-        const email = `notif-default-${dayjs().valueOf()}@example.com`;
+        const email = `notif-default-${uniqueStamp()}@example.com`;
         const { ctx, page } = await loginAndOverridePermission(browser, email, 'default');
         try {
-            await page.goto('http://localhost:4173/settings');
+            await page.goto(`${CLIENT_URL}/settings`);
             await expect(page.getByRole('button', { name: 'Enable notifications' })).toBeVisible({ timeout: 10_000 });
         } finally {
             await closeContextQuietly(ctx);

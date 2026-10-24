@@ -1,8 +1,7 @@
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { closeContextQuietly, withOneLoggedInDevice } from './helpers/context';
-
-const CLIENT_URL = 'http://localhost:4173';
+import { API_URL, CLIENT_URL } from './helpers/env';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // /privacy and /terms are public routes: Google's OAuth verification reviewers (and any visitor)
 // must reach them without a session, directly by URL and from the sign-in screen. Contexts are
@@ -106,7 +105,7 @@ test.describe('product name', () => {
 
 test.describe('product name inside the app', () => {
     test('the app bar, the manifest and the Settings About line carry the product name', async ({ browser }) => {
-        const email = `product-name-${dayjs().valueOf()}@example.com`;
+        const email = `product-name-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             // The brand is rendered up to three times (desktop drawer, keep-mounted mobile drawer, mobile
             // app bar); at least one is visible and none may carry the old name.
@@ -130,7 +129,7 @@ test.describe('product name inside the app', () => {
 
 test.describe('legal pages from inside the app', () => {
     test('a signed-in user reaches both documents from the Settings App card', async ({ browser }) => {
-        const email = `settings-legal-${dayjs().valueOf()}@example.com`;
+        const email = `settings-legal-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             await page.goto(`${CLIENT_URL}/settings`);
             await expect(page.getByTestId('settingsTermsLink')).toHaveAttribute('href', '/terms');
@@ -139,7 +138,7 @@ test.describe('legal pages from inside the app', () => {
             await expect(page.getByTestId('legalTitle')).toHaveText('Privacy Policy');
             // The way back must not need the API (an installed PWA has no back button): every
             // request to the server is aborted before the Home link is clicked.
-            await page.context().route('http://localhost:4000/**', (route) => route.abort());
+            await page.context().route(`${API_URL}/**`, (route) => route.abort());
             await page.getByRole('navigation', { name: 'Legal pages' }).getByRole('link', { name: 'Home' }).click();
             await expect(page).toHaveURL(/\/inbox$/);
         });

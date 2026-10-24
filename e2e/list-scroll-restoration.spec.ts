@@ -2,6 +2,7 @@ import { expect, type Locator, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // List pages share one <main> scroll container. Leaving a list saves its position
 // (keyed by location, 5-minute sticky window) and returning restores it, re-anchored
@@ -69,7 +70,7 @@ async function fullyVisibleRowTitle(page: Page): Promise<string> {
 
 test.describe('List scroll restoration + ghost rows', () => {
     test('marking an item done on its page and coming back restores the position and fades a ghost', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `scroll-restore-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `scroll-restore-${uniqueStamp()}@example.com`, async (page) => {
             await seedNextActions(page, 35, 'Restore item');
 
             await page.goto('/next-actions');
@@ -110,7 +111,7 @@ test.describe('List scroll restoration + ghost rows', () => {
     });
 
     test('in-list Mark done fades the row out in place instead of removing it instantly', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `ghost-inlist-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `ghost-inlist-${uniqueStamp()}@example.com`, async (page) => {
             await seedNextActions(page, 3, 'Fade item');
 
             await page.goto('/next-actions');
@@ -129,7 +130,7 @@ test.describe('List scroll restoration + ghost rows', () => {
     });
 
     test('switching lists resets to top; returning within the sticky window restores the position', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `scroll-sticky-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `scroll-sticky-${uniqueStamp()}@example.com`, async (page) => {
             await seedNextActions(page, 35, 'Sticky item');
 
             await page.goto('/next-actions');
@@ -152,7 +153,7 @@ test.describe('List scroll restoration + ghost rows', () => {
     });
 
     test('removing the expected date from the top visible item keeps the other items in place', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `scroll-reorder-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `scroll-reorder-${uniqueStamp()}@example.com`, async (page) => {
             // 28 dated items (ascending due dates → list order 01..28) + 6 undated ones that sort
             // to the no-date tier at the bottom. Removing a dated item's date drops it past all
             // remaining dated rows — far below the saved viewport.
@@ -207,7 +208,7 @@ test.describe('List scroll restoration + ghost rows', () => {
     });
 
     test('calendar list restores its position when returning within the sticky window', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `scroll-calendar-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `scroll-calendar-${uniqueStamp()}@example.com`, async (page) => {
             for (let i = 1; i <= 30; i++) {
                 const inbox = await gtd.collect(page, `Cal restore ${String(i).padStart(2, '0')}`);
                 await gtd.clarifyToCalendar(page, inbox, {
@@ -234,7 +235,7 @@ test.describe('List scroll restoration + ghost rows', () => {
     });
 
     test('reloading the page restores the scroll position', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `scroll-reload-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `scroll-reload-${uniqueStamp()}@example.com`, async (page) => {
             await seedNextActions(page, 35, 'Reload item');
 
             await page.goto('/next-actions');
@@ -253,7 +254,7 @@ test.describe('List scroll restoration + ghost rows', () => {
     });
 
     test('back from an item page returns to the filtered list URL', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `scroll-filters-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `scroll-filters-${uniqueStamp()}@example.com`, async (page) => {
             await seedNextActions(page, 2, 'Filtered item');
 
             await page.goto('/next-actions');

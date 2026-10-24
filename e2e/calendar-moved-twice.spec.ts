@@ -1,7 +1,9 @@
 import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
+import { API_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Regression for the "moved-twice silent loss" bug: a user moves a recurring-series instance in
 // Google Calendar (e.g. Tue 09:00 → Sun 12:30), then moves it AGAIN (Sun → Mon). Pre-fix the
@@ -12,8 +14,8 @@ import { gtd } from './helpers/gtd';
 // helper `syncRoutineExceptions` invokes for each entry `getExceptions` returns. Faster than
 // orchestrating a real GCal push and decouples this test from Google's webhook delivery.
 
-const DEV_SEED_INTEGRATION_URL = 'http://localhost:4000/dev/calendar/seed-integration';
-const DEV_SIMULATE_EXCEPTION_URL = 'http://localhost:4000/dev/calendar/simulate-routine-exception';
+const DEV_SEED_INTEGRATION_URL = `${API_URL}/dev/calendar/seed-integration`;
+const DEV_SIMULATE_EXCEPTION_URL = `${API_URL}/dev/calendar/simulate-routine-exception`;
 
 interface SeedResponse {
     integrationId: string;
@@ -55,7 +57,7 @@ async function pullAndFindRoutineItems(page: Page, routineId: string) {
 
 test.describe('calendar — recurring instance moved twice', () => {
     test('second move lands on the (already-shifted) item; no duplicate is created', async ({ browser }) => {
-        const email = `moved-twice-${dayjs().valueOf()}@example.com`;
+        const email = `moved-twice-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             const userId = (await gtd.getActiveAccountId(page)) as string;
             const seeded = await seedIntegration(userId);

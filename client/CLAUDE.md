@@ -100,7 +100,7 @@ When another device pushes a change to the server, the server broadcasts an SSE 
 2. `pullFromServer()` — fetches ops newer than the cursor, applies to IDB (last-write-wins on `updatedTs`; a losing item snapshot still hands its server-owned calendar fields to the newer local row — same owner, same event only; `db/calendarLinkMerge.ts`)
 3. `refreshItems()` / `refreshPeople()` / etc. — re-reads IDB → React state
 
-EventSource reconnects automatically on error. **Be careful adding per-message refetches** — an SSE fan-out that triggers a per-tab pull that triggers another fetch has previously burned the Cloudflare Worker free-tier daily request limit from the user's own open tabs alone.
+EventSource reconnects automatically on error. Every (re)connect fires `onConnected`, which runs one coalesced catch-up pull for all channels (deferred into the running pass's own catch-up when a sync is in flight) — a change broadcast while a channel was connecting reached no one, and the review-start brief sweep writes exactly in that window after a page load. **Be careful adding per-message refetches** — an SSE fan-out that triggers a per-tab pull that triggers another fetch has previously burned the Cloudflare Worker free-tier daily request limit from the user's own open tabs alone.
 
 ### Account deletion (evaporation)
 

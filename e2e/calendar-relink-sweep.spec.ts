@@ -1,6 +1,7 @@
 import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { closeContextQuietly, resetServerForEmails } from './helpers/context';
+import { API_URL, CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
 import { loginAs } from './helpers/login';
 
@@ -18,11 +19,10 @@ import { loginAs } from './helpers/login';
 // /dev/calendar/simulate-relink-sweep, whose stub provider serves a caller-supplied event set and
 // records what would have been pushed to GCal.
 
-const CLIENT_URL = 'http://localhost:4173';
 const SETTINGS_URL = `${CLIENT_URL}/settings`;
-const DEV_SEED_CALENDAR_URL = 'http://localhost:4000/dev/calendar/seed-integration';
-const DEV_SIMULATE_WEBHOOK_URL = 'http://localhost:4000/dev/calendar/simulate-webhook-event';
-const DEV_SIMULATE_RELINK_SWEEP_URL = 'http://localhost:4000/dev/calendar/simulate-relink-sweep';
+const DEV_SEED_CALENDAR_URL = `${API_URL}/dev/calendar/seed-integration`;
+const DEV_SIMULATE_WEBHOOK_URL = `${API_URL}/dev/calendar/simulate-webhook-event`;
+const DEV_SIMULATE_RELINK_SWEEP_URL = `${API_URL}/dev/calendar/simulate-relink-sweep`;
 
 async function postDevRoute<T>(url: string, body: unknown): Promise<T> {
     const res = await fetch(url, {

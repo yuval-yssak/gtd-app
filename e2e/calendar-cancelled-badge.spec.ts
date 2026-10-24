@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Exercises the Phase 7 "Cancelled in Calendar" badge in the ArchivedItemsView (rendered by /trash
 // and /done). We seed an item with cancelledByGCal:true in trash via the standard helpers and
@@ -10,7 +11,7 @@ import { gtd } from './helpers/gtd';
 
 test.describe('Calendar — cancelled-by-GCal badge', () => {
     test('ArchivedItemsView renders the "Cancelled in Calendar" chip on trashed items with cancelledByGCal:true', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `cancelled-badge-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `cancelled-badge-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'Booked but cancelled');
             // Take the item through calendar → trash via the standard helpers so its shape matches
             // what the inbound cancellation handler would emit.

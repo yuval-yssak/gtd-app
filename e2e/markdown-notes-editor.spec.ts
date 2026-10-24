@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withOneLoggedInDevice, withTwoLoggedInDevices } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 const GFM_NOTES = [
     '| col a | col b |',
@@ -22,7 +22,7 @@ const GFM_NOTES = [
 // markdown path end to end: stored notes → preview HTML, and editor → preview roundtrip.
 test.describe('Markdown notes editor — GFM + editor behaviours', () => {
     test('preview renders GFM: table, strikethrough, task list checkbox and highlighted code fence', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `gfm-preview-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `gfm-preview-${uniqueStamp()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'GFM preview item');
             await gtd.updateItem(page, { ...item, notes: GFM_NOTES });
 
@@ -41,7 +41,7 @@ test.describe('Markdown notes editor — GFM + editor behaviours', () => {
     });
 
     test('editing GFM notes in the CodeMirror editor updates the preview on blur', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `gfm-roundtrip-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `gfm-roundtrip-${uniqueStamp()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'GFM roundtrip item');
 
             await page.goto(`/item/${item._id}`);
@@ -62,7 +62,7 @@ test.describe('Markdown notes editor — GFM + editor behaviours', () => {
     });
 
     test('markdown syntax is highlighted while typing (heading gets a distinct style)', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `gfm-highlight-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `gfm-highlight-${uniqueStamp()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'Highlight item');
 
             await page.goto(`/item/${item._id}`);
@@ -84,7 +84,7 @@ test.describe('Markdown notes editor — GFM + editor behaviours', () => {
     });
 
     test('find panel: Mod-F opens search inside the editor; Escape closes it without leaving the editor', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `gfm-search-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `gfm-search-${uniqueStamp()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'Search item');
             await gtd.updateItem(page, { ...item, notes: 'needle in some text, needle again' });
 
@@ -111,7 +111,7 @@ test.describe('Markdown notes editor — GFM + editor behaviours', () => {
     });
 
     test('a remote live-merge into the open editor preserves the caret position', async ({ browser }) => {
-        const email = `gfm-caret-${dayjs().valueOf()}@example.com`;
+        const email = `gfm-caret-${uniqueStamp()}@example.com`;
         await withTwoLoggedInDevices(browser, email, async (page1, page2) => {
             const item = await gtd.collect(page1, 'Caret target');
             await gtd.updateItem(page1, { ...item, notes: 'hello world' });
@@ -151,7 +151,7 @@ test.describe('Markdown notes editor — GFM + editor behaviours', () => {
     });
 
     test('multi-cursor: Mod-D selects the next occurrence and typing edits both', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `gfm-multicursor-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `gfm-multicursor-${uniqueStamp()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'Multi-cursor item');
 
             await page.goto(`/item/${item._id}`);
@@ -174,7 +174,7 @@ test.describe('Markdown notes editor — GFM + editor behaviours', () => {
     });
 
     test('pressing Enter inside a list continues the list marker (editor keymap)', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `gfm-list-continue-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `gfm-list-continue-${uniqueStamp()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'List continuation item');
 
             await page.goto(`/item/${item._id}`);

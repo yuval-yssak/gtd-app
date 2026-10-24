@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { resetServerForEmails, withTwoAccountsOnOneDevice } from './helpers/context';
+import { API_URL, CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
 
 // E2e coverage for the atomic cross-account "edit + move" path. Pre-fix, the item editor wrote a
@@ -14,10 +15,10 @@ import { gtd } from './helpers/gtd';
 // load-bearing assertion). The editor's UI wiring is covered by the buildEditPatch unit tests
 // and the calendar-picker spec; here we lock in the round-trip.
 
-const DEV_SEED_CALENDAR_URL = 'http://localhost:4000/dev/calendar/seed-integration';
-const DEV_SEED_ENTITY_URL = 'http://localhost:4000/dev/reassign/seed-entity';
-const DEV_FIND_ENTITY_URL = 'http://localhost:4000/dev/reassign/find-entity';
-const INBOX_URL = 'http://localhost:4173/inbox';
+const DEV_SEED_CALENDAR_URL = `${API_URL}/dev/calendar/seed-integration`;
+const DEV_SEED_ENTITY_URL = `${API_URL}/dev/reassign/seed-entity`;
+const DEV_FIND_ENTITY_URL = `${API_URL}/dev/reassign/find-entity`;
+const INBOX_URL = `${CLIENT_URL}/inbox`;
 
 interface SeedCalendarResult {
     integrationId: string;

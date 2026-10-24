@@ -2,6 +2,7 @@ import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // The Weekly Review edits a calendar routine INSIDE its card (the editor is never a dialog): the walk
 // stays on the same entry, stage travel is locked while the editor is open, and an unsaved schedule
@@ -33,7 +34,7 @@ async function openRoutineCardInReview(page: Page) {
 
 test.describe('Weekly review — inline routine editing', () => {
     test('Save in the card updates the routine and returns to the same, still-undecided entry', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wr-routine-inline-save-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wr-routine-inline-save-${uniqueStamp()}@example.com`, async (page) => {
             const { routine, card } = await openRoutineCardInReview(page);
             await expect(page.getByTestId('reviewStageCounter')).toContainText('0 of 1');
 
@@ -58,7 +59,7 @@ test.describe('Weekly review — inline routine editing', () => {
     });
 
     test('an unsaved schedule edit in the card is guarded when the user navigates away', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wr-routine-inline-guard-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wr-routine-inline-guard-${uniqueStamp()}@example.com`, async (page) => {
             const { card } = await openRoutineCardInReview(page);
 
             await page.getByTestId('routineCardEdit').click();

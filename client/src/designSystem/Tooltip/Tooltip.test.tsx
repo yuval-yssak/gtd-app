@@ -3,13 +3,29 @@ import { act, cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Button } from '../Button/Button';
+import { Dialog, DialogTitle } from '../Dialog/Dialog';
 import { IconButton } from '../IconButton/IconButton';
 import { Tooltip } from './Tooltip';
+
+const listenerCleanups: Array<() => void> = [];
 
 afterEach(() => {
     cleanup();
     vi.useRealTimers();
+    for (const removeListener of listenerCleanups.splice(0)) removeListener();
 });
+
+/**
+ * A page-level Escape handler like usePageEscapeToClose: a key some widget already claimed
+ * (preventDefault) does not count. Removed after each test, even one that times out mid-way.
+ */
+function watchPageEscape() {
+    const onPageEscape = vi.fn();
+    const listener = (event: KeyboardEvent) => event.key === 'Escape' && !event.defaultPrevented && onPageEscape();
+    document.addEventListener('keydown', listener);
+    listenerCleanups.push(() => document.removeEventListener('keydown', listener));
+    return onPageEscape;
+}
 
 describe('Tooltip', () => {
     it('names an unlabelled trigger with a string title (MUI parity)', () => {
@@ -76,6 +92,45 @@ describe('Tooltip', () => {
         );
         await user.tab();
         expect(await screen.findByRole('tooltip')).toBeDefined();
+    });
+
+    it('closes on Escape and still lets the key reach the page (MUI parity: page Escape-to-leave)', async () => {
+        const user = userEvent.setup();
+        const onPageEscape = watchPageEscape();
+        render(
+            <Tooltip title="Edit (e)">
+                <IconButton aria-label="Edit">
+                    <svg />
+                </IconButton>
+            </Tooltip>,
+        );
+        await user.tab();
+        await screen.findByRole('tooltip');
+        await user.keyboard('{Escape}');
+        expect(onPageEscape).toHaveBeenCalledTimes(1);
+        await vi.waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull());
+    });
+
+    it('inside an open dialog, Escape closes the dialog and the page never sees it', async () => {
+        const user = userEvent.setup();
+        const onPageEscape = watchPageEscape();
+        const onDialogClose = vi.fn();
+        render(
+            <Dialog open onClose={onDialogClose}>
+                <DialogTitle>Edit</DialogTitle>
+                <Tooltip title="Edit (e)">
+                    <IconButton aria-label="Edit">
+                        <svg />
+                    </IconButton>
+                </Tooltip>
+            </Dialog>,
+        );
+        screen.getByRole('button', { name: 'Edit' }).focus();
+        await screen.findByRole('tooltip');
+        await user.keyboard('{Escape}');
+        expect(onDialogClose).toHaveBeenCalledTimes(1);
+        // The dialog claimed the key; letting it propagate past the tooltip must not leave the page.
+        expect(onPageEscape).not.toHaveBeenCalled();
     });
 
     it('still shows for a disabled button wrapped in a span', async () => {

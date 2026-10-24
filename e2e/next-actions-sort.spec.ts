@@ -2,13 +2,14 @@ import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // /next-actions is sectioned by expected day (ascending, "No date" last) and ordered by the
 // manual `rank` inside each day. A freshly created item is minted a rank ABOVE the user's
 // existing ones, so inside its section the newest item comes first.
 test.describe('Next actions list — sort order', () => {
     test('dated sections ascending with one header per day, then "No date" newest-first; a new item lands at the top of its section', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `na-sort-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `na-sort-${uniqueStamp()}@example.com`, async (page) => {
             const earlyDay = '2027-06-01';
             const lateDay = '2027-07-01';
 
@@ -47,7 +48,7 @@ test.describe('Next actions list — sort order', () => {
     });
 
     test('an unranked item (pre-rollout row, pulled without a rank) sorts above ranked ones in its section', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `na-sort-unranked-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `na-sort-unranked-${uniqueStamp()}@example.com`, async (page) => {
             const ranked = await gtd.clarifyToNextAction(page, await gtd.collect(page, 'Ranked newer'), {});
             expect(ranked.rank).toBeTruthy();
             // Strip the rank locally the way a pre-rollout snapshot would arrive — updateItem spreads the row as given.
@@ -64,7 +65,7 @@ test.describe('Next actions list — sort order', () => {
     });
 
     test('an overdue day is its own section, labelled in the error colour, and "Today" is named', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `na-sort-overdue-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `na-sort-overdue-${uniqueStamp()}@example.com`, async (page) => {
             const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
             const lastWeek = dayjs().subtract(7, 'day').format('YYYY-MM-DD');
             await gtd.clarifyToNextAction(page, await gtd.collect(page, 'Yesterday item'), { expectedBy: yesterday });

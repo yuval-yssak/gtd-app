@@ -4,6 +4,7 @@ import dayjs from 'dayjs';
 import type { StoredItem } from '../client/src/types/MyDB';
 import { withTwoLoggedInDevices } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Tests multi-device sync for entity types and mutations not covered by
 // multi-device-sync.spec.ts: calendar items, waiting-for items, status changes via SSE,
@@ -29,7 +30,7 @@ async function waitForItemByIdOnDevice(page: Page, id: string): Promise<StoredIt
 
 test.describe('entity sync', () => {
     test('calendar item syncs across devices with time fields', async ({ browser }) => {
-        const email = `cal-sync-${dayjs().valueOf()}@example.com`;
+        const email = `cal-sync-${uniqueStamp()}@example.com`;
         await withTwoLoggedInDevices(browser, email, async (page1, page2) => {
             const inbox = await gtd.collect(page1, 'Synced meeting');
             const timeStart = dayjs().add(2, 'day').hour(10).minute(0).second(0).toISOString();
@@ -47,7 +48,7 @@ test.describe('entity sync', () => {
     });
 
     test('waiting-for item syncs with person reference', async ({ browser }) => {
-        const email = `wf-sync-${dayjs().valueOf()}@example.com`;
+        const email = `wf-sync-${uniqueStamp()}@example.com`;
         await withTwoLoggedInDevices(browser, email, async (page1, page2) => {
             const person = await gtd.createPerson(page1, { name: 'Eve' });
             const inbox = await gtd.collect(page1, 'Waiting for Eve');
@@ -64,7 +65,7 @@ test.describe('entity sync', () => {
     });
 
     test('item status change syncs via SSE', async ({ browser }) => {
-        const email = `status-sse-${dayjs().valueOf()}@example.com`;
+        const email = `status-sse-${uniqueStamp()}@example.com`;
         await withTwoLoggedInDevices(browser, email, async (page1, page2) => {
             const inbox = await gtd.collect(page1, 'Complete me');
             await gtd.flush(page1);
@@ -94,7 +95,7 @@ test.describe('entity sync', () => {
     });
 
     test('item deletion syncs across devices', async ({ browser }) => {
-        const email = `delete-sync-${dayjs().valueOf()}@example.com`;
+        const email = `delete-sync-${uniqueStamp()}@example.com`;
         await withTwoLoggedInDevices(browser, email, async (page1, page2) => {
             const inbox = await gtd.collect(page1, 'Delete me');
             await gtd.flush(page1);

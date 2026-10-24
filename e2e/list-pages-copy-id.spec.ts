@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Each list page renders a per-row copy-id button alongside the existing edit/action buttons.
 // We exercise four chrome shapes:
@@ -17,7 +17,7 @@ test.describe('Copy item ID — list pages', () => {
     test.use({ permissions: ['clipboard-read', 'clipboard-write'] });
 
     test('inbox row exposes the copy button and copies the _id', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `copyid-list-inbox-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `copyid-list-inbox-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'Inbox copy-id row target');
 
             await page.goto('/inbox');
@@ -32,7 +32,7 @@ test.describe('Copy item ID — list pages', () => {
     });
 
     test('next-actions row exposes the copy button and copies the _id', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `copyid-list-next-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `copyid-list-next-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'NA copy-id row target');
             await gtd.clarifyToNextAction(page, inbox);
 
@@ -47,7 +47,7 @@ test.describe('Copy item ID — list pages', () => {
     });
 
     test('done row (archived view) exposes the copy button and copies the _id', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `copyid-list-done-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `copyid-list-done-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'Done copy-id row target');
             // Archived view requires status === 'done'; the inbox quick-done path is the simplest route.
             await gtd.clarifyToDone(page, inbox);
@@ -63,7 +63,7 @@ test.describe('Copy item ID — list pages', () => {
     });
 
     test('search row exposes the copy button and copies the _id', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `copyid-list-search-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `copyid-list-search-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'Search copy-id row target');
 
             // Hit /search with a query that matches just this item — the search results list

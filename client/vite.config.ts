@@ -5,6 +5,21 @@ import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 import { APP_NAME } from './src/lib/appName.ts';
 
+// The API the dev/preview proxy forwards to. The e2e stack runs its own API on another port
+// (e2e/helpers/env.ts) and points the preview's proxy at it through this variable. Read once at
+// config load — restart the dev/preview server to pick up a change.
+const apiProxyTarget = process.env.GTD_API_PROXY_TARGET ?? 'http://localhost:4000';
+
+// Proxy /auth/* (and the other cookie-bearing API routes) to the API so OAuth cookies are same-origin.
+// Exclude /auth/callback exactly — that's a client-side TanStack Router route.
+const apiProxy = {
+    '^/auth/(?!callback($|\\?|#))': { target: apiProxyTarget, changeOrigin: true },
+    '/items': { target: apiProxyTarget, changeOrigin: true },
+    '/sync': { target: apiProxyTarget, changeOrigin: true },
+    '/push': { target: apiProxyTarget, changeOrigin: true },
+    '/version': { target: apiProxyTarget, changeOrigin: true },
+};
+
 const commitHash = (() => {
     try {
         return execSync('git rev-parse --short HEAD').toString().trim();
@@ -49,26 +64,7 @@ export default defineConfig({
             },
         }),
     ],
-    server: {
-        proxy: {
-            // Proxy /auth/* to the API server in dev so OAuth cookies are same-origin.
-            // Exclude /auth/callback exactly — that's a client-side TanStack Router route.
-            '^/auth/(?!callback($|\\?|#))': { target: 'http://localhost:4000', changeOrigin: true },
-            '/items': { target: 'http://localhost:4000', changeOrigin: true },
-            '/sync': { target: 'http://localhost:4000', changeOrigin: true },
-            '/push': { target: 'http://localhost:4000', changeOrigin: true },
-            '/version': { target: 'http://localhost:4000', changeOrigin: true },
-        },
-    },
-    preview: {
-        // `npm run dev` uses `vite preview` (not `vite dev`), so proxy rules must be
-        // duplicated here — the `server` block above only applies to `vite dev`.
-        proxy: {
-            '^/auth/(?!callback($|\\?|#))': { target: 'http://localhost:4000', changeOrigin: true },
-            '/items': { target: 'http://localhost:4000', changeOrigin: true },
-            '/sync': { target: 'http://localhost:4000', changeOrigin: true },
-            '/push': { target: 'http://localhost:4000', changeOrigin: true },
-            '/version': { target: 'http://localhost:4000', changeOrigin: true },
-        },
-    },
+    server: { proxy: apiProxy },
+    // `npm run dev` uses `vite preview` (not `vite dev`), and the `server` block only applies to `vite dev`.
+    preview: { proxy: apiProxy },
 });

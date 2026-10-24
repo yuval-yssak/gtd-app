@@ -1,8 +1,7 @@
 import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withTwoAccountsOnOneDevice } from './helpers/context';
-
-const CLIENT_URL = 'http://localhost:4173';
+import { CLIENT_URL } from './helpers/env';
 
 test.describe('account switch from menu', () => {
     test('switching active account on settings reloads page and shows new account', async ({ browser }) => {

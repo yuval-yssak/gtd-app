@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Switching a routine's type (nextAction ↔ calendar) must clean up the OLD type's generated
 // items and seed the new type immediately: nextAction → calendar trashes the open next action
@@ -20,7 +21,7 @@ async function openRoutineEditor(page: Parameters<typeof gtd.listItems>[0], titl
 
 test.describe('Routine type switch (nextAction ↔ calendar)', () => {
     test('nextAction → calendar: open next action trashed, calendar horizon filled', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `type-switch-na-cal-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `type-switch-na-cal-${uniqueStamp()}@example.com`, async (page) => {
             const routine = await gtd.createRoutine(page, {
                 title: 'Water plants',
                 routineType: 'nextAction',
@@ -47,7 +48,7 @@ test.describe('Routine type switch (nextAction ↔ calendar)', () => {
     });
 
     test('calendar → nextAction: upcoming items trashed, past history kept, next action seeded', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `type-switch-cal-na-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `type-switch-cal-na-${uniqueStamp()}@example.com`, async (page) => {
             const routine = await gtd.createRoutine(page, {
                 title: 'Morning swim',
                 routineType: 'calendar',

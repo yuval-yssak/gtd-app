@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // The search page filters on a deferred mirror of the input (useDeferredValue) rather than the
 // debounced URL round-trip, and renders results through a memoized, window-virtualized list.
@@ -10,7 +10,7 @@ import { gtd } from './helpers/gtd';
 // shareability.
 test.describe('Search page live filtering', () => {
     test('typing narrows results, clearing restores them, and the query lands in the URL', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `search-typing-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `search-typing-${uniqueStamp()}@example.com`, async (page) => {
             await gtd.collect(page, 'Alpha buy milk');
             await gtd.collect(page, 'Beta call plumber');
             await gtd.collect(page, 'Gamma call dentist');
@@ -40,7 +40,7 @@ test.describe('Search page live filtering', () => {
     });
 
     test('a large result set renders windowed — offscreen rows are not mounted', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `search-virtual-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `search-virtual-${uniqueStamp()}@example.com`, async (page) => {
             // Zero-padded so no title is a prefix of another — keeps text lookups unambiguous.
             for (let i = 1; i <= 60; i++) {
                 await gtd.collect(page, `Virtual row ${String(i).padStart(2, '0')}`);

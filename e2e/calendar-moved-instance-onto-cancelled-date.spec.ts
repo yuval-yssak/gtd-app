@@ -3,7 +3,9 @@ import dayjs from 'dayjs';
 import timezone from 'dayjs/plugin/timezone.js';
 import utc from 'dayjs/plugin/utc.js';
 import { withOneLoggedInDevice } from './helpers/context';
+import { API_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -23,8 +25,8 @@ dayjs.extend(timezone);
 // exceptions on every sync) and asserts the moved row is stable: same id, still live, and the
 // trash count does not grow.
 
-const DEV_SEED_INTEGRATION_URL = 'http://localhost:4000/dev/calendar/seed-integration';
-const DEV_SIMULATE_SYNC_URL = 'http://localhost:4000/dev/calendar/simulate-routine-exception-sync';
+const DEV_SEED_INTEGRATION_URL = `${API_URL}/dev/calendar/seed-integration`;
+const DEV_SIMULATE_SYNC_URL = `${API_URL}/dev/calendar/simulate-routine-exception-sync`;
 
 interface SeedResponse {
     integrationId: string;
@@ -82,7 +84,7 @@ function instanceIdFor(masterEventId: string, date: string): string {
 
 test.describe('calendar — moved instance landing on a cancelled occurrence date', () => {
     test('repeated syncs keep the moved row stable instead of trashing and re-creating it', async ({ browser }) => {
-        const email = `moved-onto-cancelled-${dayjs().valueOf()}@example.com`;
+        const email = `moved-onto-cancelled-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             const userId = (await gtd.getActiveAccountId(page)) as string;
             const seeded = await seedIntegration(userId);

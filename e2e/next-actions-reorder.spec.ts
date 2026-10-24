@@ -3,6 +3,7 @@ import dayjs from 'dayjs';
 import type { StoredItem } from '../client/src/types/MyDB';
 import { withOneLoggedInDevice, withTwoLoggedInDevices } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Phase 3 — desktop reorder on /next-actions: native pointer drag from the row handle, keyboard
 // grab mode (Space / arrows / Space / Escape) and the Alt+arrow nudge. Every assertion that is
@@ -113,7 +114,7 @@ async function rankOf(page: Page, itemId: string): Promise<string> {
 
 test.describe('Next actions — reorder (desktop)', () => {
     test('mouse drag moves an undated item from 4th to 2nd; the order survives a reload and reaches a second device', async ({ browser }) => {
-        await withTwoLoggedInDevices(browser, `na-reorder-drag-${dayjs().valueOf()}@example.com`, async (page, other) => {
+        await withTwoLoggedInDevices(browser, `na-reorder-drag-${uniqueStamp()}@example.com`, async (page, other) => {
             const [a, b, c, d] = await seedUndated(page, ['Alpha', 'Bravo', 'Charlie', 'Delta']); // newest first: Delta, Charlie, Bravo, Alpha
             if (!a || !b || !c || !d) throw new Error('seed');
             await page.goto('/next-actions');
@@ -145,7 +146,7 @@ test.describe('Next actions — reorder (desktop)', () => {
     });
 
     test('a drag across a section header snaps back and writes nothing; a completed drop does not open the editor', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `na-reorder-wall-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `na-reorder-wall-${uniqueStamp()}@example.com`, async (page) => {
             const today = dayjs().format('YYYY-MM-DD');
             const dated = await gtd.clarifyToNextAction(page, await gtd.collect(page, 'Dated today'), { expectedBy: today });
             const [a, _b] = await seedUndated(page, ['Alpha', 'Bravo']); // Today: Dated today | No date: Bravo, Alpha
@@ -174,7 +175,7 @@ test.describe('Next actions — reorder (desktop)', () => {
     });
 
     test('keyboard: Space lifts, arrows move, Space drops, Escape cancels; Alt+Up nudges one slot', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `na-reorder-keys-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `na-reorder-keys-${uniqueStamp()}@example.com`, async (page) => {
             const [a, _b, _c, d] = await seedUndated(page, ['Alpha', 'Bravo', 'Charlie', 'Delta']); // Delta, Charlie, Bravo, Alpha
             if (!a || !d) throw new Error('seed');
             await page.goto('/next-actions');
@@ -211,7 +212,7 @@ test.describe('Next actions — reorder (desktop)', () => {
     });
 
     test('D5: dragging under an active filter mints the key between the VISIBLE neighbours', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `na-reorder-filter-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `na-reorder-filter-${uniqueStamp()}@example.com`, async (page) => {
             const low1 = await gtd.clarifyToNextAction(page, await gtd.collect(page, 'Low one'), { energy: 'low' });
             const high = await gtd.clarifyToNextAction(page, await gtd.collect(page, 'High between'), { energy: 'high' });
             const low2 = await gtd.clarifyToNextAction(page, await gtd.collect(page, 'Low two'), { energy: 'low' });
@@ -236,7 +237,7 @@ test.describe('Next actions — reorder (desktop)', () => {
     });
 
     test('a drop between two rows that share a rank succeeds (the section is re-keyed first)', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `na-reorder-shared-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `na-reorder-shared-${uniqueStamp()}@example.com`, async (page) => {
             const [a, b, c] = await seedUndated(page, ['Alpha', 'Bravo', 'Charlie']);
             if (!a || !b || !c) throw new Error('seed');
             // Two devices minting "top" offline would both produce the same key — seed that state,
@@ -264,7 +265,7 @@ test.describe('Next actions — reorder (desktop)', () => {
     });
 
     test("drops at the top and at the bottom slot land after a pause (the measured geometry excludes the rows' own shift)", async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `na-reorder-edges-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `na-reorder-edges-${uniqueStamp()}@example.com`, async (page) => {
             const [a, _b, _c, d] = await seedUndated(page, ['Alpha', 'Bravo', 'Charlie', 'Delta']); // Delta, Charlie, Bravo, Alpha
             if (!a || !d) throw new Error('seed');
             await page.goto('/next-actions');
@@ -285,7 +286,7 @@ test.describe('Next actions — reorder (desktop)', () => {
     test('Escape mid-drag snaps back; a grab abandoned by scrolling away still lets the next gesture work', async ({ browser }) => {
         await withOneLoggedInDevice(
             browser,
-            `na-reorder-recover-${dayjs().valueOf()}@example.com`,
+            `na-reorder-recover-${uniqueStamp()}@example.com`,
             async (page) => {
                 const titles = Array.from({ length: 14 }, (_, i) => `Row ${String(i).padStart(2, '0')}`);
                 const items = await seedUndated(page, titles); // displayed newest first: Row 13 … Row 00
@@ -300,6 +301,9 @@ test.describe('Next actions — reorder (desktop)', () => {
                 // (an unmounted row has no handle to hover).
                 await page.mouse.wheel(0, 6000);
                 await expect(page.getByTestId('nextActionItemRow').filter({ hasText: 'Row 00' })).toBeVisible();
+                // The wheel scroll animates: measuring the handle mid-scroll puts the mouse-down beside it,
+                // no drag starts, and Escape then has nothing to cancel.
+                await waitForScrollRest(page);
                 const handle = handleOf(page, oldest._id);
                 await handle.hover();
                 const box = await handle.boundingBox();
@@ -331,9 +335,15 @@ test.describe('Next actions — reorder (desktop)', () => {
                 // The cancelled grab hands focus back once virtua remounts the row, and its scrollIntoView
                 // can nudge the page a pixel (always, in Chromium ≥156) — let it land, then reset.
                 await expect(handleOf(page, newest._id)).toBeFocused();
-                await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
-                await waitForScrollRest(page);
-                expect(await page.evaluate(() => window.scrollY)).toBe(0);
+                // Re-applied until it holds: a re-render landing after the reset (a sync refresh remounting
+                // the focused row) repeats that nudge, and the drag below wants a known starting scroll.
+                await expect
+                    .poll(async () => {
+                        await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
+                        await waitForScrollRest(page);
+                        return page.evaluate(() => window.scrollY);
+                    })
+                    .toBe(0);
                 await page.waitForSelector('text=Row 13');
                 await mouseDrag(page, newest._id, (await rowCenterY(page, 'Row 11')) - 8);
                 await expect.poll(async () => (await rowTitles(page)).slice(0, 3)).toEqual(['Row 12', 'Row 13', 'Row 11']);
@@ -344,7 +354,7 @@ test.describe('Next actions — reorder (desktop)', () => {
     });
 
     test('a bare press-and-release on the handle announces nothing and writes nothing; Tab away from a grab cancels it', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `na-reorder-noop-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `na-reorder-noop-${uniqueStamp()}@example.com`, async (page) => {
             const [a, _b, _c] = await seedUndated(page, ['Alpha', 'Bravo', 'Charlie']);
             if (!a) throw new Error('seed');
             await page.goto('/next-actions');
@@ -371,7 +381,7 @@ test.describe('Next actions — reorder (desktop)', () => {
     });
 
     test('Enter lifts into grab mode; Alt+Down nudges down; rapid Alt+Up presses apply in order', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `na-reorder-keys2-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `na-reorder-keys2-${uniqueStamp()}@example.com`, async (page) => {
             const [a, _b, _c, d] = await seedUndated(page, ['Alpha', 'Bravo', 'Charlie', 'Delta']); // Delta, Charlie, Bravo, Alpha
             if (!a || !d) throw new Error('seed');
             await page.goto('/next-actions');

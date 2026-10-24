@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // The /people list is alphabetical (archived parked at the bottom) and gets the same collapsible
 // in-page search field the virtualized list pages use.
@@ -13,7 +13,7 @@ function personRows(page: import('@playwright/test').Page) {
 
 test.describe('People list — order and search', () => {
     test('list is alphabetical regardless of case and creation order; archived sink to the bottom', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `people-order-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `people-order-${uniqueStamp()}@example.com`, async (page) => {
             await gtd.createPerson(page, { name: 'charlie' });
             await gtd.createPerson(page, { name: 'Alice' });
             await gtd.createPerson(page, { name: 'bob' });
@@ -28,7 +28,7 @@ test.describe('People list — order and search', () => {
     });
 
     test('search filters by name and email, shows empty copy on no match, and clears on close', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `people-search-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `people-search-${uniqueStamp()}@example.com`, async (page) => {
             await gtd.createPerson(page, { name: 'Alice', email: 'alice@corp.example' });
             await gtd.createPerson(page, { name: 'Bob', phone: '555-0100' });
 

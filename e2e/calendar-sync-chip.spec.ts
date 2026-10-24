@@ -1,7 +1,8 @@
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
+import { API_URL, CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // The calendar + routines pages show a "Syncing calendar…" chip while a Google Calendar
 // integration sync is in flight (isCalendarSyncing). We seed an integration with fake tokens,
@@ -10,7 +11,7 @@ import { gtd } from './helpers/gtd';
 //
 // No real Google OAuth: the integration row is created via /dev/calendar/seed-integration.
 
-const DEV_SEED_INTEGRATION_URL = 'http://localhost:4000/dev/calendar/seed-integration';
+const DEV_SEED_INTEGRATION_URL = `${API_URL}/dev/calendar/seed-integration`;
 
 interface SeedResponse {
     ok: boolean;
@@ -32,7 +33,7 @@ async function seedIntegration(userId: string): Promise<SeedResponse> {
 
 test.describe('calendar sync chip', () => {
     test('calendar page shows "Syncing calendar…" while the integration sync runs, then clears it', async ({ browser }) => {
-        const email = `cal-chip-${dayjs().valueOf()}@example.com`;
+        const email = `cal-chip-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             const userId = (await gtd.getActiveAccountId(page)) as string;
             await seedIntegration(userId);
@@ -47,7 +48,7 @@ test.describe('calendar sync chip', () => {
             });
 
             // Reload directly onto /calendar so the boot syncAndRefresh runs the throttled calendar pass here.
-            await page.goto('http://localhost:4173/calendar');
+            await page.goto(`${CLIENT_URL}/calendar`);
 
             await expect(page.getByTestId('syncingChip')).toBeVisible();
             await expect(page.getByText('Syncing calendar…')).toBeVisible();
@@ -58,7 +59,7 @@ test.describe('calendar sync chip', () => {
     });
 
     test('chip clears even when the integration sync fails (does not stick on)', async ({ browser }) => {
-        const email = `cal-chip-fail-${dayjs().valueOf()}@example.com`;
+        const email = `cal-chip-fail-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             const userId = (await gtd.getActiveAccountId(page)) as string;
             await seedIntegration(userId);
@@ -72,7 +73,7 @@ test.describe('calendar sync chip', () => {
                 await route.fulfill({ status: 500, body: 'boom' });
             });
 
-            await page.goto('http://localhost:4173/calendar');
+            await page.goto(`${CLIENT_URL}/calendar`);
 
             await expect(page.getByTestId('syncingChip')).toBeVisible();
             await expect(page.getByTestId('syncingChip')).toHaveCount(0, { timeout: 15_000 });
@@ -80,7 +81,7 @@ test.describe('calendar sync chip', () => {
     });
 
     test('routines page shows the same chip during a calendar sync', async ({ browser }) => {
-        const email = `routines-chip-${dayjs().valueOf()}@example.com`;
+        const email = `routines-chip-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             const userId = (await gtd.getActiveAccountId(page)) as string;
             await seedIntegration(userId);
@@ -91,7 +92,7 @@ test.describe('calendar sync chip', () => {
                 await route.continue();
             });
 
-            await page.goto('http://localhost:4173/routines');
+            await page.goto(`${CLIENT_URL}/routines`);
 
             await expect(page.getByTestId('syncingChip')).toBeVisible();
             await expect(page.getByTestId('syncingChip')).toHaveCount(0);

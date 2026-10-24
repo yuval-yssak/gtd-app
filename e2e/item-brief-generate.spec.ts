@@ -1,8 +1,8 @@
 import { expect, type Page, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withOneLoggedInDevice, withTwoLoggedInDevices } from './helpers/context';
 import { gtd } from './helpers/gtd';
 import { briefTextOf, openBriefEditor } from './helpers/itemEditorLocators';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // The on-demand "Generate brief" button (sparkle) in the item editor and on the weekly-review
 // card. Playwright starts the API server with BRIEF_FAKE_MODEL=1, so the model is a deterministic
@@ -35,7 +35,7 @@ test.describe('item brief — generated on demand', () => {
     test('Generate writes a model brief that the read view shows and a second device receives; Regenerate over a typed brief asks first', async ({
         browser,
     }) => {
-        const email = `brief-generate-${dayjs().valueOf()}@example.com`;
+        const email = `brief-generate-${uniqueStamp()}@example.com`;
         await withTwoLoggedInDevices(browser, email, async (page1, page2) => {
             const captured = await gtd.collect(page1, 'Renew passport');
             const item = await gtd.updateItem(page1, { ...captured, notes: LONG_NOTES });
@@ -92,7 +92,7 @@ test.describe('item brief — generated on demand', () => {
     });
 
     test('clicking Regenerate straight from an open field commits the typed text first, then asks before replacing it', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `brief-generate-from-field-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `brief-generate-from-field-${uniqueStamp()}@example.com`, async (page) => {
             const captured = await gtd.collect(page, 'Renew passport');
             const item = await gtd.updateItem(page, { ...captured, notes: LONG_NOTES });
             await gtd.flush(page);
@@ -125,7 +125,7 @@ test.describe('item brief — generated on demand', () => {
     });
 
     test('the weekly-review card carries the button and leads with the generated brief', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `brief-generate-review-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `brief-generate-review-${uniqueStamp()}@example.com`, async (page) => {
             const captured = await gtd.collect(page, 'Renew passport');
             const item = await gtd.clarifyToNextAction(page, { ...captured, notes: LONG_NOTES }, {});
             await gtd.flush(page);
@@ -152,7 +152,7 @@ test.describe('item brief — generated on demand', () => {
     });
 
     test('notes typed moments before the click are what the brief is generated from (autosave is flushed first)', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `brief-generate-typed-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `brief-generate-typed-${uniqueStamp()}@example.com`, async (page) => {
             // Seeded WITHOUT notes: a generate from the server's stale copy would come back `skipped`.
             const item = await gtd.collect(page, 'Renew passport');
             await gtd.flush(page);
@@ -176,7 +176,7 @@ test.describe('item brief — generated on demand', () => {
     });
 
     test('a done item refuses generation with the open-items-only notice, and generates once revived', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `brief-generate-closed-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `brief-generate-closed-${uniqueStamp()}@example.com`, async (page) => {
             const captured = await gtd.collect(page, 'Renew passport');
             // Long enough that "too short" could never be the reason it refuses.
             const item = await gtd.updateItem(page, { ...captured, notes: LONG_NOTES, status: 'done' });
@@ -202,7 +202,7 @@ test.describe('item brief — generated on demand', () => {
     });
 
     test('a closed item with a typed brief: Replace does not loop — the refusal closes the confirm', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `brief-generate-closed-pinned-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `brief-generate-closed-pinned-${uniqueStamp()}@example.com`, async (page) => {
             const captured = await gtd.collect(page, 'Renew passport');
             const item = await gtd.updateItem(page, { ...captured, notes: LONG_NOTES });
             await gtd.flush(page);
@@ -230,7 +230,7 @@ test.describe('item brief — generated on demand', () => {
     });
 
     test('short notes produce the "too short" notice and no brief line', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `brief-generate-short-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `brief-generate-short-${uniqueStamp()}@example.com`, async (page) => {
             const captured = await gtd.collect(page, 'Book dentist');
             const item = await gtd.updateItem(page, { ...captured, notes: SHORT_NOTES });
             expect(SHORT_NOTES.length).toBeLessThan(160);
@@ -241,8 +241,9 @@ test.describe('item brief — generated on demand', () => {
             await expect(page.getByTestId('briefGenerateNotice')).toContainText('Notes are too short for a brief — the title already says it', {
                 timeout: 15_000,
             });
-            // A `skipped` row is `declined`: an empty read view (the caption stands in for the hint).
-            await expect(page.getByTestId('briefEmpty')).toHaveCount(1);
+            // A `skipped` row is `declined`: the caption takes the read view's place, no empty hint.
+            await expect(page.getByTestId('briefDeclinedNote')).toHaveText('No brief — the title already says it');
+            await expect(page.getByTestId('briefEmpty')).toHaveCount(0);
             await expect(page.getByTestId('briefLine')).toHaveCount(0);
             // The skip is recorded as a text-less row so the sweep will not keep retrying it.
             const skipped = await gtd.getItemBrief(page, item._id);

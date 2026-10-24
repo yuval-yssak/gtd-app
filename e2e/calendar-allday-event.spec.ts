@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Exercises the Phase 5 all-day form + Phase 7 calendar route. The user creates a single-day all-day
 // item via the form's new toggle; we then assert IDB stores it with the GCal-exclusive end-date
@@ -11,7 +12,7 @@ import { gtd } from './helpers/gtd';
 
 test.describe('Calendar — all-day events', () => {
     test('clarify-to-calendar with allDay:true stores YYYY-MM-DD dates and renders the All day chip', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `allday-event-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `allday-event-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'All-day single day');
             // Tomorrow as the inclusive single-day target. The form encodes timeEnd as
             // start + 1 day (GCal exclusive-end), so we round-trip both ends.

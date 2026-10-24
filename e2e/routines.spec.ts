@@ -2,12 +2,13 @@ import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice, withTwoLoggedInDevices } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Tests routine CRUD, cross-device sync, and item generation on completion.
 
 test.describe('routines', () => {
     test('create routine and verify in IDB and server', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `routine-create-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `routine-create-${uniqueStamp()}@example.com`, async (page) => {
             const routine = await gtd.createRoutine(page, {
                 title: 'Water plants',
                 routineType: 'nextAction',
@@ -34,7 +35,7 @@ test.describe('routines', () => {
     });
 
     test('routine syncs across devices', async ({ browser }) => {
-        const email = `routine-sync-${dayjs().valueOf()}@example.com`;
+        const email = `routine-sync-${uniqueStamp()}@example.com`;
         await withTwoLoggedInDevices(browser, email, async (page1, page2) => {
             const routine = await gtd.createRoutine(page1, {
                 title: 'Review inbox',
@@ -54,7 +55,7 @@ test.describe('routines', () => {
     });
 
     test('deactivating routine persists to server', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `routine-deactivate-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `routine-deactivate-${uniqueStamp()}@example.com`, async (page) => {
             const routine = await gtd.createRoutine(page, {
                 title: 'Meditate',
                 routineType: 'nextAction',
@@ -74,7 +75,7 @@ test.describe('routines', () => {
     });
 
     test('removing routine persists to server', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `routine-remove-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `routine-remove-${uniqueStamp()}@example.com`, async (page) => {
             const routine = await gtd.createRoutine(page, {
                 title: 'Temporary routine',
                 routineType: 'nextAction',
@@ -93,7 +94,7 @@ test.describe('routines', () => {
     });
 
     test('pause routine: flips active=false and trashes future open items', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `routine-pause-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `routine-pause-${uniqueStamp()}@example.com`, async (page) => {
             // Use today's startDate so materializePendingNextActionRoutines (the boot-tick) seeds the
             // first item with expectedBy=today — __gtd.createRoutine alone doesn't generate items;
             // that's handled by the routine editor in the UI path. The seeded item must have
@@ -123,7 +124,7 @@ test.describe('routines', () => {
     });
 
     test('resume routine via updateRoutine with new startDate materializes items', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `routine-resume-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `routine-resume-${uniqueStamp()}@example.com`, async (page) => {
             const routine = await gtd.createRoutine(page, {
                 title: 'Stretch',
                 routineType: 'nextAction',
@@ -149,7 +150,7 @@ test.describe('routines', () => {
         // includeAnchor=true). The previous "skip until startDate arrives" behaviour was a bug —
         // future-startDate routines went unbacked until the startDate crossed today AND the user
         // opened the app. The item is hidden until due via `ignoreBefore = expectedBy` (tickler).
-        await withOneLoggedInDevice(browser, `routine-future-start-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `routine-future-start-${uniqueStamp()}@example.com`, async (page) => {
             const futureStart = dayjs().add(7, 'day').format('YYYY-MM-DD');
             const routine = await gtd.createRoutine(page, {
                 title: 'Future start',
@@ -170,7 +171,7 @@ test.describe('routines', () => {
     });
 
     test('round-trips routine.startDate through push + bootstrap', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `routine-start-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `routine-start-${uniqueStamp()}@example.com`, async (page) => {
             const start = '2027-01-15';
             const routine = await gtd.createRoutine(page, {
                 title: 'Anchor test',
@@ -190,7 +191,7 @@ test.describe('routines', () => {
     test('deleting a nextAction routine trashes its open generated item', async ({ browser }) => {
         // Regression: DELETE previously only cascaded to status='calendar' items, orphaning
         // nextAction-status generated items forever.
-        await withOneLoggedInDevice(browser, `routine-delete-cascade-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `routine-delete-cascade-${uniqueStamp()}@example.com`, async (page) => {
             const today = dayjs().format('YYYY-MM-DD');
             const routine = await gtd.createRoutine(page, {
                 title: 'Withdraw cash',
@@ -214,7 +215,7 @@ test.describe('routines', () => {
     });
 
     test('floating monthly routine: late completion advances the next occurrence to the completion date, not the original due date', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `routine-floating-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `routine-floating-${uniqueStamp()}@example.com`, async (page) => {
             const startDate = dayjs().subtract(10, 'day').format('YYYY-MM-DD');
             const routine = await gtd.createRoutine(page, {
                 title: 'Floating monthly',
@@ -241,7 +242,7 @@ test.describe('routines', () => {
     });
 
     test("fixed monthly routine: completing today still lands the next occurrence on the pinned day, not today's day-of-month", async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `routine-fixed-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `routine-fixed-${uniqueStamp()}@example.com`, async (page) => {
             const pinnedDay = 5;
             const startDate = dayjs().subtract(1, 'month').date(pinnedDay).format('YYYY-MM-DD');
             const routine = await gtd.createRoutine(page, {

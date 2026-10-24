@@ -1,9 +1,9 @@
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { closeContextQuietly, withOneLoggedInDevice, withTwoLoggedInDevices } from './helpers/context';
 import { gtd } from './helpers/gtd';
 import { briefInputOf, briefTextOf, openBriefEditor } from './helpers/itemEditorLocators';
 import { loginAs } from './helpers/login';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // A brief is a one-line review-oriented condensation of an item, stored as a sidecar synced entity
 // (`itemBrief`, _id === item id). This spec covers the AUTHORED path: the brief rests read-only and
@@ -13,7 +13,7 @@ import { loginAs } from './helpers/login';
 
 test.describe('item brief — authored in the editor', () => {
     test('typing a brief persists across reload, syncs to a second device, and clearing removes it on both', async ({ browser }) => {
-        const email = `brief-authored-${dayjs().valueOf()}@example.com`;
+        const email = `brief-authored-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             const item = await gtd.collect(page, 'Renew passport');
             await gtd.updateItem(page, { ...item, notes: 'Form is half filled; still need photos and the old passport.' });
@@ -75,7 +75,7 @@ test.describe('item brief — authored in the editor', () => {
     });
 
     test('Enter commits the brief without leaving the page, and a brief written on another device fills a clean brief silently', async ({ browser }) => {
-        const email = `brief-enter-${dayjs().valueOf()}@example.com`;
+        const email = `brief-enter-${uniqueStamp()}@example.com`;
         await withTwoLoggedInDevices(browser, email, async (page1, page2) => {
             const item = await gtd.collect(page1, 'Book dentist');
             await gtd.flush(page1);
@@ -115,7 +115,7 @@ test.describe('item brief — authored in the editor', () => {
     });
 
     test('the brief rests read-only: clicking its text does nothing, the pencil opens the field with the pinned notice', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `brief-readonly-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `brief-readonly-${uniqueStamp()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'Renew passport');
             await gtd.setUserBrief(page, item, 'Photos are the blocker');
             await gtd.flush(page); // never navigate mid-flush — see clarify-to-routine.spec.ts
@@ -152,7 +152,7 @@ test.describe('item brief — authored in the editor', () => {
     });
 
     test('Escape commits and returns to the read view on the item page; Done commits and hides the notice', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `brief-escape-done-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `brief-escape-done-${uniqueStamp()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'Book dentist');
             await gtd.flush(page);
 
@@ -193,7 +193,7 @@ test.describe('item brief — authored in the editor', () => {
     });
 
     test('Tab moves from the field to Clear and Done without leaving edit mode; Enter on Done commits', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `brief-tab-done-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `brief-tab-done-${uniqueStamp()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'Renew passport');
             await gtd.setUserBrief(page, item, 'Photos are the blocker');
             await gtd.flush(page);
@@ -201,6 +201,10 @@ test.describe('item brief — authored in the editor', () => {
             await page.goto(`/item/${item._id}`);
             const briefInput = await openBriefEditor(page);
             await expect(briefInput).toBeFocused();
+            // The field and its Clear/Done buttons are announced as one named group.
+            const editorGroup = page.getByRole('group', { name: 'Brief editor' });
+            await expect(editorGroup.getByRole('textbox', { name: 'Brief' })).toBeVisible();
+            await expect(editorGroup.getByTestId('briefDoneButton')).toBeVisible();
             // Caret to the end directly, not with End: on macOS the first End in a textarea scrolls a
             // page taller than the viewport (the inbox Position row makes it so) instead of moving the caret.
             await briefInput.evaluate((el: HTMLTextAreaElement) => el.setSelectionRange(el.value.length, el.value.length));
@@ -227,15 +231,12 @@ test.describe('item brief — authored in the editor', () => {
     });
 
     test('Tab to Clear and Enter clears the brief, returns to the read view and focuses the pencil', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `brief-tab-clear-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `brief-tab-clear-${uniqueStamp()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'Renew passport');
             await gtd.setUserBrief(page, item, 'Photos are the blocker');
             await gtd.flush(page);
 
             await page.goto(`/item/${item._id}`);
-            // Let this device pull its own echo of the seeded brief BEFORE clearing: an in-flight pull
-            // that lands after the clear re-creates the row (pre-existing sync race, not this UI).
-            await gtd.pull(page);
             const briefInput = await openBriefEditor(page);
             await expect(briefInput).toBeFocused();
             await page.keyboard.press('Tab');

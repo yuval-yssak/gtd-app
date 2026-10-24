@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Verifies the item page (item.$itemId), however it is reached, exposes a header
 // copy-to-clipboard button plus the readable ID in ItemEditorBody's bottom meta row — and that
@@ -13,7 +13,7 @@ test.describe('Copy item ID', () => {
     test.use({ permissions: ['clipboard-read', 'clipboard-write'] });
 
     test('opened from a list row: the header copy button copies the item _id', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `copyid-row-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `copyid-row-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'Copy ID target');
             await gtd.clarifyToNextAction(page, inbox);
 
@@ -37,7 +37,7 @@ test.describe('Copy item ID', () => {
     test('opened by deep link: the page header exposes the same single copy button', async ({ browser }) => {
         // The click→clipboard wiring is proven by the row test above; here we only assert that a
         // direct URL entry surfaces the same (single) button.
-        await withOneLoggedInDevice(browser, `copyid-page-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `copyid-page-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'Copy ID page-mode target');
             await gtd.clarifyToNextAction(page, inbox);
 
@@ -56,7 +56,7 @@ test.describe('Copy item ID', () => {
         // must keep ItemEditorBody's meta-row button. Pins the OTHER branch of the suppression
         // gate — without this, inverting the condition would leave the whole suite green while
         // the wizard/weekly-review hosts silently lose their only copy affordance.
-        await withOneLoggedInDevice(browser, `copyid-wizard-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `copyid-wizard-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'Wizard copy-id target');
 
             await page.goto('/inbox');

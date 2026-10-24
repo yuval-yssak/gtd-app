@@ -2,6 +2,7 @@ import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // The item and routine editors are always pages: there is no "Item editor" setting any more, and
 // no dialog / popover / inline / instant variant. Every list gesture that edits lands on
@@ -17,7 +18,7 @@ async function expectItemPage(page: Page, itemId: string) {
 
 test.describe('Editors are pages', () => {
     test('a row click on every list page opens the item page', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `pages-rows-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `pages-rows-${uniqueStamp()}@example.com`, async (page) => {
             const tomorrow = dayjs().add(1, 'day');
             const inbox = await gtd.collect(page, 'Row inbox');
             const nextAction = await gtd.clarifyToNextAction(page, await gtd.collect(page, 'Row next action'));
@@ -51,7 +52,7 @@ test.describe('Editors are pages', () => {
     });
 
     test('an inbox status chip opens the item page preset to that status — never an instant move', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `pages-chips-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `pages-chips-${uniqueStamp()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'Chip target');
             await gtd.flush(page);
             // A value an older build saved ('instant' used to move the item with no editor at all).
@@ -74,7 +75,7 @@ test.describe('Editors are pages', () => {
     });
 
     test('Settings no longer offers an Item editor choice', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `pages-settings-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `pages-settings-${uniqueStamp()}@example.com`, async (page) => {
             await page.goto('/settings');
             await expect(page.getByText('Routine indicator')).toBeVisible();
             await expect(page.getByText('Item editor')).toHaveCount(0);
@@ -83,7 +84,7 @@ test.describe('Editors are pages', () => {
     });
 
     test('"Create routine" opens /routine/new; creating lands on the new routine and Back returns to the list', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `pages-new-routine-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `pages-new-routine-${uniqueStamp()}@example.com`, async (page) => {
             await page.goto('/routines');
             await page.getByTestId('newRoutineButton').click();
             await expect(page).toHaveURL(/\/routine\/new$/);
@@ -105,7 +106,7 @@ test.describe('Editors are pages', () => {
     });
 
     test('Cancel on /routine/new returns to the list without creating anything', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `pages-new-routine-cancel-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `pages-new-routine-cancel-${uniqueStamp()}@example.com`, async (page) => {
             await page.goto('/routines');
             await page.getByTestId('newRoutineButton').click();
             await expect(page).toHaveURL(/\/routine\/new$/);

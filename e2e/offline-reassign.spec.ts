@@ -52,8 +52,7 @@ test.describe('offline account actions — graceful block', () => {
             expect(reassignRequests).toHaveLength(0);
 
             // The item never left the source account (IDB read — works offline).
-            const after = (await gtd.listItems(page)).find((i) => i._id === item._id);
-            expect(after?.userId).toBe(active.userId);
+            expect((await gtd.getItem(page, item._id))?.userId).toBe(active.userId);
         });
     });
 

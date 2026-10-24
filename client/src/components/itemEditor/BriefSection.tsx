@@ -5,6 +5,7 @@ import type { BriefState } from '../../lib/briefSource';
 import { collapseToSingleLine } from '../../lib/singleLineText';
 import type { BriefOrigin } from '../../types/MyDB';
 import {
+    BRIEF_EDITOR_LABEL,
     BRIEF_LABEL,
     BRIEF_PINNED_NOTICE,
     BRIEF_PLACEHOLDER,
@@ -86,7 +87,7 @@ export function BriefSection({ value, state, origin, onChange, onCommit, generat
                 {isEditing ? (
                     <BriefEditor value={value} noticeId={noticeId} onChange={onChange} onLeave={commitOnLeave} onExit={commitAndExit} />
                 ) : (
-                    <BriefText text={value} emptyHint={describeEmptyBrief(state, isBriefable)} isLine={variant === 'line'} />
+                    <BriefReadView value={value} state={state} origin={origin} isBriefable={isBriefable} isLine={variant === 'line'} />
                 )}
                 {isEditing ? null : <BriefEditButton ref={pencilFocus.ref} onEdit={() => setIsEditing(true)} />}
                 <GenerateBriefButton generation={generation} isRegenerate={isRegenerate} fieldValue={value} />
@@ -98,7 +99,7 @@ export function BriefSection({ value, state, origin, onChange, onCommit, generat
                     {BRIEF_PINNED_NOTICE}
                 </Callout>
             )}
-            <BriefStateNote state={state} origin={origin} fieldValue={value} />
+            <BriefStateNote state={state} origin={origin} fieldValue={value} isEditing={isEditing} />
             <BriefGenerationFeedback generation={generation} />
         </div>
     );
@@ -138,8 +139,10 @@ interface BriefEditorProps {
  */
 function BriefEditor({ value, noticeId, onChange, onLeave, onExit }: BriefEditorProps) {
     return (
-        // biome-ignore lint/a11y/noStaticElementInteractions: not a control — it only hears focus leaving the field and its own buttons (see the comment above)
-        <div
+        // A labelled group: the field and its Clear/Done buttons are one unit, which is also what the
+        // blur handler below treats as "still editing". (base.css resets fieldset chrome.)
+        <fieldset
+            aria-label={BRIEF_EDITOR_LABEL}
             className={styles.briefEditor}
             onBlur={(e) => {
                 if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) {
@@ -189,11 +192,34 @@ function BriefEditor({ value, noticeId, onChange, onLeave, onExit }: BriefEditor
                 data-testid="briefField"
             />
             <BriefDoneButton onDone={() => onExit(value)} />
-        </div>
+        </fieldset>
     );
 }
 
-/** Read view: the brief as plain text, or a muted hint about why there is none. */
+interface BriefReadViewProps {
+    value: string;
+    state: BriefState;
+    origin: BriefOrigin | undefined;
+    isBriefable: boolean;
+    isLine: boolean;
+}
+
+/**
+ * Read view. A declined brief's caption takes the text's own place in the row — under an empty row
+ * it cost a whole blank line, enough to push the review card's metadata out of view.
+ */
+function BriefReadView({ value, state, origin, isBriefable, isLine }: BriefReadViewProps) {
+    if (isDeclinedNoteVisible({ state, fieldValue: value })) {
+        return (
+            <Text variant="bodySm" tone="secondary" className={styles.briefText} data-testid="briefDeclinedNote">
+                {describeDeclinedBrief(origin)}
+            </Text>
+        );
+    }
+    return <BriefText text={value} emptyHint={describeEmptyBrief(state, isBriefable)} isLine={isLine} />;
+}
+
+/** The brief as plain text, or a muted hint about why there is none. */
 function BriefText({ text, emptyHint, isLine }: { text: string; emptyHint: string; isLine: boolean }) {
     if (!text.trim()) {
         return (
@@ -310,28 +336,33 @@ function ReplaceConfirm({ onReplace, onKeep }: { onReplace: () => void; onKeep: 
     );
 }
 
+interface BriefStateNoteProps {
+    state: BriefState;
+    origin: BriefOrigin | undefined;
+    fieldValue: string;
+    isEditing: boolean;
+}
+
 /**
  * The at-most-one muted line under the brief that explains the row's state. `declined` is the
  * reason this exists: a text-less row would otherwise render as an ordinary empty field, leaving
  * the user unable to tell a deliberate "nothing to summarise" from a broken or pending feature.
  * Both states cost exactly one caption line, so a review card never grows taller than before.
  *
- * The declined caption tracks the LIVE field value (see `isDeclinedNoteVisible`), so it clears on
+ * At rest the declined caption lives in the row (`BriefReadView`); it moves here only while the
+ * field is open. It tracks the LIVE field value (see `isDeclinedNoteVisible`), so it clears on
  * the first keystroke rather than lingering over text the user is already writing.
  *
  * Rendered by BOTH variants, but `declined` only ever reaches the field one: `isBriefFirst`
  * returns false for it, so the host never picks `variant="line"` for a declined row (a line
  * variant would show this caption under an empty brief line, which reads as a bug).
  */
-function BriefStateNote({ state, origin, fieldValue }: { state: BriefState; origin: BriefOrigin | undefined; fieldValue: string }) {
+function BriefStateNote({ state, origin, fieldValue, isEditing }: BriefStateNoteProps) {
     if (state === 'pinnedStale') {
         return <BriefCaption text={BRIEF_STALE_MARKER} testId="briefStaleMarker" />;
     }
-    if (isDeclinedNoteVisible({ state, fieldValue })) {
-        // `declined` implies a stored row, so `origin` is always supplied by the real host. Fall
-        // back rather than render nothing: a missing prop must not silently restore the blank
-        // field this caption exists to replace.
-        return <BriefCaption text={describeDeclinedBrief(origin ?? 'model')} testId="briefDeclinedNote" />;
+    if (isEditing && isDeclinedNoteVisible({ state, fieldValue })) {
+        return <BriefCaption text={describeDeclinedBrief(origin)} testId="briefDeclinedNote" />;
     }
     return null;
 }

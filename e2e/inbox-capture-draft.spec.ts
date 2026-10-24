@@ -1,9 +1,9 @@
 import { expect, type Page, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import type { StoredDraft } from '../client/src/types/MyDB';
 import { withOneLoggedInDevice } from './helpers/context';
+import { CLIENT_URL } from './helpers/env';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
-const CLIENT_URL = 'http://localhost:4173';
 const NOTES_EDITOR_NAME = 'Notes (Markdown)';
 
 // Reads the drafts store through the dev-tools harness so the specs can wait for the debounced
@@ -14,7 +14,7 @@ function readDrafts(page: Page): Promise<StoredDraft[]> {
 
 test.describe('inbox capture draft persistence', () => {
     test('half-typed title + notes survive a page reload', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `capture-draft-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `capture-draft-${uniqueStamp()}@example.com`, async (page) => {
             await page.goto(`${CLIENT_URL}/inbox`);
             await page.getByPlaceholder("What's on your mind?").fill('Half-typed thought');
             await page.getByTestId('inboxAddNoteButton').click();
@@ -41,7 +41,7 @@ test.describe('inbox capture draft persistence', () => {
     });
 
     test('immediate SPA navigation flushes the draft before the debounce settles', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `capture-draft-nav-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `capture-draft-nav-${uniqueStamp()}@example.com`, async (page) => {
             await page.goto(`${CLIENT_URL}/inbox`);
             await page.getByPlaceholder("What's on your mind?").fill('Typed then bolted');
             // Navigate away right away — the unmount flush must persist the text without waiting
@@ -54,7 +54,7 @@ test.describe('inbox capture draft persistence', () => {
     });
 
     test('capturing the item clears the draft — a reload shows an empty capture field', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `capture-draft-clear-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `capture-draft-clear-${uniqueStamp()}@example.com`, async (page) => {
             await page.goto(`${CLIENT_URL}/inbox`);
             const capture = page.getByPlaceholder("What's on your mind?");
             await capture.fill('Commit me');

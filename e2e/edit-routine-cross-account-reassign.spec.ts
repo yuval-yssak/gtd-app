@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { resetServerForEmails, withTwoAccountsOnOneDevice } from './helpers/context';
+import { API_URL, CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
 
 // E2e for cross-account "edit + move" of a routine. The server's reassignRoutine path applies the
@@ -9,9 +10,9 @@ import { gtd } from './helpers/gtd';
 // rows on the source account, and Bob's copy starts fresh from the next tick. We pin both halves
 // here so a future refactor that re-introduces the transplant path fails loudly.
 
-const DEV_SEED_ENTITY_URL = 'http://localhost:4000/dev/reassign/seed-entity';
-const DEV_FIND_ENTITY_URL = 'http://localhost:4000/dev/reassign/find-entity';
-const INBOX_URL = 'http://localhost:4173/inbox';
+const DEV_SEED_ENTITY_URL = `${API_URL}/dev/reassign/seed-entity`;
+const DEV_FIND_ENTITY_URL = `${API_URL}/dev/reassign/find-entity`;
+const INBOX_URL = `${CLIENT_URL}/inbox`;
 
 async function seedRoutineOnServer(userId: string, overrides: Record<string, unknown> = {}): Promise<string> {
     const id = `seedr-${Math.random().toString(36).slice(2, 10)}`;

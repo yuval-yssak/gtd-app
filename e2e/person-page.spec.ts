@@ -1,14 +1,14 @@
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // /person/:id is a full-page editor (same autosaving body as the /people edit dialog) so external
 // deep links — e.g. the `url` the MCP server stamps on person tool responses — land somewhere real.
 
 test.describe('Person editor — page mode', () => {
     test('deep link renders the full-page editor and edits autosave', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `person-page-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `person-page-${uniqueStamp()}@example.com`, async (page) => {
             const person = await gtd.createPerson(page, { name: 'Carmel', email: 'carmel@example.com' });
 
             await page.goto(`/person/${person._id}`);
@@ -28,7 +28,7 @@ test.describe('Person editor — page mode', () => {
     });
 
     test('the back arrow leaves the page to the people list', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `person-page-back-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `person-page-back-${uniqueStamp()}@example.com`, async (page) => {
             const person = await gtd.createPerson(page, { name: 'Backer' });
 
             // Deep link (no in-app history) — back falls back to /people.
@@ -41,7 +41,7 @@ test.describe('Person editor — page mode', () => {
     });
 
     test('row click on /people opens the page; back restores the filtered list, query intact', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `person-page-nav-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `person-page-nav-${uniqueStamp()}@example.com`, async (page) => {
             await gtd.createPerson(page, { name: 'Navvy' });
             await gtd.createPerson(page, { name: 'Other' });
 
@@ -65,7 +65,7 @@ test.describe('Person editor — page mode', () => {
     });
 
     test('an unknown id shows the not-found copy instead of a broken page', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `person-page-404-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `person-page-404-${uniqueStamp()}@example.com`, async (page) => {
             await page.goto('/person/no-such-person-id');
             await expect(page.getByText('Person not found — they may have been deleted.')).toBeVisible();
             await page.getByRole('button', { name: 'Back to People' }).click();

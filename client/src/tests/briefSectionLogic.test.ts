@@ -68,6 +68,10 @@ describe('describeDeclinedBrief', () => {
         expect(describeDeclinedBrief('user')).toBe(BRIEF_DECLINED_MODEL_NOTE);
         expect(describeDeclinedBrief('agent')).toBe(BRIEF_DECLINED_MODEL_NOTE);
     });
+
+    it('still explains itself when the host supplied no origin', () => {
+        expect(describeDeclinedBrief(undefined)).toBe(BRIEF_DECLINED_MODEL_NOTE);
+    });
 });
 
 describe('isDeclinedNoteVisible', () => {

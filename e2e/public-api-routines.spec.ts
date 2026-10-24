@@ -1,8 +1,7 @@
 import { type APIRequestContext, type Browser, type BrowserContext, expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { resetServerForEmails, withOneLoggedInDevice } from './helpers/context';
-
-const API_URL = 'http://localhost:4000';
+import { API_URL } from './helpers/env';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 /**
  * Phase 4 e2e for /v1/routines and the composite gestures (pause/resume/split). Drives a
@@ -35,7 +34,7 @@ async function withBearerOnlyContext(browser: Browser, fn: (ctx: BrowserContext)
 
 test.describe('public /v1/routines lifecycle', () => {
     test('create → pause → resume → split → delete (cascade marks the head capped)', async ({ browser }) => {
-        const email = `public-api-routines-${dayjs().valueOf()}@example.com`;
+        const email = `public-api-routines-${uniqueStamp()}@example.com`;
         await resetServerForEmails([email]);
 
         await withOneLoggedInDevice(browser, email, async (page) => {
@@ -95,7 +94,7 @@ test.describe('public /v1/routines lifecycle', () => {
     });
 
     test('routines.read-only token gets 403 on pause/resume/split (atomic — no partial writes)', async ({ browser }) => {
-        const email = `public-api-routines-readonly-${dayjs().valueOf()}@example.com`;
+        const email = `public-api-routines-readonly-${uniqueStamp()}@example.com`;
         await resetServerForEmails([email]);
 
         await withOneLoggedInDevice(browser, email, async (page) => {

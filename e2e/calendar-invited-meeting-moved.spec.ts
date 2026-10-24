@@ -1,6 +1,7 @@
 import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { closeContextQuietly, resetServerForEmails } from './helpers/context';
+import { API_URL, CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
 import { loginAs } from './helpers/login';
 
@@ -12,9 +13,8 @@ import { loginAs } from './helpers/login';
 // path a real Google webhook delivery takes) and asserts the client's IDB row tracks the
 // moved timeStart after a /sync/pull.
 
-const DEV_SEED_CALENDAR_URL = 'http://localhost:4000/dev/calendar/seed-integration';
-const DEV_SIMULATE_WEBHOOK_URL = 'http://localhost:4000/dev/calendar/simulate-webhook-event';
-const CLIENT_URL = 'http://localhost:4173';
+const DEV_SEED_CALENDAR_URL = `${API_URL}/dev/calendar/seed-integration`;
+const DEV_SIMULATE_WEBHOOK_URL = `${API_URL}/dev/calendar/simulate-webhook-event`;
 
 interface SeedCalendarResult {
     integrationId: string;
@@ -297,7 +297,7 @@ test.describe('calendar — invited meeting moved by organizer', () => {
 
             // Server ground truth has the moved time, and — the fix — the next pull delivers it to
             // IDB even though the run's clock (and the snapshot's updatedTs) predate the cursor.
-            const serverRes = await fetch(`http://localhost:4000/dev/reassign/find-entity?collection=items&user=${encodeURIComponent(userId)}&status=calendar`);
+            const serverRes = await fetch(`${API_URL}/dev/reassign/find-entity?collection=items&user=${encodeURIComponent(userId)}&status=calendar`);
             const { doc } = (await serverRes.json()) as { doc: { timeStart?: string } | null };
             expect(doc?.timeStart).toBe(movedStart);
 

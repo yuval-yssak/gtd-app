@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Verifies the Process Inbox wizard at /process-inbox. It hosts the full ItemEditorBody for each
 // item (status chips, per-status forms, account picker), sequenced one item at a time — one shared
@@ -14,7 +14,7 @@ import { gtd } from './helpers/gtd';
 
 test.describe('Process Inbox wizard', () => {
     test('walks through three items, saving each via the body', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `pi-walk-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `pi-walk-${uniqueStamp()}@example.com`, async (page) => {
             const a = await gtd.collect(page, 'PI item A');
             const b = await gtd.collect(page, 'PI item B');
             const c = await gtd.collect(page, 'PI item C');
@@ -60,7 +60,7 @@ test.describe('Process Inbox wizard', () => {
     });
 
     test('with an inbox search active, walks only the matching items and returns to the searched inbox', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `pi-search-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `pi-search-${uniqueStamp()}@example.com`, async (page) => {
             const bank = await gtd.collect(page, 'Call the bank');
             const dana = await gtd.collect(page, 'Email Dana');
             await gtd.flush(page);

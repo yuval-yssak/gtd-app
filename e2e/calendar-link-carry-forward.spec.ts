@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { closeContextQuietly, resetServerForEmails } from './helpers/context';
+import { API_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
 import { loginAs } from './helpers/login';
 
@@ -19,9 +20,9 @@ import { loginAs } from './helpers/login';
 // insert), and the repair sweep through /dev/calendar/simulate-relink-sweep, whose stub provider
 // serves a caller-supplied event set and records what would have been pushed.
 
-const DEV_SEED_CALENDAR_URL = 'http://localhost:4000/dev/calendar/seed-integration';
-const DEV_SIMULATE_LINK_STAMP_URL = 'http://localhost:4000/dev/calendar/simulate-link-stamp';
-const DEV_SIMULATE_RELINK_SWEEP_URL = 'http://localhost:4000/dev/calendar/simulate-relink-sweep';
+const DEV_SEED_CALENDAR_URL = `${API_URL}/dev/calendar/seed-integration`;
+const DEV_SIMULATE_LINK_STAMP_URL = `${API_URL}/dev/calendar/simulate-link-stamp`;
+const DEV_SIMULATE_RELINK_SWEEP_URL = `${API_URL}/dev/calendar/simulate-relink-sweep`;
 
 async function postDevRoute<T>(url: string, body: unknown): Promise<T> {
     const res = await fetch(url, {

@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // DST nights are where a fixed-24h scheduler is provably wrong by an hour: the day clock instead
 // targets the NEXT LOCAL MIDNIGHT, so a 25-hour fall-back day and a 23-hour spring-forward day
@@ -16,7 +16,7 @@ test.describe('Tickler DST-night rollover (America/New_York)', () => {
     test('fall-back night: the 25-hour day still reveals at local midnight, not an hour early', async ({ browser }) => {
         await withOneLoggedInDevice(
             browser,
-            `tickler-dst-fall-${dayjs().valueOf()}@example.com`,
+            `tickler-dst-fall-${uniqueStamp()}@example.com`,
             async (page) => {
                 const captured = await gtd.collect(page, 'Rake the leaves');
                 await gtd.clarifyToNextAction(page, captured, { ignoreBefore: '2026-11-02' });
@@ -51,7 +51,7 @@ test.describe('Tickler DST-night rollover (America/New_York)', () => {
     test('spring-forward night: the 23-hour day reveals at local midnight, not an hour late', async ({ browser }) => {
         await withOneLoggedInDevice(
             browser,
-            `tickler-dst-spring-${dayjs().valueOf()}@example.com`,
+            `tickler-dst-spring-${uniqueStamp()}@example.com`,
             async (page) => {
                 const captured = await gtd.collect(page, 'Plant tomato seedlings');
                 await gtd.clarifyToNextAction(page, captured, { ignoreBefore: '2027-03-15' });

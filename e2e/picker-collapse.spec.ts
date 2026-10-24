@@ -1,7 +1,7 @@
 import { expect, type Page, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Long context/person chip clouds collapse to the top-8 usage-ranked options behind a "+N more"
 // expander (expanded view is alphabetical). The next-actions filter rows additionally show only
@@ -23,7 +23,7 @@ async function chipTexts(page: Page, testId: string): Promise<string[]> {
 
 test.describe('collapsible usage-ranked pickers', () => {
     test('item editor collapses 12 contexts to the top 8 (most-used first) and expands alphabetically', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `collapse-editor-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `collapse-editor-${uniqueStamp()}@example.com`, async (page) => {
             const contexts = await seedTwelveContexts(page);
             const ctxL = contexts.get('L');
             if (!ctxL) throw new Error('expected Ctx L to be seeded');
@@ -54,7 +54,7 @@ test.describe('collapsible usage-ranked pickers', () => {
     });
 
     test('next-actions filter rows offer only live options, faceted by the other filters', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `live-options-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `live-options-${uniqueStamp()}@example.com`, async (page) => {
             const phone = await gtd.createWorkContext(page, 'Phone');
             const errands = await gtd.createWorkContext(page, 'Errands');
             await gtd.createWorkContext(page, 'Ghost'); // never referenced — must not render a chip
@@ -78,7 +78,7 @@ test.describe('collapsible usage-ranked pickers', () => {
     });
 
     test('search page filters by chip rows instead of dropdowns, with collapse', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `search-chips-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `search-chips-${uniqueStamp()}@example.com`, async (page) => {
             const contexts = await seedTwelveContexts(page);
             const ctxC = contexts.get('C');
             if (!ctxC) throw new Error('expected Ctx C to be seeded');

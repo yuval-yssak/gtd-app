@@ -12,6 +12,7 @@ import type {
     StoredWorkContext,
     SyncOperation,
 } from '../../client/src/types/MyDB';
+import { API_URL } from './env';
 
 /**
  * Awaits the dev-tools harness on the given page. mountDevTools() runs after the async
@@ -34,6 +35,9 @@ const gtdImpl = {
     // ── List / query ─────────────────────────────────────────────────────────
     listItems: (page: Page): Promise<StoredItem[]> =>
         page.evaluate(() => (window as unknown as { __gtd: { listItems(): Promise<StoredItem[]> } }).__gtd.listItems()),
+
+    getItem: (page: Page, itemId: string): Promise<StoredItem | undefined> =>
+        page.evaluate((id) => (window as unknown as { __gtd: { getItem(id: string): Promise<StoredItem | undefined> } }).__gtd.getItem(id), itemId),
 
     listNextActions: (page: Page, filters: NextActionFilters = {}): Promise<StoredItem[]> =>
         page.evaluate(
@@ -317,15 +321,16 @@ const gtdImpl = {
 
     // ── Server verification ──────────────────────────────────────────────────
     fetchBootstrap: (page: Page): Promise<{ items: StoredItem[]; routines: StoredRoutine[]; people: StoredPerson[]; workContexts: StoredWorkContext[] }> =>
-        page.evaluate(async () => {
-            const res = await fetch('http://localhost:4000/sync/bootstrap', { credentials: 'include' });
+        // Runs in the browser (the session cookie rides along), so the API URL is passed in.
+        page.evaluate(async (apiUrl) => {
+            const res = await fetch(`${apiUrl}/sync/bootstrap`, { credentials: 'include' });
             return res.json() as Promise<{
                 items: StoredItem[];
                 routines: StoredRoutine[];
                 people: StoredPerson[];
                 workContexts: StoredWorkContext[];
             }>;
-        }),
+        }, API_URL),
 
     // ── Device + notifications introspection (Step 1 multi-account work) ─────
     getDeviceId: (page: Page): Promise<string> => page.evaluate(() => (window as unknown as { __gtd: { getDeviceId(): Promise<string> } }).__gtd.getDeviceId()),

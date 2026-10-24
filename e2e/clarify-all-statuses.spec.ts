@@ -2,13 +2,14 @@ import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Tests clarify paths not covered by collect-and-clarify.spec.ts:
 // calendar, waiting-for, trash, and batch clarification to multiple statuses.
 
 test.describe('clarify to all statuses', () => {
     test('clarify to calendar with time fields', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `cal-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `cal-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'Team standup');
             const timeStart = dayjs().add(1, 'day').hour(9).minute(0).second(0).toISOString();
             const timeEnd = dayjs().add(1, 'day').hour(9).minute(30).second(0).toISOString();
@@ -30,7 +31,7 @@ test.describe('clarify to all statuses', () => {
     });
 
     test('clarify to waiting-for with person and expected-by', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wf-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wf-${uniqueStamp()}@example.com`, async (page) => {
             const person = await gtd.createPerson(page, { name: 'Alice', email: 'alice@example.com' });
             const inbox = await gtd.collect(page, 'Wait for Alice');
             const expectedBy = dayjs().add(7, 'day').format('YYYY-MM-DD');
@@ -57,7 +58,7 @@ test.describe('clarify to all statuses', () => {
     });
 
     test('clarify to waiting-for with NO person — person is optional', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `wfnp-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `wfnp-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'Wait for the part to arrive');
             const expectedBy = dayjs().add(10, 'day').format('YYYY-MM-DD');
 
@@ -79,7 +80,7 @@ test.describe('clarify to all statuses', () => {
     });
 
     test('clarify to someday/maybe with expectedBy and ignoreBefore', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `sm-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `sm-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'Learn to sail someday');
             const expectedBy = dayjs().add(90, 'day').format('YYYY-MM-DD');
             const ignoreBefore = dayjs().add(30, 'day').format('YYYY-MM-DD');
@@ -101,7 +102,7 @@ test.describe('clarify to all statuses', () => {
     });
 
     test('clarify to trash', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `trash-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `trash-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'Junk mail');
             const trashed = await gtd.clarifyToTrash(page, inbox);
             expect(trashed.status).toBe('trash');
@@ -115,7 +116,7 @@ test.describe('clarify to all statuses', () => {
     });
 
     test('batch clarify multiple items to different statuses', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `batch-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `batch-${uniqueStamp()}@example.com`, async (page) => {
             const itemA = await gtd.collect(page, 'Batch A — next action');
             const itemB = await gtd.collect(page, 'Batch B — done');
             const itemC = await gtd.collect(page, 'Batch C — trash');

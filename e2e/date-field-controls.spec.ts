@@ -3,6 +3,7 @@ import dayjs from 'dayjs';
 import type { StoredItem } from '../client/src/types/MyDB';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Every date field in the app is the shared DateField: native <input type="date"> plus a Clear
 // button (the mobile wheel pickers cannot empty a date once set) and a Pick button opening a
@@ -35,7 +36,7 @@ test.describe('Date field controls', () => {
     test('phone: the Clear button empties Expected by and the save drops the date', async ({ browser }) => {
         await withOneLoggedInDevice(
             browser,
-            `date-clear-phone-${dayjs().valueOf()}@example.com`,
+            `date-clear-phone-${uniqueStamp()}@example.com`,
             async (page) => {
                 const captured = await gtd.collect(page, 'Renew passport');
                 const expectedBy = dayjs().add(10, 'day').format(ISO_DAY);
@@ -60,7 +61,7 @@ test.describe('Date field controls', () => {
     test('phone: the Clear button empties the tickler date on a next action', async ({ browser }) => {
         await withOneLoggedInDevice(
             browser,
-            `date-clear-tickler-${dayjs().valueOf()}@example.com`,
+            `date-clear-tickler-${uniqueStamp()}@example.com`,
             async (page) => {
                 const captured = await gtd.collect(page, 'Snoozed chore');
                 await gtd.clarifyToNextAction(page, captured, { ignoreBefore: dayjs().add(4, 'day').format(ISO_DAY) });
@@ -77,7 +78,7 @@ test.describe('Date field controls', () => {
     });
 
     test('desktop: the picker sets a date by quick pick and by month grid', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `date-pick-desktop-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `date-pick-desktop-${uniqueStamp()}@example.com`, async (page) => {
             const captured = await gtd.collect(page, 'Book dentist');
             await gtd.clarifyToNextAction(page, captured);
             await openItemPage(page, captured._id);
@@ -106,7 +107,7 @@ test.describe('Date field controls', () => {
     });
 
     test('desktop: reopening the picker returns to the month of the current value', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `date-pick-reseed-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `date-pick-reseed-${uniqueStamp()}@example.com`, async (page) => {
             // Two months out so "value's month" and "today's month" cannot coincide.
             const twoMonthsOut = dayjs().add(2, 'month').date(10);
             const captured = await gtd.collect(page, 'Plan quarterly review');
@@ -128,7 +129,7 @@ test.describe('Date field controls', () => {
     });
 
     test('desktop: clearing from the keyboard keeps focus in the field; a pointer click leaves focus alone', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `date-clear-focus-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `date-clear-focus-${uniqueStamp()}@example.com`, async (page) => {
             const captured = await gtd.collect(page, 'Return library books');
             await gtd.clarifyToNextAction(page, captured, { expectedBy: dayjs().add(3, 'day').format(ISO_DAY) });
             await openItemPage(page, captured._id);
@@ -149,7 +150,7 @@ test.describe('Date field controls', () => {
     });
 
     test('desktop: typing into the native input still works alongside the picker', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `date-type-desktop-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `date-type-desktop-${uniqueStamp()}@example.com`, async (page) => {
             const captured = await gtd.collect(page, 'File taxes');
             await gtd.clarifyToNextAction(page, captured);
             await openItemPage(page, captured._id);
@@ -166,7 +167,7 @@ test.describe('Date field controls', () => {
     test('phone: the Clear button empties a calendar end time and the save falls back to one hour', async ({ browser }) => {
         await withOneLoggedInDevice(
             browser,
-            `time-clear-phone-${dayjs().valueOf()}@example.com`,
+            `time-clear-phone-${uniqueStamp()}@example.com`,
             async (page) => {
                 const captured = await gtd.collect(page, 'Team standup');
                 const start = dayjs().add(1, 'day').hour(9).minute(0).second(0).millisecond(0);
@@ -186,7 +187,7 @@ test.describe('Date field controls', () => {
     });
 
     test('clearing the required calendar Date disables Save instead of silently saving "now"', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `date-clear-required-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `date-clear-required-${uniqueStamp()}@example.com`, async (page) => {
             const captured = await gtd.collect(page, 'Dentist appointment');
             const start = dayjs().add(2, 'day').hour(14).minute(0).second(0).millisecond(0);
             await gtd.clarifyToCalendar(page, captured, { timeStart: start.toISOString(), timeEnd: start.add(1, 'hour').toISOString() });

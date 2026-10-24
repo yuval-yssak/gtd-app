@@ -3,6 +3,8 @@ import { type BriefState, isPinnedOrigin } from '../../lib/briefSource';
 import type { BriefOrigin, StoredItem, StoredItemBrief } from '../../types/MyDB';
 
 export const BRIEF_LABEL = 'Brief';
+/** Names the open field + its Clear/Done buttons as one group; distinct from BRIEF_LABEL so a label query still finds only the field. */
+export const BRIEF_EDITOR_LABEL = 'Brief editor';
 export const BRIEF_PLACEHOLDER = 'One line for the weekly review';
 /** Read view of an empty brief on an open item: says the brief is not the user's job, so the pencil reads as optional. */
 export const BRIEF_EMPTY_HINT = 'No brief yet — one is written automatically';
@@ -57,8 +59,12 @@ export const BRIEF_DECLINED_NOTICE = 'Nothing in the notes worth condensing — 
  * The muted caption that stands in for an empty Brief field on a `declined` row. Both text-less
  * origins reach this; the distinction is WHY nothing was written, which is what the user cannot
  * otherwise tell apart from a broken or still-loading feature.
+ *
+ * `declined` implies a stored row, so the real host always supplies `origin`; without one it still
+ * answers rather than render nothing — a missing prop must not silently restore the blank field
+ * this caption exists to replace.
  */
-export function describeDeclinedBrief(origin: BriefOrigin): string {
+export function describeDeclinedBrief(origin: BriefOrigin | undefined): string {
     return origin === 'skipped' ? BRIEF_DECLINED_SKIPPED_NOTE : BRIEF_DECLINED_MODEL_NOTE;
 }
 

@@ -3,7 +3,7 @@ import type { IDBPDatabase } from 'idb';
 import { briefSourceHash } from '../lib/briefSource';
 import type { MyDB, StoredItem, StoredItemBrief } from '../types/MyDB';
 import { deleteItemBriefById, getItemBriefById, putItemBrief } from './itemBriefHelpers';
-import { queueSyncOp } from './syncHelpers';
+import { queueDeleteThenRemove, queueSyncOp } from './syncHelpers';
 
 function nowIso(): string {
     return dayjs().toISOString();
@@ -51,6 +51,7 @@ export async function clearBrief(db: IDBPDatabase<MyDB>, itemId: string): Promis
     if (!existing) {
         return;
     }
-    await deleteItemBriefById(db, itemId);
-    await queueSyncOp(db, { opType: 'delete', entityType: 'itemBrief', entityId: itemId, snapshot: null, userId: existing.userId });
+    await queueDeleteThenRemove(db, { opType: 'delete', entityType: 'itemBrief', entityId: itemId, snapshot: null, userId: existing.userId }, () =>
+        deleteItemBriefById(db, itemId),
+    );
 }

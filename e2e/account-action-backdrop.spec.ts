@@ -2,9 +2,9 @@ import type { Page } from '@playwright/test';
 import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice, withTwoAccountsOnOneDevice } from './helpers/context';
+import { CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
-
-const CLIENT_URL = 'http://localhost:4173';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // AccountSwitcher renders one trigger in the mobile AppBar (display:none on desktop) and one
 // in the desktop sidebar. visible=true picks the one rendered at the current viewport.
@@ -44,7 +44,7 @@ async function failBetterAuthSignOut(page: Page): Promise<void> {
 
 test.describe('account action backdrop', () => {
     test('sign-out renders the blocking backdrop with a "Signing out…" label while in flight', async ({ browser }) => {
-        const email = `signout-backdrop-${dayjs().valueOf()}@example.com`;
+        const email = `signout-backdrop-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             await page.goto(`${CLIENT_URL}/inbox`);
             await stallSignOutEndpoint(page, 1500);
@@ -66,7 +66,7 @@ test.describe('account action backdrop', () => {
     });
 
     test('sign-out failure clears the backdrop and surfaces an error to the user', async ({ browser }) => {
-        const email = `signout-fail-${dayjs().valueOf()}@example.com`;
+        const email = `signout-fail-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             await page.goto(`${CLIENT_URL}/inbox`);
             await failBetterAuthSignOut(page);
@@ -122,7 +122,7 @@ test.describe('account action backdrop', () => {
     });
 
     test('the backdrop blocks input while the sign-out chain is in flight', async ({ browser }) => {
-        const email = `signout-blocking-${dayjs().valueOf()}@example.com`;
+        const email = `signout-blocking-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             await page.goto(`${CLIENT_URL}/inbox`);
             await stallSignOutEndpoint(page, 1500);

@@ -1,7 +1,9 @@
 import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
+import { API_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Regression for the "stale past exceptions materialize on reconnect" bug. A yearly-birthday
 // routine carries `routineExceptions` from years ago (e.g. a `* […]` title edit on 2021-09-24).
@@ -12,8 +14,8 @@ import { gtd } from './helpers/gtd';
 // Drives `applyExceptionToItems` directly via /dev/calendar/simulate-routine-exception — the same
 // helper `syncRoutineExceptions` invokes for each entry `getExceptions` returns.
 
-const DEV_SEED_INTEGRATION_URL = 'http://localhost:4000/dev/calendar/seed-integration';
-const DEV_SIMULATE_EXCEPTION_URL = 'http://localhost:4000/dev/calendar/simulate-routine-exception';
+const DEV_SEED_INTEGRATION_URL = `${API_URL}/dev/calendar/seed-integration`;
+const DEV_SIMULATE_EXCEPTION_URL = `${API_URL}/dev/calendar/simulate-routine-exception`;
 
 interface SeedResponse {
     integrationId: string;
@@ -49,7 +51,7 @@ async function simulateRoutineException(body: {
 
 test.describe('calendar — reconnect does not materialize past exceptions', () => {
     test('ancient `* […]` exception on a yearly routine does NOT create a 2021-dated calendar item', async ({ browser }) => {
-        const email = `past-ex-${dayjs().valueOf()}@example.com`;
+        const email = `past-ex-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             const userId = (await gtd.getActiveAccountId(page)) as string;
             const seeded = await seedIntegration(userId);

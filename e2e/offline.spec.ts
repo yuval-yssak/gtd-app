@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withOneLoggedInDevice, withTwoLoggedInDevices } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Uses Playwright's context.setOffline() to simulate network loss.
 // The browser dispatches real 'online'/'offline' window events, so the app's
@@ -9,7 +9,7 @@ import { gtd } from './helpers/gtd';
 
 test.describe('offline behaviour', () => {
     test('offline queue flushes automatically on reconnect', async ({ browser }) => {
-        const email = `offline-flush-${dayjs().valueOf()}@example.com`;
+        const email = `offline-flush-${uniqueStamp()}@example.com`;
         await withTwoLoggedInDevices(browser, email, async (page1, page2) => {
             // Establish an initial item so device-2 has something to sync.
             await gtd.collect(page1, 'Online item');
@@ -51,7 +51,7 @@ test.describe('offline behaviour', () => {
     });
 
     test('app shows cached IDB data while offline', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `offline-cache-${dayjs().valueOf()}@example.com`, async (page) => {
+        await withOneLoggedInDevice(browser, `offline-cache-${uniqueStamp()}@example.com`, async (page) => {
             // Create items and flush them so the server has them and IDB is populated.
             await gtd.collect(page, 'Cached item A');
             await gtd.collect(page, 'Cached item B');
