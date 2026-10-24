@@ -3,13 +3,11 @@ import dayjs from 'dayjs';
 import type { StoredItem } from '../client/src/types/MyDB';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { longPressDrag, PHONE, touch } from './helpers/touch';
 
 // Phase 4 — mobile reorder. Playwright's `touchscreen` only taps, so the long-press drag is driven
 // through CDP `Input.dispatchTouchEvent`. A phone context (touch + coarse pointer) also turns on the
 // always-visible handle and the "Move to…" overflow (one `(hover: none) and (pointer: coarse)` predicate).
-const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true };
-const LONG_PRESS_MS = 350; // > the hook's 250 ms
-
 const rowTitles = async (page: Page) => (await page.getByTestId('nextActionItemRow').allInnerTexts()).map((t) => t.split('\n')[0]?.trim() ?? '');
 
 async function seedUndated(page: Page, titles: string[]): Promise<StoredItem[]> {
@@ -21,35 +19,15 @@ async function seedUndated(page: Page, titles: string[]): Promise<StoredItem[]> 
     return items;
 }
 
-async function center(page: Page, itemId: string, testId: string): Promise<{ x: number; y: number }> {
-    const box = await page.locator(`[data-item-id="${itemId}"]`).getByTestId(testId).boundingBox();
-    if (!box) throw new Error(`no box for ${testId} of ${itemId}`);
-    return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-}
-
 async function rowCenterY(page: Page, title: string): Promise<number> {
     const box = await page.getByTestId('nextActionItemRow').filter({ hasText: title }).boundingBox();
     if (!box) throw new Error(`no row for ${title}`);
     return box.y + box.height / 2;
 }
 
-async function touch(cdp: CDPSession, type: 'touchStart' | 'touchMove' | 'touchEnd', points: Array<{ x: number; y: number }>): Promise<void> {
-    await cdp.send('Input.dispatchTouchEvent', { type, touchPoints: points.map((p) => ({ x: p.x, y: p.y, radiusX: 4, radiusY: 4, force: 1, id: 1 })) });
-}
-
-/** Long-press the handle, glide to `targetY` in steps, hold still past the shift transition, release. */
-async function longPressDrag(page: Page, cdp: CDPSession, itemId: string, targetY: number): Promise<void> {
-    const start = await center(page, itemId, 'nextActionDragHandle');
-    await touch(cdp, 'touchStart', [start]);
-    await page.waitForTimeout(LONG_PRESS_MS);
-    const steps = 12;
-    for (let i = 1; i <= steps; i++) {
-        await touch(cdp, 'touchMove', [{ x: start.x, y: start.y + ((targetY - start.y) * i) / steps }]);
-        await page.waitForTimeout(16);
-    }
-    // A user pauses before letting go; the drop must not depend on releasing mid-transition.
-    await page.waitForTimeout(400);
-    await touch(cdp, 'touchEnd', []);
+/** Long-press the row's handle, glide to `targetY`, release. */
+async function longPressDragRow(page: Page, cdp: CDPSession, itemId: string, targetY: number): Promise<void> {
+    await longPressDrag(page, cdp, page.locator(`[data-item-id="${itemId}"]`).getByTestId('nextActionDragHandle'), targetY);
 }
 
 test.describe('Next actions — mobile reorder', () => {
@@ -67,7 +45,7 @@ test.describe('Next actions — mobile reorder', () => {
                 const cdp = await page.context().newCDPSession(page);
                 // Drop Alpha just above Charlie's midpoint → slot 0.
                 if (!a) throw new Error('seed');
-                await longPressDrag(page, cdp, a._id, (await rowCenterY(page, 'Charlie')) - 10);
+                await longPressDragRow(page, cdp, a._id, (await rowCenterY(page, 'Charlie')) - 10);
                 await expect.poll(() => rowTitles(page)).toEqual(['Alpha', 'Charlie', 'Bravo']);
                 await gtd.flush(page);
                 await page.reload();

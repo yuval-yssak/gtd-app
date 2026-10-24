@@ -13,6 +13,8 @@ declare const styles: {
     readonly revealLeft: string;
     readonly revealRight: string;
     readonly sheetHandle: string;
+    readonly swipeHandle: string;
+    readonly swipeItem: string;
     readonly swipeWrapper: string;
     readonly tabs: string;
 };

@@ -5,7 +5,8 @@ import { ROW_BUTTON_ATTR, ROW_ITEM_ATTR, ROW_SECTION_ATTR } from '../../lib/next
 import type { StoredItem } from '../../types/MyDB';
 import styles from './RankedList.module.css';
 
-type ItemRow = Extract<FlatRow<StoredItem>, { kind: 'item' }>;
+/** One item row of a ranked list's flattened rows (headers excluded). */
+export type ItemRow = Extract<FlatRow<StoredItem>, { kind: 'item' }>;
 
 /**
  * Props for a ranked row's ListItem: the drag classes, the measured displacement, and the data

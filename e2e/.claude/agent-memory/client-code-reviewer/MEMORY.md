@@ -81,3 +81,4 @@
 - [Root onKeyDown gets portal keys](feedback_root_onkeydown_gets_portal_keys.md) — Editor-root letter shortcuts fire from open Select menus / nested dialogs via React bubbling; demand containment guard.
 - [Body shortcut bypasses host primary](feedback_body_shortcut_bypasses_host_primary.md) — Cmd+Enter in ItemEditorBody skips renderActions hosts' armExplicitSave/undo; grep hosts.
 - [Stale-snapshot race fix leaves side effects](feedback_stale_snapshot_fix_leaves_side_effects.md) — Functional-updater fixes repair state, but `textAutosave.reset` etc. still decide from the stale snapshot; silent text loss.
+- [Partial touch stopPropagation leaves stale swipe start](feedback_partial_touch_stoppropagation_stale_start.md) — Stopping only touchstart lets move/end reach useSwipeGesture with a stale startX; drag/tap on the child trashes the row.

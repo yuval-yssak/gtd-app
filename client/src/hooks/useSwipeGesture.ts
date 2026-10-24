@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { createSwipeTracker, TAP_THRESHOLD_PX } from '../lib/swipeTracker';
 
 interface UseSwipeGestureOptions {
     onSwipeRight: () => void;
@@ -14,6 +15,7 @@ interface UseSwipeGestureResult {
         onTouchStart: (e: React.TouchEvent) => void;
         onTouchMove: (e: React.TouchEvent) => void;
         onTouchEnd: () => void;
+        onTouchCancel: () => void;
     };
     /** Current horizontal offset applied to the row while the finger is down */
     translateX: number;
@@ -28,14 +30,9 @@ interface UseSwipeGestureResult {
     wasDragRef: React.MutableRefObject<boolean>;
 }
 
-/** Minimum px travel that distinguishes a drag from a tap */
-const TAP_THRESHOLD_PX = 10;
-
 export function useSwipeGesture({ onSwipeRight, onSwipeLeft, threshold = 80 }: UseSwipeGestureOptions): UseSwipeGestureResult {
-    const startXRef = useRef<number>(0);
-    // Ref (not state) for the live delta so onTouchEnd always reads the current value,
-    // not a value captured by a stale closure from a previous render.
-    const currentDeltaRef = useRef<number>(0);
+    // Created once (lazy init): the tracker holds the live gesture, so onTouchEnd never reads a stale render's value.
+    const [tracker] = useState(() => createSwipeTracker(threshold));
     const wasDragRef = useRef<boolean>(false);
     const [translateX, setTranslateX] = useState(0);
     const [committedDirection, setCommittedDirection] = useState<SwipeDirection>(null);
@@ -45,55 +42,43 @@ export function useSwipeGesture({ onSwipeRight, onSwipeLeft, threshold = 80 }: U
         if (!e.touches[0]) {
             return;
         }
-        startXRef.current = e.touches[0].clientX;
-        currentDeltaRef.current = 0;
+        tracker.start(e.touches[0].clientX);
         wasDragRef.current = false;
         setCommittedDirection(null);
     }
 
     function onTouchMove(e: React.TouchEvent) {
-        if (!e.touches[0]) {
+        const offset = e.touches[0] ? tracker.move(e.touches[0].clientX) : null;
+        if (offset === null) {
             return;
         }
-        const delta = e.touches[0].clientX - startXRef.current;
-        // Clamp so the row doesn't slide too far off-screen
-        const clamped = Math.max(-120, Math.min(120, delta));
-        currentDeltaRef.current = clamped;
         // Mark as a drag once the finger moves far enough to distinguish from a tap
-        if (Math.abs(clamped) >= TAP_THRESHOLD_PX) {
+        if (Math.abs(offset) >= TAP_THRESHOLD_PX) {
             wasDragRef.current = true;
         }
-        setTranslateX(clamped);
+        setTranslateX(offset);
     }
 
     function onTouchEnd() {
-        // Read from the ref, not from the translateX state value, which may be one
-        // render behind due to React batching the setTranslateX call from onTouchMove.
-        const delta = currentDeltaRef.current;
-        currentDeltaRef.current = 0;
+        const outcome = tracker.end();
         // Snap back immediately regardless of outcome
         setTranslateX(0);
-
-        if (Math.abs(delta) < TAP_THRESHOLD_PX) {
-            // Treat as a tap; let the component's onClick handler run normally
-            setCommittedDirection(null);
-            return;
-        }
-
-        if (delta > threshold) {
-            setCommittedDirection('right');
+        setCommittedDirection(outcome === 'right' || outcome === 'left' ? outcome : null);
+        if (outcome === 'right') {
             onSwipeRight();
-        } else if (delta < -threshold) {
-            setCommittedDirection('left');
+        } else if (outcome === 'left') {
             onSwipeLeft();
-        } else {
-            // Didn't reach threshold — snap back without committing
-            setCommittedDirection(null);
         }
     }
 
+    function onTouchCancel() {
+        tracker.cancel();
+        setTranslateX(0);
+        setCommittedDirection(null);
+    }
+
     return {
-        touchHandlers: { onTouchStart, onTouchMove, onTouchEnd },
+        touchHandlers: { onTouchStart, onTouchMove, onTouchEnd, onTouchCancel },
         translateX,
         committedDirection,
         wasDragRef,

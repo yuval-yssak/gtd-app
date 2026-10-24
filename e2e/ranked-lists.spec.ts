@@ -5,6 +5,7 @@ import { compareByRank } from '../client/src/lib/compareNextActions';
 import type { StoredItem } from '../client/src/types/MyDB';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { centerOf, glide, LONG_PRESS_MS, longPressDrag, PHONE, touch } from './helpers/touch';
 
 // Manual order beyond Next Actions (docs/plans/priority-everywhere.md, Phase A): the Inbox, Someday / Maybe and
 // Waiting For's "By date" view (inside a day) reorder with the same drag, keyboard grab, Alt+arrows and Move to
@@ -113,7 +114,7 @@ test.describe('Ranked lists: Inbox, Someday / Maybe, Waiting For by date', () =>
                 await page.getByTestId('nextActionMoveToTop').click();
                 await expect.poll(() => storedOrder(page, 'inbox')).toEqual(['Alpha', 'Bravo']);
             },
-            { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true },
+            PHONE,
         );
     });
 
@@ -344,7 +345,7 @@ test.describe('Item editor shortcuts and the legend everywhere', () => {
                 await expect(page.getByRole('button', { name: 'open navigation' })).toBeVisible();
                 await expect(page.locator('[data-testid="keyboardShortcutsButton"]:visible')).toHaveCount(0);
             },
-            { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true },
+            PHONE,
         );
     });
 });
@@ -398,5 +399,122 @@ test.describe('Ranked lists: keyboard grab downwards keeps focus; Waiting For by
             await page.keyboard.press('e');
             await expect(page.getByRole('textbox', { name: 'Title' })).toHaveValue('Owed by nobody');
         });
+    });
+});
+
+test.describe('Inbox on a phone: long-press drag', () => {
+    // The title is the first span of each row's primary text (the rest is the relative time and chips).
+    const inboxTitles = (page: Page) => page.locator('[data-testid="inboxList"] [data-item-id] .MuiListItemText-primary span:first-child').allInnerTexts();
+    const handleOf = (page: Page, itemId: string) => page.locator(`[data-item-id="${itemId}"]`).getByTestId('inboxDragHandle');
+
+    async function seedInbox(page: Page) {
+        const alpha = await gtd.collect(page, 'Alpha');
+        await gtd.collect(page, 'Bravo');
+        await gtd.collect(page, 'Charlie');
+        await gtd.flush(page);
+        await page.goto('/inbox');
+        await expect.poll(() => inboxTitles(page)).toEqual(['Charlie', 'Bravo', 'Alpha']);
+        return alpha;
+    }
+
+    async function topRowTargetY(page: Page) {
+        const top = await centerOf(page.locator('[data-testid="inboxList"] [data-item-id]').first());
+        return top.y - 10; // just above the top row's midpoint → slot 0
+    }
+
+    test('the swipe row has a handle; a long press on it drags the row, without swiping or opening the editor', async ({ browser }) => {
+        await withOneLoggedInDevice(
+            browser,
+            `rl-inbox-phone-drag-${dayjs().valueOf()}@example.com`,
+            async (page) => {
+                const alpha = await seedInbox(page);
+                await expect(handleOf(page, alpha._id)).toBeVisible();
+                const cdp = await page.context().newCDPSession(page);
+                await longPressDrag(page, cdp, handleOf(page, alpha._id), await topRowTargetY(page));
+
+                await expect.poll(() => inboxTitles(page)).toEqual(['Alpha', 'Charlie', 'Bravo']);
+                // Neither the swipe (Next Action / Trash) nor the row tap (editor) fired.
+                await expect(page).toHaveURL(/\/inbox$/);
+                await gtd.flush(page);
+                expect((await gtd.listItems(page)).filter((i) => i.status === 'inbox')).toHaveLength(3);
+                await page.reload();
+                await expect.poll(() => inboxTitles(page)).toEqual(['Alpha', 'Charlie', 'Bravo']);
+            },
+            PHONE,
+        );
+    });
+
+    test('a handle drag after an earlier body touch on the row never slides it or trashes it', async ({ browser }) => {
+        await withOneLoggedInDevice(
+            browser,
+            `rl-inbox-phone-stale-${dayjs().valueOf()}@example.com`,
+            async (page) => {
+                const alpha = await seedInbox(page);
+                const row = page.locator(`[data-item-id="${alpha._id}"]`);
+                const cdp = await page.context().newCDPSession(page);
+                // A short body swipe (under the commit threshold) leaves an old gesture start on the row.
+                const body = await centerOf(row);
+                const bodyStart = { x: body.x + 60, y: body.y };
+                await touch(cdp, 'touchStart', [bodyStart]);
+                await glide(page, cdp, bodyStart, { x: bodyStart.x + 40, y: bodyStart.y }, 4);
+                await touch(cdp, 'touchEnd', []);
+                const slideOf = () => row.locator('.MuiListItem-root').evaluate((el) => (el as HTMLElement).style.transform);
+                await expect.poll(slideOf).toBe('translateX(0px)'); // snapped back: the short swipe committed nothing
+
+                // Then the handle: hold, drag up a little, and check the row did not slide mid-drag.
+                const start = await centerOf(handleOf(page, alpha._id));
+                await touch(cdp, 'touchStart', [start]);
+                await page.waitForTimeout(LONG_PRESS_MS);
+                await glide(page, cdp, start, { x: start.x, y: start.y - 30 }, 4);
+                expect(await slideOf()).toBe('translateX(0px)');
+                await touch(cdp, 'touchEnd', []);
+
+                await gtd.flush(page);
+                const stored = (await gtd.listItems(page)).find((i) => i._id === alpha._id);
+                if (!stored) throw new Error('alpha missing');
+                expect(stored.status).toBe('inbox');
+                await expect(page).toHaveURL(/\/inbox$/);
+            },
+            PHONE,
+        );
+    });
+
+    test('a plain tap on the handle neither opens the editor nor swipes', async ({ browser }) => {
+        await withOneLoggedInDevice(
+            browser,
+            `rl-inbox-phone-tap-${dayjs().valueOf()}@example.com`,
+            async (page) => {
+                const alpha = await seedInbox(page);
+                await handleOf(page, alpha._id).tap();
+                await page.waitForTimeout(300);
+                await expect(page).toHaveURL(/\/inbox$/);
+                await expect(page.getByRole('dialog')).toHaveCount(0);
+                await expect(page.getByRole('textbox', { name: 'Title' })).toHaveCount(0);
+            },
+            PHONE,
+        );
+    });
+
+    test('a horizontal swipe on the row body still works beside the handle (right swipe → Next Action editor)', async ({ browser }) => {
+        await withOneLoggedInDevice(
+            browser,
+            `rl-inbox-phone-swipe-${dayjs().valueOf()}@example.com`,
+            async (page) => {
+                const item = await gtd.collect(page, 'Swipe me');
+                await gtd.flush(page);
+                await page.goto('/inbox');
+                const row = page.locator(`[data-item-id="${item._id}"]`);
+                await expect(row.getByTestId('inboxDragHandle')).toBeVisible();
+                const center = await centerOf(row);
+                const start = { x: center.x - 60, y: center.y };
+                const cdp = await page.context().newCDPSession(page);
+                await touch(cdp, 'touchStart', [start]);
+                await glide(page, cdp, start, { x: start.x + 150, y: start.y }, 10);
+                await touch(cdp, 'touchEnd', []);
+                // The right swipe opens the editor preset to Next Action.
+                await expect(page.getByRole('button', { name: 'Next Action' })).toHaveClass(/MuiChip-filled/);
+            },
+            PHONE,
+        );
     });
 });

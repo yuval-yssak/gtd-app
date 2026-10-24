@@ -48,7 +48,7 @@ import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { RowActionButton } from '../../components/RowActionButton';
 import { RankedListChrome } from '../../components/rankedList/RankedListChrome';
 import { RankedRowHandle } from '../../components/rankedList/RankedRowHandle';
-import { rankedRowButtonProps, rankedRowProps } from '../../components/rankedList/rankedRowProps';
+import { type ItemRow, rankedRowButtonProps, rankedRowProps } from '../../components/rankedList/rankedRowProps';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { deleteInboxCaptureDraft, getInboxCaptureDraft, saveInboxCaptureDraft } from '../../db/draftHelpers';
 import { clarifyToDone, clarifyToTrash, collectItem } from '../../db/itemMutations';
@@ -60,7 +60,7 @@ import { useHiddenAccountCaptureNotice } from '../../hooks/useHiddenAccountCaptu
 import { useListGhosts } from '../../hooks/useListGhosts';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import { useListSearch } from '../../hooks/useListSearch';
-import { useRankedList } from '../../hooks/useRankedList';
+import { type RankedListApi, useRankedList } from '../../hooks/useRankedList';
 import { useSwipeGesture } from '../../hooks/useSwipeGesture';
 import { CLARIFY_MODE_KEY, parseClarifyMode } from '../../lib/clarifyMode';
 import { compareByRank } from '../../lib/compareNextActions';
@@ -81,6 +81,16 @@ export const Route = createFileRoute('/_authenticated/inbox')({
 
 // --- Mobile swipe row ---
 
+const stopPropagation = (e: { stopPropagation: () => void }) => e.stopPropagation();
+/** The reorder handle's whole touch gesture (and its tap) stays its own: none of it may reach the row's swipe or tap. */
+const KEEP_GESTURE_TO_HANDLE = {
+    onTouchStart: stopPropagation,
+    onTouchMove: stopPropagation,
+    onTouchEnd: stopPropagation,
+    onTouchCancel: stopPropagation,
+    onClick: stopPropagation,
+};
+
 interface InboxSwipeItemProps {
     item: StoredItem;
     // exactOptionalPropertyTypes requires explicit `| undefined` to allow passing `.find()?.title`
@@ -89,9 +99,13 @@ interface InboxSwipeItemProps {
     onMore: (item: StoredItem) => void;
     onSwipeNextAction: (item: StoredItem) => void;
     onSwipeTrash: (item: StoredItem) => void;
+    /** Long-press drag reorder: the shared ranked-list wiring and this row's place in it. */
+    ranked: RankedListApi;
+    row: ItemRow;
+    isGhost: boolean;
 }
 
-function InboxSwipeItem({ item, routineTitle, onTap, onMore, onSwipeNextAction, onSwipeTrash }: InboxSwipeItemProps) {
+function InboxSwipeItem({ item, routineTitle, onTap, onMore, onSwipeNextAction, onSwipeTrash, ranked, row, isGhost }: InboxSwipeItemProps) {
     const { touchHandlers, translateX, wasDragRef } = useSwipeGesture({
         onSwipeRight: () => onSwipeNextAction(item),
         onSwipeLeft: () => onSwipeTrash(item),
@@ -106,10 +120,11 @@ function InboxSwipeItem({ item, routineTitle, onTap, onMore, onSwipeNextAction, 
     const showRight = translateX > 0;
     const showLeft = translateX < 0;
 
-    const { onTouchStart, onTouchMove, onTouchEnd } = touchHandlers;
+    const { onTouchStart, onTouchMove, onTouchEnd, onTouchCancel } = touchHandlers;
 
     return (
-        <Box className={styles.swipeWrapper}>
+        // The ranked-row props go on the wrapper: the drag moves and shifts the whole row (reveal panes included).
+        <Box {...rankedRowProps(ranked, row, styles.swipeWrapper)}>
             {showRight && (
                 <Box className={styles.revealRight}>
                     <ArrowForwardIcon fontSize="small" />
@@ -138,7 +153,7 @@ function InboxSwipeItem({ item, routineTitle, onTap, onMore, onSwipeNextAction, 
             )}
             <ListItem
                 disablePadding
-                className={styles.item}
+                className={styles.swipeItem}
                 style={{
                     transform: `translateX(${translateX}px)`,
                     transition: translateX === 0 ? 'transform 0.2s ease' : 'none',
@@ -146,10 +161,11 @@ function InboxSwipeItem({ item, routineTitle, onTap, onMore, onSwipeNextAction, 
                 onTouchStart={onTouchStart}
                 onTouchMove={onTouchMove}
                 onTouchEnd={onTouchEnd}
+                onTouchCancel={onTouchCancel}
                 onClick={handleClick}
                 secondaryAction={
                     <Tooltip title="More actions">
-                        {/* onTouchEnd stops propagation so the drag handler doesn't see the tap as a swipe end */}
+                        {/* onClick stops propagation so the More tap never also opens the editor (the row's own onClick). */}
                         <IconButton
                             size="small"
                             onClick={(e) => {
@@ -163,6 +179,13 @@ function InboxSwipeItem({ item, routineTitle, onTap, onMore, onSwipeNextAction, 
                     </Tooltip>
                 }
             >
+                {/* Long press drags (as on every ranked list). Its touches must not also start the row's
+                    horizontal swipe, nor its tap open the editor. A ghost is not a drag source. */}
+                {!isGhost && (
+                    <Box className={styles.swipeHandle} {...KEEP_GESTURE_TO_HANDLE}>
+                        <RankedRowHandle ranked={ranked} item={item} section={row.section} testId="inboxDragHandle" />
+                    </Box>
+                )}
                 <ListItemText
                     primary={
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
@@ -538,7 +561,7 @@ function InboxPage() {
                 // component="div": WindowVirtualizer renders a measuring <div> wrapper, invalid inside
                 // the default <ul>. Windowed rendering — only rows near the viewport mount, so a large
                 // inbox doesn't block the main thread on navigation.
-                // One tab stop for the whole list on desktop (see useNextActionsRovingFocus); phones use the swipe rows.
+                // One tab stop for the whole list on desktop (see useNextActionsRovingFocus); phones use the swipe rows, each with a long-press reorder handle.
                 <List
                     disablePadding
                     component="div"
@@ -563,6 +586,9 @@ function InboxPage() {
                                             onMore={setBottomSheetItem}
                                             onSwipeNextAction={(i) => editor.openEditor({ item: i, initialStatus: 'nextAction' })}
                                             onSwipeTrash={(i) => void onTrash(i)}
+                                            ranked={ranked}
+                                            row={row}
+                                            isGhost={isGhost(item)}
                                         />
                                     ) : (
                                         <ListItem

@@ -65,21 +65,21 @@
     padding-right: 18.75rem;
 }
 
-/* On mobile only the swipe row + a single "more" button are visible — release the right padding */
-@media (max-width: 56.1875rem) {
-    .item {
-        padding-right: 3rem;
-    }
-
-    .listItemText {
-        padding-right: 0;
-    }
-}
-
 /* Swipe row wrapper — clips the row as it slides to reveal the action background */
 .swipeWrapper {
     position: relative;
     overflow: hidden;
+}
+
+/* The phone row has a single trailing button (More), not the desktop row's eight. */
+.swipeItem {
+    padding: 0.5rem 3rem 0.5rem 0;
+}
+
+/* Keeps the handle's touches out of the swipe gesture (the handler sits on this box). */
+.swipeHandle {
+    display: flex;
+    align-items: center;
 }
 
 /* Green background revealed on right-swipe (Next Action) */
