@@ -1,9 +1,12 @@
 @layer gtd.components {
+    /* Block on purpose: the `as="span"` variant must lay out exactly like the div one. */
     .root {
+        display: block;
         inline-size: 100%;
     }
 
     .track {
+        display: block;
         position: relative;
         overflow: hidden;
         block-size: 0.25rem;
@@ -12,6 +15,7 @@
     }
 
     .indicator {
+        display: block;
         block-size: 100%;
         background-color: var(--color-accent);
         transition: inline-size var(--duration-normal) var(--ease-standard);

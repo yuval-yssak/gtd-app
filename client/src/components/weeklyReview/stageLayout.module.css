@@ -4,12 +4,12 @@
 
 .stageRoot {
     flex: 1;
-    min-height: 0;
+    min-block-size: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 1rem;
-    width: 100%;
+    gap: var(--space-4);
+    inline-size: 100%;
 }
 
 /* The scrollport, and the reason it is a wrapper rather than the card itself: the card is capped
@@ -19,8 +19,8 @@
  * action bar (not an ancestor), or the bar would scroll away with the content. */
 .cardScroller {
     flex: 1;
-    min-height: 0;
-    width: 100%;
+    min-block-size: 0;
+    inline-size: 100%;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
@@ -30,11 +30,11 @@
 /* Grows to its natural height inside .cardScroller; flex-shrink: 0 stops the flex parent from
  * squashing a tall card instead of letting it overflow into the scroll. */
 .editorCard {
-    width: 100%;
+    inline-size: 100%;
     /* Wide enough for the review's two-column metadata grid (see NextActionFields.module.css) —
        the small date/number/toggle controls pair up instead of each owning a full row. */
-    max-width: 44rem;
-    padding: 1.5rem;
+    max-inline-size: 44rem;
+    padding: var(--space-6);
     flex-shrink: 0;
 }
 
@@ -43,8 +43,8 @@
  * gutters beside a centered card still scrolls. */
 .centeredArea {
     flex: 1;
-    min-height: 0;
-    width: 100%;
+    min-block-size: 0;
+    inline-size: 100%;
     display: flex;
     /* `safe` centers only while the content fits; once it is taller than the area it degrades to
      * flex-start. Plain `center` puts the card's top at a NEGATIVE offset, which scrollTop cannot
@@ -54,12 +54,12 @@
     overflow-y: auto;
 }
 
-/* Anchors the item-level ◀ ▶ pair to the content slot's left edge while the decision buttons
- * keep right. */
+/* Anchors the item-level ◀ ▶ pair to the content slot's start edge while the decision buttons
+ * keep to the end. */
 .navArrows {
     display: flex;
-    gap: 0.25rem;
-    margin-right: auto;
+    gap: var(--space-1);
+    margin-inline-end: auto;
 }
 
 /* Pinned action bar: always the last, fully visible element of the stage column, so the decision
@@ -67,15 +67,15 @@
  * empty state's Continue lands exactly where the primary action button was. The stage-travel
  * arrows bracket the content slot at the bar's outer edges. */
 .actionBar {
-    margin-top: auto;
+    margin-block-start: auto;
     flex-shrink: 0;
-    width: 100%;
-    /* Matches .editorCard so the decision buttons stay flush with the card's right edge. */
-    max-width: 44rem;
-    padding: 0.75rem 1rem;
+    inline-size: 100%;
+    /* Matches .editorCard so the decision buttons stay flush with the card's end edge. */
+    max-inline-size: 44rem;
+    padding: var(--space-3) var(--space-4);
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--space-2);
 }
 
 /* The fixed quick-capture FAB (3.5rem circle at right:1.25rem, fixed to the VIEWPORT) floats over
@@ -84,9 +84,9 @@
  * 15rem drawer + 1.5rem padding from min-width 56.25rem): the bar centers in the CONTENT column,
  * shifted right → overlap below ~68.5rem. Gate the reserve on the larger threshold; above it the
  * padding stays symmetric. */
-@media (max-width: 70rem) {
+@media (width <= 70rem) {
     .actionBar {
-        padding-right: 5rem;
+        padding-inline-end: 5rem;
     }
 }
 
@@ -94,10 +94,10 @@
  * bar-owned children). Carries the wrap/justify behavior the bar itself used to own. */
 .actionBarContent {
     flex: 1;
-    min-width: 0;
+    min-inline-size: 0;
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     justify-content: flex-end;
-    gap: 0.5rem;
+    gap: var(--space-2);
 }

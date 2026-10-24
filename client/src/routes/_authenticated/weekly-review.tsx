@@ -1,11 +1,6 @@
-import PlayArrowIcon from '@mui/icons-material/PlayArrow';
-import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-import CircularProgress from '@mui/material/CircularProgress';
-import Paper from '@mui/material/Paper';
-import Typography from '@mui/material/Typography';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import dayjs from 'dayjs';
+import { Play } from 'lucide-react';
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { AppErrorBoundary } from '../../components/AppErrorBoundary';
 import {
@@ -31,6 +26,7 @@ import {
 import { WeeklyReviewWizard } from '../../components/weeklyReview/WeeklyReviewWizard';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { seedDefaultReviewInboxesIfEmpty } from '../../db/reviewInboxMutations';
+import { Button, Card, Spinner, Text } from '../../designSystem';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { getTodayIso } from '../../lib/dayClock';
 import { hasAtLeastOne, type NonEmptyArray } from '../../lib/typeUtils';
@@ -97,9 +93,9 @@ function WeeklyReviewPage() {
 
     if (!account || phase.kind === 'loading') {
         return (
-            <Box className={styles.loadingWrapper}>
-                <CircularProgress size={28} />
-            </Box>
+            <div className={styles.loadingWrapper}>
+                <Spinner size={28} label="Loading the weekly review" />
+            </div>
         );
     }
 
@@ -210,7 +206,7 @@ function WeeklyReviewPage() {
                 mode="inline"
                 title="Couldn't load the celebration"
                 fallbackAction={() => (
-                    <Button color="inherit" size="small" onClick={finishCelebration}>
+                    <Button tone="neutral" size="sm" onClick={finishCelebration}>
                         Done
                     </Button>
                 )}
@@ -261,37 +257,29 @@ interface SweepScreenProps {
 /** Pre-celebration catch: stages already reviewed gained new items — offer a revisit before finishing. */
 function SweepScreen({ arrivals, onReviewStage, onFinishAnyway }: SweepScreenProps) {
     return (
-        <Box className={styles.introWrapper}>
-            <Paper elevation={2} className={styles.introCard} data-testid="sweepScreen">
-                <Typography variant="h4" className={styles.introTitle}>
+        <div className={styles.introWrapper}>
+            <Card padding="none" className={styles.introCard} data-testid="sweepScreen">
+                <Text variant="headline" weight="bold">
                     Almost done…
-                </Typography>
-                <Typography variant="body1" color="text.secondary">
-                    Reviewing generated new items in lists you already went through:
-                </Typography>
-                <Box>
+                </Text>
+                <Text tone="secondary">Reviewing generated new items in lists you already went through:</Text>
+                <div>
                     {arrivals.map((arrival) => (
-                        <Button key={arrival.stageId} color="inherit" size="small" onClick={() => onReviewStage(arrival.stageId)} data-testid="sweepStageRow">
+                        <Button key={arrival.stageId} tone="neutral" size="sm" onClick={() => onReviewStage(arrival.stageId)} data-testid="sweepStageRow">
                             {arrival.title} — {arrival.count} new {arrival.count === 1 ? 'item' : 'items'}
                         </Button>
                     ))}
-                </Box>
-                <Box className={styles.introActions}>
-                    <Button
-                        variant="contained"
-                        size="large"
-                        startIcon={<PlayArrowIcon />}
-                        onClick={() => onReviewStage(arrivals[0].stageId)}
-                        data-testid="sweepReviewButton"
-                    >
+                </div>
+                <div className={styles.introActions}>
+                    <Button variant="solid" size="lg" startIcon={<Play />} onClick={() => onReviewStage(arrivals[0].stageId)} data-testid="sweepReviewButton">
                         Review them
                     </Button>
-                    <Button color="inherit" onClick={onFinishAnyway} data-testid="sweepFinishButton">
+                    <Button tone="neutral" onClick={onFinishAnyway} data-testid="sweepFinishButton">
                         Finish anyway
                     </Button>
-                </Box>
-            </Paper>
-        </Box>
+                </div>
+            </Card>
+        </div>
     );
 }
 
@@ -305,40 +293,34 @@ interface IntroScreenProps {
 
 function IntroScreen({ resumableFlow, lastCompletedTs, onStart, onResume, onStartOver }: IntroScreenProps) {
     return (
-        <Box className={styles.introWrapper}>
-            <Paper elevation={2} className={styles.introCard}>
-                <Typography variant="h4" className={styles.introTitle}>
+        <div className={styles.introWrapper}>
+            <Card padding="none" className={styles.introCard}>
+                <Text variant="headline" weight="bold">
                     Weekly Review
-                </Typography>
-                <Typography variant="body1" color="text.secondary">
+                </Text>
+                <Text tone="secondary">
                     A guided pass through every inbox and every list — one item at a time — so nothing is left rattling around in your head.
-                </Typography>
+                </Text>
                 {lastCompletedTs && (
-                    <Typography variant="caption" color="text.secondary" data-testid="lastCompletedLabel">
+                    <Text variant="caption" tone="secondary" data-testid="lastCompletedLabel">
                         Last completed {dayjs(lastCompletedTs).format('dddd, MMM D')}
-                    </Typography>
+                    </Text>
                 )}
                 {resumableFlow ? (
-                    <Box className={styles.introActions}>
-                        <Button
-                            variant="contained"
-                            size="large"
-                            startIcon={<PlayArrowIcon />}
-                            onClick={() => onResume(resumableFlow)}
-                            data-testid="resumeReviewButton"
-                        >
+                    <div className={styles.introActions}>
+                        <Button variant="solid" size="lg" startIcon={<Play />} onClick={() => onResume(resumableFlow)} data-testid="resumeReviewButton">
                             Resume review
                         </Button>
-                        <Button color="inherit" onClick={onStartOver} data-testid="startOverButton">
+                        <Button tone="neutral" onClick={onStartOver} data-testid="startOverButton">
                             Start over
                         </Button>
-                    </Box>
+                    </div>
                 ) : (
-                    <Button variant="contained" size="large" startIcon={<PlayArrowIcon />} onClick={onStart} data-testid="startReviewButton">
+                    <Button variant="solid" size="lg" startIcon={<Play />} onClick={onStart} data-testid="startReviewButton">
                         Start weekly review
                     </Button>
                 )}
-            </Paper>
-        </Box>
+            </Card>
+        </div>
     );
 }

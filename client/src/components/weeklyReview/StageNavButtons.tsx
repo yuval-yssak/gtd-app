@@ -1,7 +1,5 @@
-import ArrowBackIcon from '@mui/icons-material/ArrowBack';
-import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
-import Box from '@mui/material/Box';
-import IconButton from '@mui/material/IconButton';
+import { ArrowLeft, ArrowRight } from 'lucide-react';
+import { IconButton } from '../../designSystem';
 import { DisabledCapableTooltip } from './DisabledCapableTooltip';
 import styles from './stageLayout.module.css';
 
@@ -25,34 +23,34 @@ interface StageNavButtonsProps {
 }
 
 /**
- * The ◀ ▶ pair anchoring the item-level slot of the pinned bar (margin-right: auto pushes the
- * decision buttons right). ◀ un-defers the last skip or revisits past decisions; ▶ is the old
+ * The ◀ ▶ pair anchoring the item-level slot of the pinned bar (margin-inline-end: auto pushes the
+ * decision buttons to the end). ◀ un-defers the last skip or revisits past decisions; ▶ is the old
  * "Skip for now" in live mode and plain forward navigation while revisiting.
  */
 export function StageNavButtons({ onBack, backDisabled, backLabel = 'Revisit previous decision', forward }: StageNavButtonsProps) {
     return (
-        <Box className={styles.navArrows}>
+        <div className={styles.navArrows}>
             <DisabledCapableTooltip title={backLabel}>
-                {/* size="small" (34px) keeps the text buttons (36.5px) as the bar's height
-                    driver — a medium IconButton (40px) would nudge the pinned bar's top edge
-                    on stages whose bar has no arrows. */}
-                <IconButton size="small" onClick={onBack} disabled={backDisabled} aria-label={backLabel} data-testid="stageNavBack">
-                    <ArrowBackIcon />
+                {/* size="sm" keeps the text buttons as the bar's height driver — a medium
+                    IconButton would nudge the pinned bar's top edge on stages whose bar has no
+                    arrows. */}
+                <IconButton size="sm" onClick={onBack} disabled={backDisabled} aria-label={backLabel} data-testid="stageNavBack">
+                    <ArrowLeft />
                 </IconButton>
             </DisabledCapableTooltip>
             {forward && (
                 <DisabledCapableTooltip title={forward.label}>
                     <IconButton
-                        size="small"
+                        size="sm"
                         onClick={forward.onForward}
                         disabled={forward.disabled}
                         aria-label={forward.label}
                         data-testid={forward.testId ?? 'stageNavForward'}
                     >
-                        <ArrowForwardIcon />
+                        <ArrowRight />
                     </IconButton>
                 </DisabledCapableTooltip>
             )}
-        </Box>
+        </div>
     );
 }

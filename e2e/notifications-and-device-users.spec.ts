@@ -114,11 +114,28 @@ test.describe('deviceUsers join — single account', () => {
             const userId = (await gtd.getActiveAccountId(page)) as string;
             await waitForDeviceUserRow(deviceId, userId);
 
+            // Pinned on its own first: the convergence poll below re-runs the endpoint from Node, so
+            // without this a sign-out path that stopped calling /devices/signout would still pass.
+            const pageSignout = page.waitForResponse((res) => res.url().endsWith('/devices/signout') && res.request().method() === 'POST');
             await signOutCurrentInPage(page);
+            expect((await pageSignout).ok(), 'the sign-out path must call /devices/signout itself').toBe(true);
 
-            // The /devices/signout endpoint deletes synchronously, so no poll is needed here.
-            const rows = await readServerDeviceUserRows(deviceId);
-            expect(rows.find((r) => r.userId === userId)).toBeUndefined();
+            // The delete is synchronous, but the app is still online: any authenticated request it
+            // sent around the sign-out fires the auth middleware's fire-and-forget deviceUsers upsert,
+            // which can land just after the delete and re-insert the row. Offline, the app sends
+            // nothing new — so re-running the real sign-out (Node-side, same cookies) converges once
+            // the last straggler has landed, while a sign-out that removes nothing still fails here.
+            await page.context().setOffline(true);
+            await expect
+                .poll(async () => {
+                    const res = await page.context().request.post(`${API_URL}/devices/signout`, { data: { deviceId } });
+                    if (!res.ok()) {
+                        throw new Error(`re-run sign-out failed: ${res.status()}`);
+                    }
+                    const rows = await readServerDeviceUserRows(deviceId);
+                    return rows.find((r) => r.userId === userId);
+                })
+                .toBeUndefined();
         });
     });
 });
@@ -140,8 +157,28 @@ test.describe('deviceUsers join — multi-account', () => {
             // endpoint. It accepts the raw (unsigned) token and rewrites the active session cookie.
             // Calling it from the page's fetch ensures the rewritten cookie ends up in the
             // BrowserContext jar that all subsequent fetches read from.
+            //
+            // The pivot holds the app's session gate until the sign-out below: the page's own sync
+            // pass pivots the cookie too, and one restoring the primary in between would make the
+            // sign-out remove the PRIMARY's row. (The gate's own timeout frees it if the test dies.)
+            // That timeout would also quietly reopen the race mid-hold, so it fails the test here.
+            const gateTimeouts: string[] = [];
+            page.on('console', (message) => {
+                if (message.text().includes('session gate task exceeded')) gateTimeouts.push(message.text());
+            });
             await page.evaluate(
                 async ({ rawToken, apiUrl }) => {
+                    type Harness = { withSessionGate(task: () => Promise<void>): Promise<void> };
+                    const pageWindow = window as unknown as { __gtd: Harness; __releaseSpecSessionGate?: () => void };
+                    await new Promise<void>((acquired) => {
+                        void pageWindow.__gtd.withSessionGate(
+                            () =>
+                                new Promise<void>((release) => {
+                                    pageWindow.__releaseSpecSessionGate = release;
+                                    acquired();
+                                }),
+                        );
+                    });
                     const res = await fetch(`${apiUrl}/auth/multi-session/set-active`, {
                         method: 'POST',
                         credentials: 'include',
@@ -184,9 +221,11 @@ test.describe('deviceUsers join — multi-account', () => {
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ deviceId: id }),
                     });
+                    (window as unknown as { __releaseSpecSessionGate?: () => void }).__releaseSpecSessionGate?.();
                 },
                 { id: deviceId, apiUrl: API_URL },
             );
+            expect(gateTimeouts, 'the session gate timed out mid-hold, so a sync pass could pivot the cookie').toEqual([]);
 
             // Take the page offline so no app-originated authenticated request (SSE-triggered sync,
             // push re-registration) carrying X-Device-Id under the still-active secondary cookie can

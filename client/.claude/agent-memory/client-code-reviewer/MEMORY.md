@@ -62,3 +62,4 @@
 - [Gate selection drops failed retry](feedback_gate_selection_drops_failed_retry.md) — stop-hook e2e 'edited this turn only' never reruns a failed spec once the fix lands in app code; persist the failed set.
 - [Inline host inherits page-only Escape](feedback_inline_host_inherits_page_escape.md) — editor bodies hard-wire Escape→raw onClose 'behind the nav guard'; an inline host's onClose is a state flip, so Escape silently discards.
 - [use() cache retry re-suspends mounted readers](feedback_use_cache_retry_resuspends_mounted.md) — retry/TTL that swaps a pending promise in render hides mounted editors behind fallback; demand stale-while-revalidate.
+- [New prop makes exclusive states co-occur](feedback_new_prop_makes_exclusive_states_cooccur.md) — DS override prop (StepIndicator isComplete) lets data-active+data-complete co-occur; rule order blanks the marker. Also Snackbar→Toast drops role=alert.

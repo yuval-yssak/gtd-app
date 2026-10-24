@@ -1,19 +1,9 @@
-import AddIcon from '@mui/icons-material/Add';
-import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
-import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined';
-import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-import Dialog from '@mui/material/Dialog';
-import DialogActions from '@mui/material/DialogActions';
-import DialogContent from '@mui/material/DialogContent';
-import DialogTitle from '@mui/material/DialogTitle';
-import IconButton from '@mui/material/IconButton';
-import TextField from '@mui/material/TextField';
 import type { IDBPDatabase } from 'idb';
+import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react';
 import { useState, useTransition } from 'react';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { createReviewInbox, removeReviewInbox, reorderReviewInboxes, updateReviewInbox } from '../../db/reviewInboxMutations';
+import { Button, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, TextField } from '../../designSystem';
 import type { MyDB, StoredReviewInbox } from '../../types/MyDB';
 import styles from './ManageInboxesDialog.module.css';
 
@@ -66,37 +56,26 @@ export function ManageInboxesDialog({ db, onClose }: ManageInboxesDialogProps) {
     }
 
     return (
-        <Dialog open onClose={onClose} fullWidth maxWidth="xs" data-testid="manageInboxesDialog">
+        <Dialog open onClose={onClose} fullWidth size="xs" data-testid="manageInboxesDialog">
             <DialogTitle>Your inboxes</DialogTitle>
             <DialogContent>
                 {myInboxes.map((inbox, index) => (
-                    <Box key={inbox._id} className={styles.inboxRow} data-testid="manageInboxRow">
+                    <div key={inbox._id} className={styles.inboxRow} data-testid="manageInboxRow">
                         <RenameField name={inbox.name} onCommit={(name) => onRename(inbox, name)} />
-                        <IconButton size="small" disabled={index === 0 || isMutating} onClick={() => onMove(index, -1)} aria-label="move up">
-                            <ArrowUpwardIcon fontSize="inherit" />
+                        <IconButton size="sm" disabled={index === 0 || isMutating} onClick={() => onMove(index, -1)} aria-label="move up">
+                            <ArrowUp />
                         </IconButton>
-                        <IconButton
-                            size="small"
-                            disabled={index === myInboxes.length - 1 || isMutating}
-                            onClick={() => onMove(index, 1)}
-                            aria-label="move down"
-                        >
-                            <ArrowDownwardIcon fontSize="inherit" />
+                        <IconButton size="sm" disabled={index === myInboxes.length - 1 || isMutating} onClick={() => onMove(index, 1)} aria-label="move down">
+                            <ArrowDown />
                         </IconButton>
-                        <IconButton
-                            size="small"
-                            disabled={isMutating}
-                            onClick={() => onRemove(inbox)}
-                            aria-label="remove inbox"
-                            data-testid="removeInboxButton"
-                        >
-                            <DeleteOutlineIcon fontSize="inherit" />
+                        <IconButton size="sm" disabled={isMutating} onClick={() => onRemove(inbox)} aria-label="remove inbox" data-testid="removeInboxButton">
+                            <Trash2 />
                         </IconButton>
-                    </Box>
+                    </div>
                 ))}
-                <Box className={styles.addRow}>
+                <div className={styles.addRow}>
                     <TextField
-                        size="small"
+                        size="sm"
                         fullWidth
                         placeholder="Add an inbox (e.g. WhatsApp starred)"
                         value={newName}
@@ -104,12 +83,12 @@ export function ManageInboxesDialog({ db, onClose }: ManageInboxesDialogProps) {
                         onKeyDown={(e) => {
                             if (e.key === 'Enter') onAdd();
                         }}
-                        slotProps={{ htmlInput: { 'data-testid': 'newInboxNameInput' } }}
+                        inputProps={{ 'aria-label': 'New inbox name', 'data-testid': 'newInboxNameInput' }}
                     />
-                    <Button startIcon={<AddIcon />} disabled={!newName.trim() || isMutating} onClick={onAdd} data-testid="addInboxButton">
+                    <Button startIcon={<Plus />} disabled={!newName.trim() || isMutating} onClick={onAdd} data-testid="addInboxButton">
                         Add
                     </Button>
-                </Box>
+                </div>
             </DialogContent>
             <DialogActions>
                 <Button onClick={onClose} data-testid="manageInboxesDone">
@@ -133,8 +112,7 @@ function RenameField({ name, onCommit }: { name: string; onCommit: (name: string
 
     return (
         <TextField
-            size="small"
-            variant="standard"
+            size="sm"
             fullWidth
             value={value}
             onChange={(e) => setValue(e.target.value)}
@@ -142,6 +120,7 @@ function RenameField({ name, onCommit }: { name: string; onCommit: (name: string
             onKeyDown={(e) => {
                 if (e.key === 'Enter') commitIfChanged();
             }}
+            inputProps={{ 'aria-label': `Rename ${name}` }}
         />
     );
 }

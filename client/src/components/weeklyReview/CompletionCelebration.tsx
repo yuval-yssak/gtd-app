@@ -1,10 +1,7 @@
-import SelfImprovementIcon from '@mui/icons-material/SelfImprovement';
-import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-import Paper from '@mui/material/Paper';
-import Typography from '@mui/material/Typography';
 import confetti from 'canvas-confetti';
+import { Waves } from 'lucide-react';
 import { useEffect } from 'react';
+import { Button, Card, Text } from '../../designSystem';
 import styles from './CompletionCelebration.module.css';
 import { type ReviewFlowState, reviewStats } from './reviewFlowState';
 
@@ -20,31 +17,29 @@ export function CompletionCelebration({ flow, onFinish }: CompletionCelebrationP
     const stats = reviewStats(flow).filter((stage) => stage.wasSkipped || stage.processedCount > 0);
 
     return (
-        <Box className={styles.celebrationRoot} data-testid="reviewCelebration">
-            <Paper elevation={4} className={styles.celebrationCard}>
-                <SelfImprovementIcon color="primary" className={styles.mindIcon} />
-                <Typography variant="h4" className={styles.headline}>
+        <div className={styles.celebrationRoot} data-testid="reviewCelebration">
+            <Card padding="none" className={styles.celebrationCard}>
+                <Waves className={styles.mindIcon} />
+                <Text variant="headline" weight="bold">
                     Your mind is clear
-                </Typography>
-                <Typography variant="body1" color="text.secondary">
-                    Everything you're committed to now lives in your trusted system — not in your head. Mind like water.
-                </Typography>
+                </Text>
+                <Text tone="secondary">Everything you're committed to now lives in your trusted system — not in your head. Mind like water.</Text>
                 {stats.length > 0 && (
-                    <Box className={styles.statsBlock} data-testid="reviewStats">
+                    <div className={styles.statsBlock} data-testid="reviewStats">
                         {stats.map((stage) => (
-                            <Typography key={stage.stageId} variant="body2" color="text.secondary">
+                            <Text key={stage.stageId} variant="bodySm" tone="secondary">
                                 {stage.title}: {stage.wasSkipped ? 'skipped' : `${stage.processedCount} reviewed`}
-                            </Typography>
+                            </Text>
                         ))}
-                    </Box>
+                    </div>
                 )}
                 {/* autoFocus: entering the celebration unmounts the whole wizard (and the focus-
                     restore hook with it) — seed focus here so the keyboard flow ends on Done. */}
-                <Button variant="contained" size="large" autoFocus onClick={onFinish} data-testid="celebrationDone">
+                <Button variant="solid" size="lg" autoFocus onClick={onFinish} data-testid="celebrationDone">
                     Done
                 </Button>
-            </Paper>
-        </Box>
+            </Card>
+        </div>
     );
 }
 

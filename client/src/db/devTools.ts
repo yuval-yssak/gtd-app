@@ -205,6 +205,11 @@ export function mountDevTools(db: IDBPDatabase<MyDB>): void {
         // observe what a pull does to a row whose own edit is still queued (the orchestrator would
         // push that edit first, and its echo would mask the pull's own effect).
         pullOnly: async () => pullFromServer(db, await resolveUserId(db)),
+        // Runs a spec's own session-cookie moves (multi-session set-active / revoke / sign-out)
+        // under the same gate every sync pass holds while it pivots the cookie — a revoke landing
+        // mid-pivot otherwise revokes the session the pass is about to restore, and the device
+        // drops to /login.
+        withSessionGate: <T>(task: () => Promise<T>) => withSessionGate(task),
         // The production resolved-broadcast (same call auth.callback makes after an OAuth
         // re-login) — exposed so e2e can drive the real cross-tab clear path, not a hand-rolled
         // localStorage payload that could drift from the implementation.

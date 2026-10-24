@@ -1,29 +1,27 @@
 .celebrationRoot {
     display: flex;
     justify-content: center;
-    padding: 2rem 0;
+    padding-block: var(--space-8);
 }
 
 .celebrationCard {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 1.25rem;
-    max-width: 34rem;
-    padding: 3rem 2.5rem;
+    gap: var(--space-5);
+    max-inline-size: 34rem;
+    padding: var(--space-12) var(--space-10);
     text-align: center;
 }
 
 .mindIcon {
-    font-size: 4rem;
-}
-
-.headline {
-    font-weight: 700;
+    inline-size: 4rem;
+    block-size: 4rem;
+    color: var(--color-accent);
 }
 
 .statsBlock {
     display: flex;
     flex-direction: column;
-    gap: 0.25rem;
+    gap: var(--space-1);
 }

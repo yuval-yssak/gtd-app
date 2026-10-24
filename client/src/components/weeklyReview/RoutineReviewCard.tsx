@@ -1,20 +1,12 @@
-import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutlined';
-import OpenInNewIcon from '@mui/icons-material/OpenInNew';
-import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-import Chip from '@mui/material/Chip';
-import IconButton from '@mui/material/IconButton';
-import Paper from '@mui/material/Paper';
-import Snackbar from '@mui/material/Snackbar';
-import Tooltip from '@mui/material/Tooltip';
-import Typography from '@mui/material/Typography';
 import type { IDBPDatabase } from 'idb';
+import { CircleCheck, ExternalLink } from 'lucide-react';
 import { type ComponentProps, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { usePendingReassign } from '../../contexts/PendingReassignProvider';
 import { clarifyToDone, FROM_GMAIL_READONLY_MESSAGE } from '../../db/itemMutations';
 import { pauseRoutine } from '../../db/routineMutations';
+import { Button, Card, Chip, IconButton, Text, Tooltip } from '../../designSystem';
 import { useCalendarOptions } from '../../hooks/useCalendarOptions';
 import { useNewTabAwareNavigate } from '../../lib/newTabNavigation';
 import { isOverdueCalendarItem } from '../../lib/routineNextItem';
@@ -26,7 +18,7 @@ import { RoutineEditorBody } from '../routineEditor/RoutineEditorBody';
 import { PauseRoutineConfirmDialog } from '../routines/PauseRoutineConfirmDialog';
 import { RoutineReviewBanner } from './RoutineReviewBanner';
 import styles from './RoutineReviewCard.module.css';
-import type { StageDecisionUndo } from './reviewFlowState';
+import { routineEntryId, type StageDecisionUndo } from './reviewFlowState';
 import {
     actionableOccurrence,
     collapsedOccurrences,
@@ -40,10 +32,11 @@ import { StageActionBar, type StageTravel } from './StageActionBar';
 import { StageCardScroller } from './StageCardScroller';
 import { StageNavButtons } from './StageNavButtons';
 import stageStyles from './stageLayout.module.css';
+import { StageToast, useStageToast } from './useStageToast';
 
 /** The slice of the stage's decision-navigation API a routine entry uses (no editor handshake). */
 interface RoutineEntryDecisionNav {
-    recordDecision: (undo?: StageDecisionUndo) => void;
+    recordDecision: (entryId: string, undo?: StageDecisionUndo) => void;
     liveNavProps: (isSaving: boolean) => ComponentProps<typeof StageNavButtons>;
 }
 
@@ -75,7 +68,7 @@ export function RoutineReviewCard({ routine, db, nav, travel }: RoutineReviewCar
     const [isPausing, setIsPausing] = useState(false);
     // Same richer-than-a-boolean reason as the pause flow: completing surfaces its own error text.
     const [isCompleting, setIsCompleting] = useState(false);
-    const [toast, setToast] = useState('');
+    const stageToast = useStageToast();
     // A mid-flight cross-account reassign would misroute the pause's item-trashing writes — same
     // guard the routine editor applies to edits.
     const reassignInFlight = isPending('routine', routine._id);
@@ -84,6 +77,10 @@ export function RoutineReviewCard({ routine, db, nav, travel }: RoutineReviewCar
     // is open or a pause write is in flight.
     const isBusy = isPausing || isCompleting || isEditorOpen;
     const lockedTravel = isBusy ? { ...travel, prevDisabled: true, nextDisabled: true } : travel;
+    // Every decision names this card's entry: pausing (or completing the last occurrence) makes
+    // it ineligible, and the reconcile can drop it before the decision lands — deciding "current"
+    // then would decide the NEXT card unseen.
+    const entryId = routineEntryId(routine._id);
 
     const occurrences = collapsedOccurrences(routine, allItems);
     // The occurrence the calendar stage ranked this entry by — leading with any other date would
@@ -114,14 +111,14 @@ export function RoutineReviewCard({ routine, db, nav, travel }: RoutineReviewCar
             await refreshItems();
         } catch (err) {
             console.error('[weekly-review] pause routine failed:', err);
-            setToast('Could not pause the routine — nothing changed.');
+            stageToast.showError('Could not pause the routine — nothing changed.');
             return;
         } finally {
             setIsPausing(false);
         }
         // Only after the pause landed: irreversible from the review's point of view (items
         // trashed + GCal cap) — no undo.
-        nav.recordDecision(undefined);
+        nav.recordDecision(entryId, undefined);
         // Fire-and-forget: push the pause + pull the GCal-cap echo without holding up the walk.
         void syncAndRefresh();
     }
@@ -138,16 +135,16 @@ export function RoutineReviewCard({ routine, db, nav, travel }: RoutineReviewCar
         }
         setIsCompleting(true);
         try {
-            await clarifyToDone(db, actionable, { onReadOnlyGCal: () => setToast(FROM_GMAIL_READONLY_MESSAGE) });
+            await clarifyToDone(db, actionable, { onReadOnlyGCal: () => stageToast.showNotice(FROM_GMAIL_READONLY_MESSAGE) });
             await refreshItems();
         } catch (err) {
             console.error('[weekly-review] mark routine occurrence done failed:', err);
-            setToast('Could not mark the occurrence done — nothing changed.');
+            stageToast.showError('Could not mark the occurrence done — nothing changed.');
             return;
         } finally {
             setIsCompleting(false);
         }
-        nav.recordDecision(undefined);
+        nav.recordDecision(entryId, undefined);
         void syncAndRefresh();
     }
 
@@ -167,9 +164,9 @@ export function RoutineReviewCard({ routine, db, nav, travel }: RoutineReviewCar
     const noopAsync = async () => {};
 
     return (
-        <Box className={stageStyles.stageRoot} data-testid="routineReviewCard">
+        <div className={stageStyles.stageRoot} data-testid="routineReviewCard">
             <StageCardScroller>
-                <Paper elevation={3} className={stageStyles.editorCard}>
+                <Card padding="none" className={stageStyles.editorCard}>
                     {/* Edit opens the routine editor inside the card, like the item cards' inline editing — the
                         review never leaves the walk. Owning the open flag is what lets isBusy lock stage travel. */}
                     {isEditorOpen ? (
@@ -189,51 +186,52 @@ export function RoutineReviewCard({ routine, db, nav, travel }: RoutineReviewCar
                         <>
                             <RoutineReviewBanner routine={routine} isException={false} routineId={routine._id} />
                             {whenLabel && (
-                                <Box className={styles.whenRow}>
-                                    <Typography variant="h6" component="p" data-testid="routineCardWhen">
+                                <div className={styles.whenRow}>
+                                    <Text variant="titleSm" as="p" data-testid="routineCardWhen">
                                         {whenLabel}
-                                    </Typography>
+                                    </Text>
                                     {relativeLabel && (
-                                        <Typography variant="body2" color="text.secondary" data-testid="routineCardWhenRelative">
+                                        <Text variant="bodySm" tone="secondary" data-testid="routineCardWhenRelative">
                                             {relativeLabel}
-                                        </Typography>
+                                        </Text>
                                     )}
-                                    {isAnchorOverdue && <Chip label="Overdue" color="warning" size="small" data-testid="routineCardOverdueChip" />}
-                                </Box>
+                                    {isAnchorOverdue && <Chip label="Overdue" tone="warning" size="sm" data-testid="routineCardOverdueChip" />}
+                                </div>
                             )}
                             {/* No repeat icon here: the banner above already carries it — a second one made the
-                    title read as a different KIND of entry than the one-offs around it. */}
-                            <Box className={styles.titleRow}>
-                                <Typography variant="h5" data-testid="routineCardTitle">
+                                title read as a different KIND of entry than the one-offs around it. */}
+                            <div className={styles.titleRow}>
+                                <Text variant="title" data-testid="routineCardTitle">
                                     {routine.title}
-                                </Typography>
+                                </Text>
                                 <Tooltip title="Open routine page">
                                     <IconButton
-                                        size="small"
+                                        size="sm"
+                                        aria-label="Open routine page"
                                         onClick={(e) => navigateOrNewTab(e, { to: '/routine/$routineId', params: { routineId: routine._id } })}
                                         data-testid="routineCardOpenPage"
                                     >
-                                        <OpenInNewIcon fontSize="small" />
+                                        <ExternalLink />
                                     </IconButton>
                                 </Tooltip>
-                            </Box>
-                            <Typography variant="body2" color="text.secondary" className={styles.occurrences} data-testid="routineCardOccurrences">
+                            </div>
+                            <Text variant="bodySm" tone="secondary" className={styles.occurrences} data-testid="routineCardOccurrences">
                                 {occurrenceSummary(occurrences, anchor)}
-                            </Typography>
+                            </Text>
                             {notes && (
-                                <Box className={styles.notes} data-testid="routineCardNotes">
+                                <div className={styles.notes} data-testid="routineCardNotes">
                                     <MarkdownPreview markdown={notes} />
-                                </Box>
+                                </div>
                             )}
                             {eventItem && (
-                                <Box className={styles.eventDetails}>
+                                <div className={styles.eventDetails}>
                                     <CalendarEventLinks item={eventItem} calendarOptions={calendarOptions} />
                                     <MeetingDetails item={eventItem} db={db} readOnly onRsvp={noopAsync} onAttendeesChange={noopAsync} />
-                                </Box>
+                                </div>
                             )}
                         </>
                     )}
-                </Paper>
+                </Card>
             </StageCardScroller>
             <StageActionBar travel={lockedTravel}>
                 <StageNavButtons {...nav.liveNavProps(isBusy)} />
@@ -249,7 +247,7 @@ export function RoutineReviewCard({ routine, db, nav, travel }: RoutineReviewCar
                     Done occupies — so it holds still as the calendar stage alternates card kinds. */}
                 {actionable && (
                     <Button
-                        startIcon={<CheckCircleOutlineIcon />}
+                        startIcon={<CircleCheck />}
                         disabled={isBusy || reassignInFlight}
                         onClick={() => void onMarkOccurrenceDone()}
                         data-testid="routineCardMarkOccurrenceDone"
@@ -257,7 +255,7 @@ export function RoutineReviewCard({ routine, db, nav, travel }: RoutineReviewCar
                         {isActionableOverdue ? 'Mark overdue done' : 'Mark done'}
                     </Button>
                 )}
-                <Button variant="contained" disabled={isBusy} onClick={() => nav.recordDecision({})} data-testid="routineCardLooksGood">
+                <Button variant="solid" disabled={isBusy} onClick={() => nav.recordDecision(entryId, {})} data-testid="routineCardLooksGood">
                     Looks good
                 </Button>
             </StageActionBar>
@@ -266,7 +264,7 @@ export function RoutineReviewCard({ routine, db, nav, travel }: RoutineReviewCar
                 onCancel={() => setIsPauseConfirmOpen(false)}
                 onConfirm={() => void onPauseConfirmed()}
             />
-            <Snackbar open={Boolean(toast)} autoHideDuration={3000} onClose={() => setToast('')} message={toast} />
-        </Box>
+            <StageToast {...stageToast.toastProps} />
+        </div>
     );
 }

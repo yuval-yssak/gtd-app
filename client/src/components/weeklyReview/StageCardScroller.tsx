@@ -1,4 +1,3 @@
-import Box from '@mui/material/Box';
 import styles from './stageLayout.module.css';
 
 /**
@@ -14,8 +13,8 @@ import styles from './stageLayout.module.css';
  */
 export function StageCardScroller({ children }: { children: React.ReactNode }) {
     return (
-        <Box className={styles.cardScroller} data-testid="stageCardScroller">
+        <div className={styles.cardScroller} data-testid="stageCardScroller">
             {children}
-        </Box>
+        </div>
     );
 }

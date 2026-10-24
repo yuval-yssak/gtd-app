@@ -1,8 +1,5 @@
-import KeyboardDoubleArrowLeftIcon from '@mui/icons-material/KeyboardDoubleArrowLeft';
-import KeyboardDoubleArrowRightIcon from '@mui/icons-material/KeyboardDoubleArrowRight';
-import Box from '@mui/material/Box';
-import IconButton from '@mui/material/IconButton';
-import Paper from '@mui/material/Paper';
+import { ChevronsLeft, ChevronsRight } from 'lucide-react';
+import { Card, IconButton } from '../../designSystem';
 import { DisabledCapableTooltip } from './DisabledCapableTooltip';
 import styles from './stageLayout.module.css';
 
@@ -40,20 +37,20 @@ interface StageActionBarProps {
  */
 export function StageActionBar({ travel, onBarMounted, children }: StageActionBarProps) {
     return (
-        <Paper elevation={4} className={styles.actionBar} data-testid="stageActionBar">
+        <Card padding="none" className={styles.actionBar} data-testid="stageActionBar">
             <TravelArrow label="Previous stage" testId="stageTravelPrev" onNavigate={travel.onPrevStage} disabled={travel.prevDisabled}>
-                <KeyboardDoubleArrowLeftIcon />
+                <ChevronsLeft />
             </TravelArrow>
-            {/* The portal target is this inner slot (not the Paper): portaled editor actions append
-                to their container's end, and appending into the Paper would land them AFTER the
+            {/* The portal target is this inner slot (not the bar): portaled editor actions append
+                to their container's end, and appending into the bar would land them AFTER the
                 next-stage arrow, breaking the bar's visual order. */}
-            <Box className={styles.actionBarContent} ref={onBarMounted}>
+            <div className={styles.actionBarContent} ref={onBarMounted}>
                 {children}
-            </Box>
+            </div>
             <TravelArrow label="Next stage" testId="stageTravelNext" onNavigate={travel.onNextStage} disabled={travel.nextDisabled}>
-                <KeyboardDoubleArrowRightIcon />
+                <ChevronsRight />
             </TravelArrow>
-        </Paper>
+        </Card>
     );
 }
 
@@ -68,7 +65,7 @@ interface TravelArrowProps {
 function TravelArrow({ label, testId, onNavigate, disabled, children }: TravelArrowProps) {
     return (
         <DisabledCapableTooltip title={label}>
-            <IconButton size="small" onClick={onNavigate} disabled={disabled} aria-label={label} data-testid={testId}>
+            <IconButton size="sm" onClick={onNavigate} disabled={disabled} aria-label={label} data-testid={testId}>
                 {children}
             </IconButton>
         </DisabledCapableTooltip>

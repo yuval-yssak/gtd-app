@@ -1,13 +1,9 @@
-import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-import Paper from '@mui/material/Paper';
-import Snackbar from '@mui/material/Snackbar';
-import Typography from '@mui/material/Typography';
 import type { IDBPDatabase } from 'idb';
 import { useState } from 'react';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { usePendingReassign } from '../../contexts/PendingReassignProvider';
 import { clarifyToDone, clarifyToTrash, FROM_GMAIL_READONLY_MESSAGE, releaseFromTickler } from '../../db/itemMutations';
+import { Button, Card, Text } from '../../designSystem';
 import type { MyDB } from '../../types/MyDB';
 import { type ItemEditorActionsApi, ItemEditorBody } from '../itemEditor/ItemEditorBody';
 import { RevisitDecisionCard } from './RevisitDecisionCard';
@@ -28,6 +24,7 @@ import { StageEmptyCard } from './StageEmptyCard';
 import { StageNavButtons } from './StageNavButtons';
 import styles from './stageLayout.module.css';
 import { useStageDecisionNavigation } from './useStageDecisionNavigation';
+import { StageToast, useStageToast } from './useStageToast';
 
 interface FocusStageProps {
     stage: ReviewStageDefinition;
@@ -53,7 +50,7 @@ export function FocusStage({ stage, queue, db, onQueueChange, onStageFinished, t
     // card for an entry the reconcile is about to drop.
     const { allItems, routines, people, workContexts, refreshItems } = useAppData();
     const { isPending } = usePendingReassign();
-    const [toast, setToast] = useState('');
+    const stageToast = useStageToast();
     // Portal target for the editor's action row — state (not a ref) so ItemEditorBody re-renders
     // and portals the buttons in once the pinned bar element mounts.
     const [actionsBarEl, setActionsBarEl] = useState<HTMLElement | null>(null);
@@ -62,7 +59,7 @@ export function FocusStage({ stage, queue, db, onQueueChange, onStageFinished, t
     // the edit would silently drop — same rule as the revisit card's item arrows.
     const [isEditorLocked, setIsEditorLocked] = useState(false);
     const lockedTravel = isEditorLocked ? { ...travel, prevDisabled: true, nextDisabled: true } : travel;
-    const nav = useStageDecisionNavigation({ db, queue, onQueueChange, onUndoFailed: setToast });
+    const nav = useStageDecisionNavigation({ db, queue, onQueueChange, onUndoFailed: stageToast.showError });
 
     if (nav.revisitProps) {
         return <RevisitDecisionCard db={db} {...nav.revisitProps} travel={travel} />;
@@ -78,16 +75,16 @@ export function FocusStage({ stage, queue, db, onQueueChange, onStageFinished, t
             // on the routines change it just observed. Keep the bar mounted (with the drop escape
             // hatch) so the walk is never controlless if that commit is dropped.
             return (
-                <Box className={styles.stageRoot} data-testid="focusStage">
-                    <Box className={styles.centeredArea}>
-                        <Paper elevation={1} className={styles.editorCard}>
-                            <Typography variant="body1">This routine no longer exists on this device.</Typography>
-                        </Paper>
-                    </Box>
+                <div className={styles.stageRoot} data-testid="focusStage">
+                    <div className={styles.centeredArea}>
+                        <Card padding="none" className={styles.editorCard}>
+                            <Text>This routine no longer exists on this device.</Text>
+                        </Card>
+                    </div>
                     <StageActionBar travel={travel}>
                         <StageNavButtons {...nav.blockedNavProps('focusBlockedSkip')} />
                     </StageActionBar>
-                </Box>
+                </div>
             );
         }
         return <RoutineReviewCard routine={entryRoutine} db={db} nav={nav} travel={travel} />;
@@ -110,6 +107,7 @@ export function FocusStage({ stage, queue, db, onQueueChange, onStageFinished, t
     }
 
     const reassignInFlight = isPending('item', currentItem._id);
+    const currentEntryId = currentItem._id;
     // Undo policy: routine-generated items get none — their disposal already advanced the
     // routine's series, and a snapshot restore would double-book it. A no-write decision
     // ("Looks good") is undone by a bare requeue, so it carries an empty undo.
@@ -119,15 +117,13 @@ export function FocusStage({ stage, queue, db, onQueueChange, onStageFinished, t
     async function decideWith(mutation: () => Promise<unknown>) {
         const undo = captureUndo();
         await mutation();
-        // `refreshItems()` only schedules the snapshot swap — it resolves before the wizard's
-        // reconcile effect sees the new items, so the decision is guaranteed to shift off the item
-        // we just mutated (not the next one). Load-bearing: if refresh ever becomes genuinely
-        // awaited, reconcile could drop the id first and the decision would silently skip its successor.
         await refreshItems();
-        nav.recordDecision(undo);
+        // Keyed by the item acted on: the refresh can let the wizard's reconcile drop it from the
+        // queue first, and deciding "current" would then decide its successor instead.
+        nav.recordDecision(currentEntryId, undo);
     }
 
-    const onDone = () => decideWith(() => clarifyToDone(db, currentItem, { onReadOnlyGCal: () => setToast(FROM_GMAIL_READONLY_MESSAGE) }));
+    const onDone = () => decideWith(() => clarifyToDone(db, currentItem, { onReadOnlyGCal: () => stageToast.showNotice(FROM_GMAIL_READONLY_MESSAGE) }));
     const onTrash = () => decideWith(() => clarifyToTrash(db, currentItem));
     const onRelease = () => decideWith(() => releaseFromTickler(db, currentItem));
 
@@ -135,7 +131,7 @@ export function FocusStage({ stage, queue, db, onQueueChange, onStageFinished, t
         <>
             <StageNavButtons {...nav.liveNavProps(api.isSaving)} />
             {stage.id === 'somedayMaybe' ? (
-                <Button color="warning" disabled={api.isSaving} onClick={() => void onTrash()} data-testid="focusTrash">
+                <Button tone="warning" disabled={api.isSaving} onClick={() => void onTrash()} data-testid="focusTrash">
                     Trash
                 </Button>
             ) : (
@@ -154,12 +150,12 @@ export function FocusStage({ stage, queue, db, onQueueChange, onStageFinished, t
                 save — the debounced commit (or the unmount flush) lands them either way. A routine
                 destination is a compound write no snapshot can reverse, so it arms no undo. */}
             <Button
-                variant="contained"
+                variant="solid"
                 disabled={api.isDirty ? api.saveDisabled : api.isSaving}
                 onClick={
                     api.isDirty
                         ? () => nav.armExplicitSave(api.isRoutineDestination ? undefined : captureUndo(), api.triggerSave)
-                        : () => nav.recordDecision(captureNoWriteUndo())
+                        : () => nav.recordDecision(currentEntryId, captureNoWriteUndo())
                 }
                 data-testid="focusKeep"
             >
@@ -174,9 +170,9 @@ export function FocusStage({ stage, queue, db, onQueueChange, onStageFinished, t
     const isExceptionItem = Boolean(itemRoutine && isModifiedExceptionItem(itemRoutine, currentItem));
 
     return (
-        <Box className={styles.stageRoot} data-testid="focusStage">
+        <div className={styles.stageRoot} data-testid="focusStage">
             <StageCardScroller>
-                <Paper elevation={3} className={styles.editorCard}>
+                <Card padding="none" className={styles.editorCard}>
                     {currentItem.routineId && <RoutineReviewBanner routine={itemRoutine} isException={isExceptionItem} routineId={currentItem.routineId} />}
                     <ItemEditorBody
                         key={currentItem._id}
@@ -184,21 +180,21 @@ export function FocusStage({ stage, queue, db, onQueueChange, onStageFinished, t
                         db={db}
                         people={people}
                         workContexts={workContexts}
-                        onClose={nav.closeAsDecisionOrSkip}
+                        onClose={() => nav.closeAsDecisionOrSkip(currentEntryId)}
                         onSaved={refreshItems}
                         onSaveCommitted={nav.markSaveCommitted}
                         onDirtyLockChange={setIsEditorLocked}
-                        onFromGmailReadOnly={() => setToast(FROM_GMAIL_READONLY_MESSAGE)}
+                        onFromGmailReadOnly={() => stageToast.showNotice(FROM_GMAIL_READONLY_MESSAGE)}
                         presentation="review"
                         renderActions={renderActions}
                         actionsContainer={actionsBarEl}
                     />
-                </Paper>
+                </Card>
             </StageCardScroller>
             <StageActionBar onBarMounted={setActionsBarEl} travel={lockedTravel}>
                 {reassignInFlight && <StageNavButtons {...nav.blockedNavProps('focusBlockedSkip')} />}
             </StageActionBar>
-            <Snackbar open={Boolean(toast)} autoHideDuration={3000} onClose={() => setToast('')} message={toast} />
-        </Box>
+            <StageToast {...stageToast.toastProps} />
+        </div>
     );
 }

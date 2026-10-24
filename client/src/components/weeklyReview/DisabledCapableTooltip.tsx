@@ -1,4 +1,4 @@
-import Tooltip from '@mui/material/Tooltip';
+import { Tooltip } from '../../designSystem';
 
 interface DisabledCapableTooltipProps {
     title: string;
@@ -8,9 +8,8 @@ interface DisabledCapableTooltipProps {
 }
 
 /**
- * Tooltip that keeps working over a disabled button: a disabled MUI button has
- * pointer-events: none and would never open the tooltip, so the child is wrapped in a span that
- * still fires the pointer events MUI listens on.
+ * Tooltip that keeps working over a disabled button: a disabled button fires no pointer events and
+ * would never open the tooltip, so the child is wrapped in a span that still fires them.
  */
 export function DisabledCapableTooltip({ title, wrapperTestId, children }: DisabledCapableTooltipProps) {
     return (

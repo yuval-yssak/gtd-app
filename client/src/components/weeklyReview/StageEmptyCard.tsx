@@ -1,8 +1,5 @@
-import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutlined';
-import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-import Paper from '@mui/material/Paper';
-import Typography from '@mui/material/Typography';
+import { CircleCheck } from 'lucide-react';
+import { Button, Card, Text } from '../../designSystem';
 import { StageActionBar, type StageTravel } from './StageActionBar';
 import styles from './StageEmptyCard.module.css';
 import { StageNavButtons } from './StageNavButtons';
@@ -19,21 +16,21 @@ interface StageEmptyCardProps {
 /** Shown when a stage's queue is exhausted (or was empty to begin with) — the gate to the next stage. */
 export function StageEmptyCard({ title, onContinue, onBack, travel }: StageEmptyCardProps) {
     return (
-        <Box className={layoutStyles.stageRoot} data-testid="stageEmptyCard">
-            <Box className={layoutStyles.centeredArea}>
-                <Paper elevation={1} className={styles.emptyCard}>
-                    <CheckCircleOutlineIcon color="success" className={styles.emptyIcon} />
-                    <Typography variant="h6">{title}</Typography>
-                </Paper>
-            </Box>
+        <div className={layoutStyles.stageRoot} data-testid="stageEmptyCard">
+            <div className={layoutStyles.centeredArea}>
+                <Card padding="none" className={styles.emptyCard}>
+                    <CircleCheck className={styles.emptyIcon} />
+                    <Text variant="titleSm">{title}</Text>
+                </Card>
+            </div>
             {/* Same pinned bar as the item cards — Continue lands exactly where the primary action
                 button just was, so advancing stages never requires repositioning the cursor. */}
             <StageActionBar travel={travel}>
                 {onBack && <StageNavButtons onBack={onBack} />}
-                <Button variant="contained" onClick={onContinue} data-testid="stageContinue">
+                <Button variant="solid" onClick={onContinue} data-testid="stageContinue">
                     Continue
                 </Button>
             </StageActionBar>
-        </Box>
+        </div>
     );
 }

@@ -1,11 +1,8 @@
-import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-import Paper from '@mui/material/Paper';
-import Typography from '@mui/material/Typography';
 import type { IDBPDatabase } from 'idb';
 import { useState } from 'react';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { usePendingReassign } from '../../contexts/PendingReassignProvider';
+import { Button, Card, Text } from '../../designSystem';
 import { formatRoutineSchedule } from '../../lib/rruleUtils';
 import type { MyDB } from '../../types/MyDB';
 import { ItemEditorBody } from '../itemEditor/ItemEditorBody';
@@ -81,20 +78,20 @@ export function RevisitDecisionCard({
                 actions={
                     <>
                         <StageNavButtons {...navProps(false)} />
-                        <Button color="inherit" onClick={onUndoDecision} disabled={!decision.undo || !routine || isUndoing} data-testid="revisitUndoDecision">
+                        <Button tone="neutral" onClick={onUndoDecision} disabled={!decision.undo || !routine || isUndoing} data-testid="revisitUndoDecision">
                             Undo decision
                         </Button>
                     </>
                 }
             >
-                <Typography variant="overline" color="text.secondary" data-testid="revisitPositionLabel">
+                <Text variant="overline" tone="secondary" data-testid="revisitPositionLabel">
                     Already reviewed · {position.index} of {position.total}
-                </Typography>
-                <Typography variant="h6">{routine ? routine.title : 'This routine no longer exists on this device.'}</Typography>
+                </Text>
+                <Text variant="titleSm">{routine ? routine.title : 'This routine no longer exists on this device.'}</Text>
                 {routine && (
-                    <Typography variant="body2" color="text.secondary">
+                    <Text variant="bodySm" tone="secondary">
                         {formatRoutineSchedule(routine)}
-                    </Typography>
+                    </Text>
                 )}
             </RevisitSummaryShell>
         );
@@ -105,18 +102,18 @@ export function RevisitDecisionCard({
     if (!item || isPending('item', item._id)) {
         return (
             <RevisitSummaryShell travel={travel} actions={<StageNavButtons {...navProps(false)} />}>
-                <Typography variant="body1">{item ? 'This item is moving to another account.' : 'This item no longer exists on this device.'}</Typography>
+                <Text>{item ? 'This item is moving to another account.' : 'This item no longer exists on this device.'}</Text>
             </RevisitSummaryShell>
         );
     }
 
     return (
-        <Box className={styles.stageRoot} data-testid="revisitDecisionCard">
+        <div className={styles.stageRoot} data-testid="revisitDecisionCard">
             <StageCardScroller>
-                <Paper elevation={3} className={styles.editorCard}>
-                    <Typography variant="overline" color="text.secondary" data-testid="revisitPositionLabel">
+                <Card padding="none" className={styles.editorCard}>
+                    <Text variant="overline" tone="secondary" data-testid="revisitPositionLabel">
                         Already reviewed · {position.index} of {position.total}
-                    </Typography>
+                    </Text>
                     <ItemEditorBody
                         key={item._id}
                         item={item}
@@ -143,7 +140,7 @@ export function RevisitDecisionCard({
                                     wrapperTestId="revisitUndoWrapper"
                                 >
                                     <Button
-                                        color="inherit"
+                                        tone="neutral"
                                         onClick={onUndoDecision}
                                         disabled={!decision.undo || isUndoing || api.isSaving}
                                         data-testid="revisitUndoDecision"
@@ -155,17 +152,17 @@ export function RevisitDecisionCard({
                                 chip) commit here; text edits autosave and need no explicit save.
                                 Note: a manual save does NOT refresh the decision's undo snapshot —
                                 a subsequent Undo reverts past the manual fix too. */}
-                                <Button variant="contained" disabled={!api.isDirty || api.saveDisabled} onClick={api.triggerSave} data-testid="revisitSave">
+                                <Button variant="solid" disabled={!api.isDirty || api.saveDisabled} onClick={api.triggerSave} data-testid="revisitSave">
                                     Save
                                 </Button>
                             </>
                         )}
                         actionsContainer={actionsBarEl}
                     />
-                </Paper>
+                </Card>
             </StageCardScroller>
             <StageActionBar onBarMounted={setActionsBarEl} travel={lockedTravel} />
-        </Box>
+        </div>
     );
 }
 
@@ -179,13 +176,13 @@ interface RevisitSummaryShellProps {
 /** Shared shell of the read-only revisit branches (routine entry, missing item): centered summary card + pinned bar. */
 function RevisitSummaryShell({ travel, actions, children }: RevisitSummaryShellProps) {
     return (
-        <Box className={styles.stageRoot} data-testid="revisitDecisionCard">
-            <Box className={styles.centeredArea}>
-                <Paper elevation={1} className={styles.editorCard}>
+        <div className={styles.stageRoot} data-testid="revisitDecisionCard">
+            <div className={styles.centeredArea}>
+                <Card padding="none" className={styles.editorCard}>
                     {children}
-                </Paper>
-            </Box>
+                </Card>
+            </div>
             <StageActionBar travel={travel}>{actions}</StageActionBar>
-        </Box>
+        </div>
     );
 }

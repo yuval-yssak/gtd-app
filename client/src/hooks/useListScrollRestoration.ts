@@ -114,6 +114,35 @@ export function restoreTargetForFrame(entry: ListScrollEntry, targets: number[],
     return { target: consensusScrollTop(targets, entry.scrollTop) ?? entry.scrollTop, shouldKeepWatching };
 }
 
+/** Consecutive frames a corroborated target must hold before the chain stops watching (~50ms). */
+export const RESTORE_SETTLE_FRAMES = 3;
+
+/** How long the chain's corroborated target has held still. */
+export interface RestoreSettling {
+    /** The target the current hold window opened on — every frame in it is compared to this one. */
+    windowTarget: number | null;
+    stableFrames: number;
+}
+
+export const INITIAL_RESTORE_SETTLING: RestoreSettling = { windowTarget: null, stableFrames: 0 };
+
+/**
+ * Whether the restore has really landed. One corroborated frame is not enough: a windowed list
+ * places its mounted rows using ESTIMATED heights for the unmounted rows above them, so anchors
+ * can agree on a target that moves as soon as those rows mount and measure (the drift that
+ * pushed the next row ~3 rows off). The chain stops only once the target holds for
+ * RESTORE_SETTLE_FRAMES frames in a row — within 1px of the window's FIRST target, so a slow
+ * creep can't pass as holding one sub-pixel step at a time.
+ */
+export function nextRestoreSettling(settling: RestoreSettling, decision: RestoreDecision): RestoreSettling & { isSettled: boolean } {
+    const isHolding = !decision.shouldKeepWatching && settling.windowTarget !== null && Math.abs(decision.target - settling.windowTarget) <= 1;
+    if (!isHolding) {
+        return { windowTarget: decision.target, stableFrames: 0, isSettled: false };
+    }
+    const stableFrames = settling.stableFrames + 1;
+    return { windowTarget: settling.windowTarget, stableFrames, isSettled: stableFrames >= RESTORE_SETTLE_FRAMES };
+}
+
 // A restore may land while the list is still growing (Suspense fallback / transition
 // re-render after a mutation) — the browser clamps scrollTop against the short content
 // and nothing re-asserts it. Retry on animation frames until the assignment sticks.
@@ -127,7 +156,15 @@ let restoreGeneration = 0;
 // position (see restoreTargetForFrame's pixel fallback) and freeze the drift in place.
 let isRestoreChainActive = false;
 
-function applyRestore(locationKey: string, generation: number, framesLeft: number): void {
+/** One restore retry chain's position: which entry, which generation, how far along, how settled. */
+interface RestoreChain {
+    locationKey: string;
+    generation: number;
+    framesLeft: number;
+    settling: RestoreSettling;
+}
+
+function applyRestore({ locationKey, generation, framesLeft, settling }: RestoreChain): void {
     const finishChain = () => {
         if (generation === restoreGeneration) {
             isRestoreChainActive = false;
@@ -147,7 +184,9 @@ function applyRestore(locationKey: string, generation: number, framesLeft: numbe
         return;
     }
     const targets = anchorScrollTargets(surface, entry);
-    const { target, shouldKeepWatching } = restoreTargetForFrame(entry, targets, framesLeft);
+    const decision = restoreTargetForFrame(entry, targets, framesLeft);
+    const { target, shouldKeepWatching } = decision;
+    const nextSettling = nextRestoreSettling(settling, decision);
     surface.scroller.scrollTop = target;
     const wasClamped = Math.abs(surface.scroller.scrollTop - target) > 1;
     // Windowed lists (virtua) don't have the saved anchor rows mounted yet on arrival: the pixel
@@ -155,10 +194,12 @@ function applyRestore(locationKey: string, generation: number, framesLeft: numbe
     // mount, and a later frame re-anchors precisely. Keep retrying until enough anchors appear.
     // Worst case (anchor rows were deleted and never mount): the chain — and with it the
     // scroll-capture suppression — runs the full retry budget (~1s) before saves resume.
-    if ((wasClamped || shouldKeepWatching) && framesLeft > 0) {
+    // Corroborated is not landed: the chain also keeps going until the target has held still
+    // (nextRestoreSettling), since mounting rows above the anchors can still move them.
+    if ((wasClamped || shouldKeepWatching || !nextSettling.isSettled) && framesLeft > 0) {
         requestAnimationFrame(() => {
             if (generation === restoreGeneration) {
-                applyRestore(locationKey, generation, framesLeft - 1);
+                applyRestore({ locationKey, generation, framesLeft: framesLeft - 1, settling: nextSettling });
             }
         });
         return;
@@ -170,7 +211,7 @@ function applyRestore(locationKey: string, generation: number, framesLeft: numbe
 function restorePosition(locationKey: string): void {
     restoreGeneration += 1;
     isRestoreChainActive = true;
-    applyRestore(locationKey, restoreGeneration, RESTORE_RETRY_FRAMES);
+    applyRestore({ locationKey, generation: restoreGeneration, framesLeft: RESTORE_RETRY_FRAMES, settling: INITIAL_RESTORE_SETTLING });
 }
 
 function keyOfLocation(location: ParsedLocation): string {

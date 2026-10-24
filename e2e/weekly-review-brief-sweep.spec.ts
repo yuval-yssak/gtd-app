@@ -124,6 +124,9 @@ test.describe('weekly review — brief sweep on start', () => {
 
             const sweeps = await recordSweepRequests(page);
             await page.goto('/weekly-review?stage=nextActions');
+            // The page must be fully loaded before the network drops: cutting it mid-load can strand
+            // the route's lazy chunk, and the start button never renders. Only the START is offline.
+            await expect(page.getByTestId('startReviewButton')).toBeVisible();
             await page.context().setOffline(true);
             await page.getByTestId('startReviewButton').click();
             await expect(page.getByTestId('reviewStageTitle')).toHaveText('Next Actions');

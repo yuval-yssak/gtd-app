@@ -67,20 +67,53 @@
         font-size: var(--type-xs-size);
         font-variant-numeric: tabular-nums;
 
+        .step[data-complete] & {
+            border-color: var(--color-accent);
+            color: var(--color-accent);
+        }
+
+        /* After [data-complete] on purpose: a step walked in any order can be current AND complete,
+           and the current fill must win whole — mixing the two painted accent digits on accent. */
         .step[data-active] & {
             border-color: var(--color-accent);
             background-color: var(--color-accent);
             color: var(--color-on-accent);
-        }
-
-        .step[data-complete] & {
-            border-color: var(--color-accent);
-            color: var(--color-accent);
         }
     }
 
     .label {
         overflow: hidden;
         text-overflow: ellipsis;
+    }
+
+    /* Labels under their markers (MUI alternativeLabel): steps share the width equally and the
+       connector runs between marker centres, so many steps fit without truncating. Below a
+       readable minimum per step the strip scrolls instead of squeezing. */
+    .steps[data-label-placement="below"] {
+        align-items: flex-start;
+        gap: 0;
+
+        .step {
+            position: relative;
+            flex-direction: column;
+            min-inline-size: 5rem;
+
+            /* Equal-width steps with no gap: the next marker's centre sits at 150% of this step's
+               width, so the connector spans from just past this marker to just before that one. */
+            &:not(:last-child)::after {
+                position: absolute;
+                inset-block-start: 0.75rem;
+                inset-inline: calc(50% + var(--space-4)) calc(-50% + var(--space-4));
+                min-inline-size: 0;
+            }
+        }
+
+        .content {
+            flex-direction: column;
+            flex-shrink: 1;
+            max-inline-size: 100%;
+            white-space: normal;
+            text-align: center;
+        }
     }
 }

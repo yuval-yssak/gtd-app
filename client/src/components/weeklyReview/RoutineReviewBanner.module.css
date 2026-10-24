@@ -4,19 +4,27 @@
     display: flex;
     align-items: center;
     justify-content: flex-start;
-    gap: 0.5rem;
-    width: 100%;
-    padding: 0.5rem 0.75rem;
-    margin-bottom: 1rem;
-    border-radius: 0.5rem;
-    color: var(--mui-palette-primary-main);
-    background-color: rgba(var(--mui-palette-primary-mainChannel) / 0.08);
-    text-align: left;
-}
+    gap: var(--space-2);
+    inline-size: 100%;
+    padding: var(--space-2) var(--space-3);
+    margin-block-end: var(--space-4);
+    border: 0;
+    border-radius: var(--radius-md);
+    color: var(--color-accent);
+    background-color: var(--color-accent-tint-bg);
+    font: inherit;
+    text-align: start;
+    cursor: pointer;
 
-/* Exception variant: the occurrence deviates from the pattern — warn-tinted so it reads apart
- * from the regular routine strip. */
-.exception {
-    color: var(--mui-palette-warning-dark);
-    background-color: rgba(var(--mui-palette-warning-mainChannel) / 0.12);
+    &:focus-visible {
+        outline: var(--focus-ring-width) solid var(--focus-ring-color);
+        outline-offset: var(--focus-ring-offset);
+    }
+
+    /* Exception variant: the occurrence deviates from the pattern — warn-tinted so it reads apart
+     * from the regular routine strip. */
+    &[data-exception] {
+        color: var(--color-status-warning);
+        background-color: var(--color-status-warning-tint-bg);
+    }
 }

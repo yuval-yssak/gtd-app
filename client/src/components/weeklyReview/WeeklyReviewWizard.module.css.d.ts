@@ -1,16 +1,12 @@
 declare const styles: {
-    readonly briefsToggle: string;
     readonly header: string;
     readonly headerControls: string;
     readonly headerRow: string;
     readonly headerStrip: string;
-    readonly progressBar: string;
     readonly stageTitle: string;
     readonly stepper: string;
-    readonly stepperScroller: string;
+    readonly stripChevron: string;
     readonly stripDot: string;
-    readonly stripDotCurrent: string;
-    readonly stripDotDone: string;
     readonly stripDots: string;
     readonly stripLabel: string;
     readonly stripProgress: string;

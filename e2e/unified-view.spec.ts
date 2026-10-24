@@ -103,17 +103,22 @@ test.describe('unified view — items + AccountChips', () => {
             // listDeviceSessions(), so a server-side revoke is required for the secondary to
             // disappear after a reload — without it, the next refresh re-mirrors the server list
             // and resurrects the row.
+            // Inside the app's session gate: the page's own sync pass pivots the cookie onto the
+            // secondary to sync it, and a revoke landing mid-pivot loses the ACTIVE session too.
             await page.evaluate(
                 async ({ rawToken, uid, apiUrl }) => {
-                    await fetch(`${apiUrl}/auth/multi-session/revoke`, {
-                        method: 'POST',
-                        credentials: 'include',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ sessionToken: rawToken }),
-                    });
                     type DBHandle = { delete(store: 'accounts', key: string): Promise<unknown> };
-                    const dbHandle = (window as unknown as { __gtd: { db: DBHandle } }).__gtd.db;
-                    await dbHandle.delete('accounts', uid);
+                    type Harness = { db: DBHandle; withSessionGate(task: () => Promise<void>): Promise<void> };
+                    const harness = (window as unknown as { __gtd: Harness }).__gtd;
+                    await harness.withSessionGate(async () => {
+                        await fetch(`${apiUrl}/auth/multi-session/revoke`, {
+                            method: 'POST',
+                            credentials: 'include',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ sessionToken: rawToken }),
+                        });
+                        await harness.db.delete('accounts', uid);
+                    });
                 },
                 { rawToken: secondary.rawToken, uid: secondary.userId, apiUrl: API_URL },
             );

@@ -433,6 +433,29 @@ test.describe('weekly review', () => {
         });
     });
 
+    // Stages are walked in any order, so the timeline marks completion per stage — not "every
+    // stage before the current one".
+    test('timeline marks a finished stage complete even when the review is back on an earlier one', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `wr-stepper-done-${uniqueStamp()}@example.com`, async (page) => {
+            await page.goto('/weekly-review');
+            await page.getByTestId('startReviewButton').click();
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Clear all inboxes');
+
+            // An empty inbox: entering Clarify finishes it on the spot.
+            await page.getByTestId('stageTravelNext').click();
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Clarify');
+            await page.getByTestId('reviewHeaderStrip').click();
+            await page.getByTestId('reviewStepperStep').nth(0).click();
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Clear all inboxes');
+
+            const steps = page.getByTestId('reviewStepper').getByRole('listitem');
+            await expect(steps.nth(0)).toHaveAttribute('aria-current', 'step');
+            await expect(steps.nth(0)).not.toHaveAttribute('data-complete');
+            await expect(steps.nth(1)).toHaveAttribute('data-complete');
+            await expect(steps.nth(2)).not.toHaveAttribute('data-complete');
+        });
+    });
+
     test('header shows full only at review start; the strip everywhere else, with a sticky expand toggle', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `wr-collapse-${uniqueStamp()}@example.com`, async (page) => {
             const first = await gtd.collect(page, 'First action');
@@ -463,7 +486,9 @@ test.describe('weekly review', () => {
             await expect(page.getByTestId('stripStageDots')).toHaveAttribute('aria-label', 'Stage 2 of 8');
             // The current stage here is ALSO done (empty queue) — its dot must still carry the
             // "you are here" style, not blend into the completed run.
-            await expect(page.getByTestId('stripStageDots').locator('span').nth(1)).toHaveClass(/stripDotCurrent/);
+            const currentDot = page.getByTestId('stripStageDots').locator('span').nth(1);
+            await expect(currentDot).toHaveAttribute('data-current');
+            await expect(currentDot).toHaveAttribute('data-done');
 
             // A stage with items: strip with the item counter, no full guidance showing.
             await page.getByTestId('stageTravelNext').click();
@@ -1058,6 +1083,8 @@ test.describe('weekly review', () => {
             // and decides the entry irreversibly.
             await page.getByTestId('routineCardPause').click();
             await page.getByTestId('pauseRoutineConfirm').click();
+            // Pausing makes the gym entry ineligible, and the reconcile may drop it before the
+            // decision lands: the decision must still be the gym's, never the Pool card's.
             await expect(routineCard.getByTestId('routineCardTitle')).toHaveText('Pool with Elena');
             await expect(page.getByTestId('reviewStageCounter')).toContainText('1 of 3');
 

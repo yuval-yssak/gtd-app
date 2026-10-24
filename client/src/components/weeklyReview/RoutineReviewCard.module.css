@@ -2,29 +2,28 @@
 .whenRow {
     display: flex;
     align-items: baseline;
-    gap: 0.5rem;
+    gap: var(--space-2);
     flex-wrap: wrap;
-    margin-top: 0.75rem;
+    margin-block-start: var(--space-3);
 }
 
-/* Header row: repeat icon + title, with the open-page affordance at the end. */
+/* Header row: title, with the open-page affordance at the end. */
 .titleRow {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--space-2);
 }
 
 /* Series context under the title — how many occurrences the one card stands for. */
 .occurrences {
-    display: block;
-    margin-top: 0.25rem;
+    margin-block-start: var(--space-1);
 }
 
 /* Same long-notes ceiling as the item editor's preview: the stage scroll (.cardScroller) would
  * otherwise have to be dragged past the whole notes block to reach the rest of the card. */
 .notes {
-    margin-top: 1rem;
-    max-height: var(--notes-max-height);
+    margin-block-start: var(--space-4);
+    max-block-size: var(--notes-max-height);
     overflow-y: auto;
 }
 
@@ -32,6 +31,6 @@
 .eventDetails {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
-    margin-top: 1rem;
+    gap: var(--space-2);
+    margin-block-start: var(--space-4);
 }

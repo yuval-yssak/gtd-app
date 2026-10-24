@@ -3,6 +3,7 @@ import {
     advanceStage,
     buildStageQueue,
     completeCurrentItem,
+    completeEntry,
     currentQueueItemId,
     currentStage,
     decidedItemIds,
@@ -181,6 +182,35 @@ describe('stage queue', () => {
         expect(decided.pending).toEqual(['a', 'c']);
         expect(decidedItemIds(decided)).toEqual(['b']);
         expect(currentQueueItemId(decided)).toBe('c');
+    });
+
+    // The decision belongs to the entry the user acted on. A reconcile can land between the write
+    // and the decision (the write made that entry ineligible) and move "current" to the next one —
+    // completing "current" then would silently decide an entry the user never saw.
+    it('completeEntry decides the named entry, never whichever one is current by then', () => {
+        const queue = buildStageQueue(['gym', 'pool', 'exception']);
+        const reconciledAway = reconcileQueue(queue, ['pool', 'exception']);
+        expect(currentQueueItemId(reconciledAway)).toBe('pool');
+
+        const decided = completeEntry(reconciledAway, 'gym');
+
+        expect(decidedItemIds(decided)).toEqual(['gym']);
+        expect(decided.pending).toEqual(['pool', 'exception']);
+        expect(currentQueueItemId(decided)).toBe('pool');
+    });
+
+    it('completeEntry removes a still-pending entry and keeps the cursor on the same next entry', () => {
+        const midWalk = skipCurrentItem(buildStageQueue(['a', 'b', 'c'])); // cursor on 'b'
+        expect(completeEntry(midWalk, 'b', {})).toEqual({ pending: ['a', 'c'], cursor: 1, decisions: [{ itemId: 'b', undo: {} }] });
+        // Deciding an entry BEFORE the cursor shifts the cursor down so it still points at 'b'.
+        const decidedEarlier = completeEntry(midWalk, 'a');
+        expect(decidedEarlier.pending).toEqual(['b', 'c']);
+        expect(currentQueueItemId(decidedEarlier)).toBe('b');
+    });
+
+    it('completeEntry is a no-op for an entry already decided', () => {
+        const decided = completeEntry(buildStageQueue(['a', 'b']), 'a');
+        expect(completeEntry(decided, 'a')).toBe(decided);
     });
 
     it('skip advances the cursor without reordering, and the walk ENDS past the last item (no cycling)', () => {

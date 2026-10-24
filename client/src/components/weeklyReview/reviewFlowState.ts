@@ -283,14 +283,27 @@ export function walkedEntryCount(queue: StageQueue): number {
  * cursor stays put, so it now points at the next undecided item (or past the end).
  */
 export function completeCurrentItem(queue: StageQueue, undo?: StageDecisionUndo): StageQueue {
-    const current = queue.pending[queue.cursor];
-    if (current === undefined) {
+    const current = currentQueueItemId(queue);
+    return current === null ? queue : completeEntry(queue, current, undo);
+}
+
+/**
+ * A decision was made on `entryId` — the entry the user acted on, resolved when they acted, not
+ * when the decision lands. It leaves the queue for good (unless undone).
+ */
+export function completeEntry(queue: StageQueue, entryId: string, undo?: StageDecisionUndo): StageQueue {
+    if (decidedItemIds(queue).includes(entryId)) {
         return queue;
     }
+    // Absent from `pending` is still a decision: the write being recorded can make its own entry
+    // ineligible, and the reconcile may drop it before the decision lands. The cursor stays on the
+    // same next entry either way.
+    const index = queue.pending.indexOf(entryId);
     return {
         ...queue,
-        pending: queue.pending.filter((_, index) => index !== queue.cursor),
-        decisions: [...queue.decisions, { itemId: current, ...(undo ? { undo } : {}) }],
+        pending: index === -1 ? queue.pending : queue.pending.filter((id) => id !== entryId),
+        cursor: index !== -1 && index < queue.cursor ? queue.cursor - 1 : queue.cursor,
+        decisions: [...queue.decisions, { itemId: entryId, ...(undo ? { undo } : {}) }],
     };
 }
 

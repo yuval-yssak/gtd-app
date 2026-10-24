@@ -1,7 +1,5 @@
-import LoopIcon from '@mui/icons-material/Loop';
-import ButtonBase from '@mui/material/ButtonBase';
-import Typography from '@mui/material/Typography';
-import classNames from 'classnames';
+import { Repeat } from 'lucide-react';
+import { Text } from '../../designSystem';
 import { useNewTabAwareNavigate } from '../../lib/newTabNavigation';
 import { formatRoutineSchedule } from '../../lib/rruleUtils';
 import type { StoredRoutine } from '../../types/MyDB';
@@ -27,16 +25,18 @@ export function RoutineReviewBanner({ routine, isException, routineId }: Routine
     const label = isException ? 'Exception to routine' : 'Routine';
 
     return (
-        <ButtonBase
-            className={classNames(styles.banner, { [styles.exception]: isException })}
+        <button
+            type="button"
+            className={styles.banner}
+            data-exception={isException || undefined}
             onClick={(e) => navigateOrNewTab(e, { to: '/routine/$routineId', params: { routineId } })}
             aria-label={routine ? `${label}: ${routine.title}` : 'Part of a routine'}
             data-testid={isException ? 'reviewRoutineExceptionBanner' : 'reviewRoutineBanner'}
         >
-            <LoopIcon fontSize="small" />
-            <Typography variant="body2" component="span">
+            <Repeat size={18} />
+            <Text as="span" variant="bodySm" tone="inherit">
                 {schedule ? `${label} · ${schedule}` : 'Part of a routine'}
-            </Typography>
-        </ButtonBase>
+            </Text>
+        </button>
     );
 }

@@ -1,22 +1,9 @@
-import ExpandLessIcon from '@mui/icons-material/ExpandLess';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
-import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-import ButtonBase from '@mui/material/ButtonBase';
-import FormControlLabel from '@mui/material/FormControlLabel';
-import IconButton from '@mui/material/IconButton';
-import LinearProgress from '@mui/material/LinearProgress';
-import Step from '@mui/material/Step';
-import StepButton from '@mui/material/StepButton';
-import Stepper from '@mui/material/Stepper';
-import Switch from '@mui/material/Switch';
-import Tooltip from '@mui/material/Tooltip';
-import Typography from '@mui/material/Typography';
-import classNames from 'classnames';
+import { clsx } from 'clsx';
 import type { IDBPDatabase } from 'idb';
+import { ChevronDown, ChevronUp, Info } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useAppData } from '../../contexts/AppDataProvider';
+import { Button, IconButton, ProgressBar, StepIndicator, Switch, Text, Tooltip } from '../../designSystem';
 import { useOnline } from '../../hooks/useOnline';
 import { useTodayIso } from '../../hooks/useTodayIso';
 import { setShowBriefs, useShowBriefs } from '../../lib/briefPreference';
@@ -172,7 +159,7 @@ export function WeeklyReviewWizard({ db, flow, onFlowChange }: WeeklyReviewWizar
     };
 
     return (
-        <Box className={styles.wizardRoot} ref={wizardRootRef}>
+        <div className={styles.wizardRoot} ref={wizardRootRef}>
             {isHeaderCollapsed ? (
                 <CollapsedHeaderStrip stage={stage} queue={queue} stageDots={stageDots} onExpand={() => setIsHeaderExpandedByUser(true)} />
             ) : (
@@ -215,7 +202,7 @@ export function WeeklyReviewWizard({ db, flow, onFlowChange }: WeeklyReviewWizar
                     travel={travel}
                 />
             )}
-        </Box>
+        </div>
     );
 }
 
@@ -229,17 +216,16 @@ interface ReviewStepperProps {
 /** Always-visible timeline: every stage clickable, any time, in either direction (free jumps). */
 function ReviewStepper({ flow, inboxIds, onJump }: ReviewStepperProps) {
     return (
-        <Box className={styles.stepperScroller}>
-            <Stepper nonLinear activeStep={flow.stageIndex} alternativeLabel className={styles.stepper} data-testid="reviewStepper">
-                {REVIEW_STAGES.map((stage, index) => (
-                    <Step key={stage.id} completed={isStageDone(flow, stage, inboxIds)}>
-                        <StepButton onClick={() => onJump(index)} data-testid="reviewStepperStep">
-                            {stage.title}
-                        </StepButton>
-                    </Step>
-                ))}
-            </Stepper>
-        </Box>
+        <StepIndicator
+            aria-label="Review stages"
+            labelPlacement="below"
+            activeIndex={flow.stageIndex}
+            steps={REVIEW_STAGES.map((stage) => ({ key: stage.id, label: stage.title, isComplete: isStageDone(flow, stage, inboxIds) }))}
+            onStepSelected={onJump}
+            stepTestId="reviewStepperStep"
+            className={styles.stepper}
+            data-testid="reviewStepper"
+        />
     );
 }
 
@@ -266,11 +252,12 @@ function stageItemProgress(queue: StageQueue | undefined): { label: string; valu
         return null;
     }
     const walked = walkedEntryCount(queue);
-    return { label: `${walked} of ${total}`, value: (walked / total) * 100 };
+    // Whole percent: the bar announces this as aria-valuenow, and "66.666…" reads as noise.
+    return { label: `${walked} of ${total}`, value: Math.round((walked / total) * 100) };
 }
 
 /** Review-wide progress percentage — the full header's bar (the strip's bar is stage-scoped). */
-const reviewProgressValue = (flow: ReviewFlowState) => (flow.stageIndex / REVIEW_STAGES.length) * 100;
+const reviewProgressValue = (flow: ReviewFlowState) => Math.round((flow.stageIndex / REVIEW_STAGES.length) * 100);
 
 interface StripStageDot {
     stageId: ReviewStageId;
@@ -297,28 +284,32 @@ function CollapsedHeaderStrip({ stage, queue, stageDots, onExpand }: CollapsedHe
     const itemProgress = stageItemProgress(queue);
     const stageNumber = stageDots.findIndex((dot) => dot.isCurrent) + 1;
     return (
-        <ButtonBase className={styles.headerStrip} onClick={onExpand} aria-expanded={false} aria-label="Expand review header" data-testid="reviewHeaderStrip">
-            <Typography variant="subtitle1" className={classNames(styles.stageTitle, styles.stripLabel)} data-testid="reviewStageTitle">
+        <button
+            type="button"
+            className={styles.headerStrip}
+            onClick={onExpand}
+            aria-expanded={false}
+            aria-label="Expand review header"
+            data-testid="reviewHeaderStrip"
+        >
+            <Text as="span" variant="subtitle" className={clsx(styles.stageTitle, styles.stripLabel)} data-testid="reviewStageTitle">
                 {stage.title}
-            </Typography>
+            </Text>
             {itemProgress && (
                 <>
-                    <Typography variant="caption" color="text.secondary" className={styles.stripLabel} data-testid="reviewStageCounter">
+                    <Text variant="caption" tone="secondary" className={styles.stripLabel} data-testid="reviewStageCounter">
                         {itemProgress.label}
-                    </Typography>
-                    <LinearProgress variant="determinate" value={itemProgress.value} className={styles.stripProgress} />
+                    </Text>
+                    <ProgressBar as="span" value={itemProgress.value} aria-label="Stage progress" className={styles.stripProgress} />
                 </>
             )}
-            <Box role="img" aria-label={`Stage ${stageNumber} of ${stageDots.length}`} className={styles.stripDots} data-testid="stripStageDots">
+            <span role="img" aria-label={`Stage ${stageNumber} of ${stageDots.length}`} className={styles.stripDots} data-testid="stripStageDots">
                 {stageDots.map((dot) => (
-                    <span
-                        key={dot.stageId}
-                        className={classNames(styles.stripDot, { [styles.stripDotDone]: dot.isDone, [styles.stripDotCurrent]: dot.isCurrent })}
-                    />
+                    <span key={dot.stageId} className={styles.stripDot} data-done={dot.isDone || undefined} data-current={dot.isCurrent || undefined} />
                 ))}
-            </Box>
-            <ExpandMoreIcon fontSize="small" color="disabled" />
-        </ButtonBase>
+            </span>
+            <ChevronDown size={18} className={styles.stripChevron} />
+        </button>
     );
 }
 
@@ -340,55 +331,49 @@ function WizardHeader({ flow, stage, queue, onSkipStage, hasStageActivity, canCo
     const isShowBriefsOn = useShowBriefs();
 
     return (
-        <Box className={styles.header}>
-            <Box className={styles.headerRow}>
-                <Box>
-                    <Typography variant="overline" color="text.secondary" data-testid="reviewStageCounter">
+        <div className={styles.header}>
+            <div className={styles.headerRow}>
+                <div>
+                    <Text variant="overline" tone="secondary" data-testid="reviewStageCounter">
                         Stage {stageNumber} of {REVIEW_STAGES.length}
                         {itemProgress ? ` · ${itemProgress}` : ''}
-                    </Typography>
-                    <Box className={styles.titleRow}>
-                        <Typography variant="h5" className={styles.stageTitle} data-testid="reviewStageTitle">
+                    </Text>
+                    <div className={styles.titleRow}>
+                        <Text variant="title" className={styles.stageTitle} data-testid="reviewStageTitle">
                             {stage.title}
-                        </Typography>
+                        </Text>
                         {hasStageActivity && (
                             <Tooltip title={stage.guidance}>
-                                {/* A real button, not a bare SVG: MUI's Tooltip shows on focus and
-                                    touch only for an interactive child — an icon alone would make
-                                    the guidance hover-only (see RoutineIndicator). */}
-                                <IconButton size="small" aria-label="Stage guidance" data-testid="stageGuidanceInfo">
-                                    <InfoOutlinedIcon fontSize="small" />
+                                {/* A real button, not a bare SVG: the tooltip opens on focus only for
+                                    an interactive trigger — an icon alone would make the guidance
+                                    hover-only (see RoutineIndicator). */}
+                                <IconButton size="sm" aria-label="Stage guidance" data-testid="stageGuidanceInfo">
+                                    <Info />
                                 </IconButton>
                             </Tooltip>
                         )}
-                    </Box>
+                    </div>
                     {!hasStageActivity && (
-                        <Typography variant="body2" color="text.secondary">
+                        <Text variant="bodySm" tone="secondary">
                             {stage.guidance}
-                        </Typography>
+                        </Text>
                     )}
-                </Box>
-                <Box className={styles.headerControls}>
+                </div>
+                <div className={styles.headerControls}>
                     {/* Device-local: whether item cards lead with their brief (notes folded) or
                         show the notes preview. Mirrors the Settings → Weekly review switch. */}
-                    <FormControlLabel
-                        control={
-                            <Switch size="small" checked={isShowBriefsOn} onChange={(_, checked) => setShowBriefs(checked)} data-testid="showBriefsToggle" />
-                        }
-                        label={<Typography variant="body2">Show briefs</Typography>}
-                        className={styles.briefsToggle}
-                    />
-                    <Button color="inherit" size="small" onClick={onSkipStage} data-testid="skipStageButton">
+                    <Switch label="Show briefs" checked={isShowBriefsOn} onCheckedChange={setShowBriefs} data-testid="showBriefsToggle" />
+                    <Button tone="neutral" size="sm" onClick={onSkipStage} data-testid="skipStageButton">
                         Skip stage →
                     </Button>
                     {canCollapse && (
-                        <IconButton size="small" onClick={onCollapse} aria-label="Collapse review header" data-testid="collapseHeaderButton">
-                            <ExpandLessIcon fontSize="small" />
+                        <IconButton size="sm" onClick={onCollapse} aria-label="Collapse review header" data-testid="collapseHeaderButton">
+                            <ChevronUp />
                         </IconButton>
                     )}
-                </Box>
-            </Box>
-            <LinearProgress variant="determinate" value={reviewProgressValue(flow)} className={styles.progressBar} />
-        </Box>
+                </div>
+            </div>
+            <ProgressBar value={reviewProgressValue(flow)} aria-label="Review progress" />
+        </div>
     );
 }

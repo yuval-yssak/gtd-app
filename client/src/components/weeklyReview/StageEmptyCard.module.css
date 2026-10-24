@@ -2,13 +2,15 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 1rem;
-    width: 100%;
-    max-width: 34rem;
-    padding: 2.5rem 2rem;
+    gap: var(--space-4);
+    inline-size: 100%;
+    max-inline-size: 34rem;
+    padding: var(--space-10) var(--space-8);
     text-align: center;
 }
 
 .emptyIcon {
-    font-size: 3rem;
+    inline-size: 3rem;
+    block-size: 3rem;
+    color: var(--color-status-success);
 }

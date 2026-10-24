@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { ANCHOR_CORROBORATION_FRAMES, RESTORE_RETRY_FRAMES, restoreTargetForFrame } from '../hooks/useListScrollRestoration';
+import {
+    ANCHOR_CORROBORATION_FRAMES,
+    INITIAL_RESTORE_SETTLING,
+    nextRestoreSettling,
+    RESTORE_RETRY_FRAMES,
+    RESTORE_SETTLE_FRAMES,
+    type RestoreSettling,
+    restoreTargetForFrame,
+} from '../hooks/useListScrollRestoration';
 import type { ListScrollEntry } from '../lib/listScrollMemory';
 
 const SAVED_SCROLL_TOP = 2_000;
@@ -85,5 +93,50 @@ describe('restoreTargetForFrame', () => {
             target: SAVED_SCROLL_TOP,
             shouldKeepWatching: false,
         });
+    });
+});
+
+describe('nextRestoreSettling', () => {
+    const corroborated = (target: number) => ({ target, shouldKeepWatching: false });
+
+    // The first corroborated frame can be measured against ESTIMATED heights of rows a windowed
+    // list has not mounted yet — when they mount, the anchors move. Settling needs the target to
+    // hold, not just to exist once.
+    it('does not settle on the first corroborated frame', () => {
+        expect(nextRestoreSettling(INITIAL_RESTORE_SETTLING, corroborated(1_554)).isSettled).toBe(false);
+    });
+
+    it('settles once the corroborated target holds for the settle window', () => {
+        const settled = Array.from({ length: RESTORE_SETTLE_FRAMES }).reduce(
+            (settling: RestoreSettling) => nextRestoreSettling(settling, corroborated(1_554)),
+            nextRestoreSettling(INITIAL_RESTORE_SETTLING, corroborated(1_554)),
+        );
+        expect(settled.isSettled).toBe(true);
+    });
+
+    it('restarts the window when the anchors move after rows above them mount', () => {
+        const holding = nextRestoreSettling(nextRestoreSettling(INITIAL_RESTORE_SETTLING, corroborated(1_554)), corroborated(1_554));
+        const moved = nextRestoreSettling(holding, corroborated(1_820));
+        expect(moved).toEqual({ windowTarget: 1_820, stableFrames: 0, isSettled: false });
+    });
+
+    it('treats sub-pixel jitter as holding', () => {
+        const first = nextRestoreSettling(INITIAL_RESTORE_SETTLING, corroborated(1_554));
+        expect(nextRestoreSettling(first, corroborated(1_554.5)).stableFrames).toBe(1);
+    });
+
+    // Measured from the window's FIRST frame: 1px per frame stays under the jitter allowance
+    // each step but adds up, and a target still creeping has not landed.
+    it('does not count a slow creep as holding', () => {
+        const crept = [1_555, 1_556, 1_557].reduce<ReturnType<typeof nextRestoreSettling>>(
+            (settling, target) => nextRestoreSettling(settling, corroborated(target)),
+            nextRestoreSettling(INITIAL_RESTORE_SETTLING, corroborated(1_554)),
+        );
+        expect(crept.isSettled).toBe(false);
+    });
+
+    it('never settles while the frame decision still wants to keep watching', () => {
+        const watching = nextRestoreSettling(INITIAL_RESTORE_SETTLING, { target: 2_000, shouldKeepWatching: true });
+        expect(watching).toEqual({ windowTarget: 2_000, stableFrames: 0, isSettled: false });
     });
 });

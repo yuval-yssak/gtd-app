@@ -1,13 +1,8 @@
-import EditIcon from '@mui/icons-material/Edit';
-import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-import Checkbox from '@mui/material/Checkbox';
-import FormControlLabel from '@mui/material/FormControlLabel';
-import Paper from '@mui/material/Paper';
-import Typography from '@mui/material/Typography';
 import type { IDBPDatabase } from 'idb';
+import { Pencil } from 'lucide-react';
 import { useState } from 'react';
 import { useAppData } from '../../contexts/AppDataProvider';
+import { Button, Card, Checkbox, Text } from '../../designSystem';
 import { hasAtLeastOne } from '../../lib/typeUtils';
 import type { MyDB } from '../../types/MyDB';
 import styles from './InboxChecklistStage.module.css';
@@ -45,44 +40,45 @@ export function InboxChecklistStage({ db, tickedInboxIds, onToggleTick, onStageF
     );
 
     return (
-        <Box className={layoutStyles.stageRoot} data-testid="inboxChecklistStage">
+        <div className={layoutStyles.stageRoot} data-testid="inboxChecklistStage">
             <StageCardScroller>
-                <Paper elevation={2} className={styles.checklistCard}>
+                <Card padding="none" className={styles.checklistCard}>
                     {hasExternalInboxes ? (
                         myInboxes.map((inbox) => (
-                            <FormControlLabel
+                            <Checkbox
                                 key={inbox._id}
-                                control={<Checkbox checked={tickedInboxIds.includes(inbox._id)} onChange={() => onToggleTick(inbox._id)} />}
-                                label={<Typography>{inbox.name}</Typography>}
+                                label={inbox.name}
+                                checked={tickedInboxIds.includes(inbox._id)}
+                                onCheckedChange={() => onToggleTick(inbox._id)}
                                 data-testid="reviewInboxRow"
                             />
                         ))
                     ) : (
-                        <Typography color="text.secondary" data-testid="emptyChecklistMessage">
+                        <Text tone="secondary" data-testid="emptyChecklistMessage">
                             No external inboxes to clear — add one with “Edit inboxes”, or just continue.
-                        </Typography>
+                        </Text>
                     )}
                     <Button
-                        size="small"
-                        startIcon={<EditIcon />}
+                        size="sm"
+                        startIcon={<Pencil />}
                         className={styles.manageButton}
                         onClick={() => setIsManaging(true)}
                         data-testid="manageInboxesButton"
                     >
                         Edit inboxes
                     </Button>
-                </Paper>
+                </Card>
             </StageCardScroller>
             {/* Same pinned bar position as every other stage's primary action / Continue. The
                 travel ▶ lets the user move on without ticking every bucket (no skip mark). */}
             <StageActionBar travel={travel}>
-                <Button variant="contained" disabled={!allTicked} onClick={onStageFinished} data-testid="stageContinue">
+                <Button variant="solid" disabled={!allTicked} onClick={onStageFinished} data-testid="stageContinue">
                     {/* With no buckets there is nothing to declare "clear" — the tick-off claim would be false. */}
                     {hasExternalInboxes ? 'All inboxes clear — continue' : 'Continue'}
                 </Button>
             </StageActionBar>
 
             {isManaging && <ManageInboxesDialog db={db} onClose={() => setIsManaging(false)} />}
-        </Box>
+        </div>
     );
 }

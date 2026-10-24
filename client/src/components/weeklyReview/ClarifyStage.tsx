@@ -1,12 +1,9 @@
-import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-import Paper from '@mui/material/Paper';
-import Snackbar from '@mui/material/Snackbar';
 import type { IDBPDatabase } from 'idb';
 import { useState } from 'react';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { usePendingReassign } from '../../contexts/PendingReassignProvider';
 import { FROM_GMAIL_READONLY_MESSAGE } from '../../db/itemMutations';
+import { Button, Card } from '../../designSystem';
 import type { MyDB } from '../../types/MyDB';
 import { type ItemEditorActionsApi, ItemEditorBody } from '../itemEditor/ItemEditorBody';
 import { RevisitDecisionCard } from './RevisitDecisionCard';
@@ -17,6 +14,7 @@ import { StageEmptyCard } from './StageEmptyCard';
 import { StageNavButtons } from './StageNavButtons';
 import styles from './stageLayout.module.css';
 import { useStageDecisionNavigation } from './useStageDecisionNavigation';
+import { StageToast, useStageToast } from './useStageToast';
 
 interface ClarifyStageProps {
     queue: StageQueue;
@@ -36,7 +34,7 @@ interface ClarifyStageProps {
 export function ClarifyStage({ queue, db, onQueueChange, onStageFinished, travel }: ClarifyStageProps) {
     const { allItems, people, workContexts, refreshItems } = useAppData();
     const { isPending } = usePendingReassign();
-    const [toast, setToast] = useState('');
+    const stageToast = useStageToast();
     // Portal target for the editor's action row — state (not a ref) so ItemEditorBody re-renders
     // and portals the buttons in once the pinned bar element mounts.
     const [actionsBarEl, setActionsBarEl] = useState<HTMLElement | null>(null);
@@ -45,7 +43,7 @@ export function ClarifyStage({ queue, db, onQueueChange, onStageFinished, travel
     // the edit would silently drop — same rule as the revisit card's item arrows.
     const [isEditorLocked, setIsEditorLocked] = useState(false);
     const lockedTravel = isEditorLocked ? { ...travel, prevDisabled: true, nextDisabled: true } : travel;
-    const nav = useStageDecisionNavigation({ db, queue, onQueueChange, onUndoFailed: setToast });
+    const nav = useStageDecisionNavigation({ db, queue, onQueueChange, onUndoFailed: stageToast.showError });
 
     if (nav.revisitProps) {
         return <RevisitDecisionCard db={db} {...nav.revisitProps} travel={travel} />;
@@ -74,9 +72,9 @@ export function ClarifyStage({ queue, db, onQueueChange, onStageFinished, travel
     const captureUndo = (): StageDecisionUndo | undefined => (currentItem.routineId ? undefined : { snapshot: currentItem });
 
     return (
-        <Box className={styles.stageRoot} data-testid="clarifyStage">
+        <div className={styles.stageRoot} data-testid="clarifyStage">
             <StageCardScroller>
-                <Paper elevation={3} className={styles.editorCard}>
+                <Card padding="none" className={styles.editorCard}>
                     <ItemEditorBody
                         key={currentItem._id}
                         item={currentItem}
@@ -85,17 +83,17 @@ export function ClarifyStage({ queue, db, onQueueChange, onStageFinished, travel
                         workContexts={workContexts}
                         // A committed clarify IS the decision (onSaveCommitted → post-save onClose);
                         // an Escape-driven onClose steps past the item instead (still undecided).
-                        onClose={nav.closeAsDecisionOrSkip}
+                        onClose={() => nav.closeAsDecisionOrSkip(currentItem._id)}
                         onSaved={refreshItems}
                         onSaveCommitted={nav.markSaveCommitted}
                         onDirtyLockChange={setIsEditorLocked}
-                        onFromGmailReadOnly={() => setToast(FROM_GMAIL_READONLY_MESSAGE)}
+                        onFromGmailReadOnly={() => stageToast.showNotice(FROM_GMAIL_READONLY_MESSAGE)}
                         presentation="review"
                         renderActions={(api: ItemEditorActionsApi) => (
                             <>
                                 <StageNavButtons {...nav.liveNavProps(api.isSaving)} />
                                 <Button
-                                    variant="contained"
+                                    variant="solid"
                                     disabled={api.saveDisabled}
                                     onClick={() => nav.armExplicitSave(api.isRoutineDestination ? undefined : captureUndo(), api.triggerSave)}
                                     data-testid="clarifySaveNext"
@@ -106,12 +104,12 @@ export function ClarifyStage({ queue, db, onQueueChange, onStageFinished, travel
                         )}
                         actionsContainer={actionsBarEl}
                     />
-                </Paper>
+                </Card>
             </StageCardScroller>
             <StageActionBar onBarMounted={setActionsBarEl} travel={lockedTravel}>
                 {reassignInFlight && <StageNavButtons {...nav.blockedNavProps('clarifyBlockedSkip')} />}
             </StageActionBar>
-            <Snackbar open={Boolean(toast)} autoHideDuration={3000} onClose={() => setToast('')} message={toast} />
-        </Box>
+            <StageToast {...stageToast.toastProps} />
+        </div>
     );
 }

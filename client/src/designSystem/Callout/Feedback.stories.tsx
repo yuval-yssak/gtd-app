@@ -69,3 +69,43 @@ export const Steps: StoryObj = {
         />
     ),
 };
+
+/** Walked in any order: completion comes from each step, not from its position. */
+export const StepsAnyOrder: StoryObj = {
+    render: () => (
+        <StepIndicator
+            aria-label="Weekly review"
+            activeIndex={1}
+            steps={['Collect', 'Inbox', 'Calendar', 'Waiting For', 'Projects'].map((label, index) => ({ key: label, label, isComplete: index === 3 }))}
+            onStepSelected={fn()}
+        />
+    ),
+};
+
+/** The current step is also complete (an empty stage): it keeps the solid current fill and a readable number. */
+export const StepsCurrentAlsoComplete: StoryObj = {
+    render: () => (
+        <StepIndicator
+            aria-label="Weekly review"
+            activeIndex={1}
+            steps={['Collect', 'Inbox', 'Calendar', 'Waiting For', 'Projects'].map((label, index) => ({ key: label, label, isComplete: index <= 1 }))}
+            onStepSelected={fn()}
+        />
+    ),
+};
+
+/** Labels under the markers: eight steps share a narrow strip, scrolling only below a readable width. */
+export const StepsLabelsBelow: StoryObj = {
+    render: () => (
+        <StepIndicator
+            aria-label="Weekly review"
+            labelPlacement="below"
+            activeIndex={2}
+            steps={['Collect', 'Inbox', 'Calendar', 'Waiting For', 'Projects', 'Next Actions', 'Someday / Maybe', 'Final sweep'].map((label) => ({
+                key: label,
+                label,
+            }))}
+            onStepSelected={fn()}
+        />
+    ),
+};

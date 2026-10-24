@@ -2,7 +2,7 @@ import type { IDBPDatabase } from 'idb';
 import { useRef, useState } from 'react';
 import type { MyDB } from '../../types/MyDB';
 import {
-    completeCurrentItem,
+    completeEntry,
     dropCurrentItem,
     type RevisitResume,
     type StageDecisionUndo,
@@ -57,8 +57,12 @@ export function useStageDecisionNavigation({ db, queue, onQueueChange, onUndoFai
         },
     });
 
-    /** Records a decision on the current item. `undo` absent = not reversible (see StageDecision). */
-    const recordDecision = (undo?: StageDecisionUndo) => {
+    /**
+     * Records a decision on `entryId` — resolved by the caller when the user ACTED, because the
+     * write being recorded can drop that entry from the queue before this runs. `undo` absent =
+     * not reversible (see StageDecision).
+     */
+    const recordDecision = (entryId: string, undo?: StageDecisionUndo) => {
         const resume = resumeRevisitRef.current;
         resumeRevisitRef.current = null;
         // `let` + resolve-inside-the-updater: the render-captured `queue` can be several async
@@ -69,7 +73,7 @@ export function useStageDecisionNavigation({ db, queue, onQueueChange, onUndoFai
         let didResume = false;
         onQueueChange((liveQueue) => {
             didResume = shouldResumeRevisit(resume, liveQueue);
-            return completeCurrentItem(liveQueue, undo);
+            return completeEntry(liveQueue, entryId, undo);
         });
         // The re-decided entry re-enters the history at its END, so the stored offset now points
         // at the old position's chronological successor — exactly the same "p of N" slot.
@@ -134,14 +138,16 @@ export function useStageDecisionNavigation({ db, queue, onQueueChange, onUndoFai
     /**
      * ItemEditorBody's onClose: a close following an explicit save records the decision (with the
      * armed undo payload); any other close (Escape, reassign kickoff) is NOT a
-     * decision — the walk steps past the item, leaving it undecided.
+     * decision — the walk steps past the item, leaving it undecided. `entryId` is the closing
+     * editor's own item: each editor is keyed by it, so this stays right even when the save's
+     * reconcile already moved the walk's cursor to the next entry.
      */
-    function closeAsDecisionOrSkip() {
+    function closeAsDecisionOrSkip(entryId: string) {
         if (savedRef.current) {
             savedRef.current = false;
             const undo = pendingSaveUndoRef.current;
             pendingSaveUndoRef.current = undefined;
-            recordDecision(undo);
+            recordDecision(entryId, undo);
             return;
         }
         skip();
