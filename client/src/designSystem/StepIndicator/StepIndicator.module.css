@@ -1,0 +1,86 @@
+@layer gtd.composites {
+    .steps {
+        display: flex;
+        align-items: center;
+        gap: var(--space-2);
+        padding: 0;
+        margin: 0;
+        list-style: none;
+        overflow-x: auto;
+    }
+
+    .step {
+        display: flex;
+        flex: 1 1 0;
+        align-items: center;
+        gap: var(--space-2);
+        min-inline-size: 0;
+
+        /* The connector to the next step. */
+        &:not(:last-child)::after {
+            content: "";
+            flex: 1 1 auto;
+            min-inline-size: var(--space-4);
+            block-size: 1px;
+            background-color: var(--color-border-default);
+        }
+    }
+
+    .content {
+        display: inline-flex;
+        flex-shrink: 0;
+        align-items: center;
+        gap: var(--space-2);
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: var(--color-text-secondary);
+        font-family: inherit;
+        font-size: var(--type-sm-size);
+        line-height: var(--type-sm-line);
+        white-space: nowrap;
+
+        &[data-interactive] {
+            cursor: pointer;
+            border-radius: var(--radius-sm);
+        }
+
+        &:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+        }
+
+        .step[data-active] & {
+            color: var(--color-text-primary);
+            font-weight: var(--weight-medium);
+        }
+    }
+
+    .marker {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        inline-size: 1.5rem;
+        block-size: 1.5rem;
+        border: 1px solid var(--color-border-strong);
+        border-radius: var(--radius-full);
+        font-size: var(--type-xs-size);
+        font-variant-numeric: tabular-nums;
+
+        .step[data-active] & {
+            border-color: var(--color-accent);
+            background-color: var(--color-accent);
+            color: var(--color-on-accent);
+        }
+
+        .step[data-complete] & {
+            border-color: var(--color-accent);
+            color: var(--color-accent);
+        }
+    }
+
+    .label {
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+}

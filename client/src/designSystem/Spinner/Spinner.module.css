@@ -1,0 +1,51 @@
+@layer gtd.components {
+    .spinner {
+        display: inline-flex;
+        flex-shrink: 0;
+        inline-size: var(--spinner-size);
+        block-size: var(--spinner-size);
+
+        &[data-tone="accent"] {
+            color: var(--color-accent);
+        }
+
+        &[data-tone="inherit"] {
+            color: inherit;
+        }
+    }
+
+    .svg {
+        display: block;
+        inline-size: 100%;
+        block-size: 100%;
+        animation: spinnerRotate 0.9s linear infinite;
+    }
+
+    .track,
+    .arc {
+        fill: none;
+        stroke: currentcolor;
+        stroke-width: 2.5;
+    }
+
+    .track {
+        opacity: 0.18;
+    }
+
+    .arc {
+        stroke-linecap: round;
+        stroke-dasharray: 44 60;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .svg {
+            animation-duration: 2.4s;
+        }
+    }
+
+    @keyframes spinnerRotate {
+        to {
+            transform: rotate(360deg);
+        }
+    }
+}

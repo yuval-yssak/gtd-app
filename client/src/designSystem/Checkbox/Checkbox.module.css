@@ -1,0 +1,56 @@
+@layer gtd.components {
+    .box {
+        display: inline-flex;
+        flex-shrink: 0;
+        align-items: center;
+        justify-content: center;
+        inline-size: 1.125rem;
+        block-size: 1.125rem;
+        margin: var(--space-2);
+        padding: 0;
+        border: 1.5px solid var(--color-text-secondary);
+        border-radius: var(--radius-sm);
+        background-color: var(--color-bg-surface);
+        color: var(--color-on-accent);
+        cursor: pointer;
+        transition:
+            background-color var(--duration-fast) var(--ease-standard),
+            border-color var(--duration-fast) var(--ease-standard);
+
+        &[data-size="sm"] {
+            inline-size: 1rem;
+            block-size: 1rem;
+            margin: var(--space-1-5);
+        }
+
+        &[data-checked],
+        &[data-indeterminate] {
+            border-color: var(--color-accent);
+            background-color: var(--color-accent);
+        }
+
+        &:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+        }
+
+        &[data-disabled] {
+            cursor: default;
+            opacity: 0.45;
+        }
+    }
+
+    .indicator {
+        display: flex;
+    }
+
+    .glyph {
+        inline-size: 0.875rem;
+        block-size: 0.875rem;
+        fill: none;
+        stroke: currentcolor;
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+    }
+}

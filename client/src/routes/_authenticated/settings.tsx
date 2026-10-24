@@ -1,6 +1,5 @@
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
-import ButtonBase from '@mui/material/ButtonBase';
 import Divider from '@mui/material/Divider';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import MenuItem from '@mui/material/MenuItem';
@@ -8,11 +7,9 @@ import Paper from '@mui/material/Paper';
 import Radio from '@mui/material/Radio';
 import RadioGroup from '@mui/material/RadioGroup';
 import Switch from '@mui/material/Switch';
-import { useColorScheme } from '@mui/material/styles';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import { createFileRoute, Link } from '@tanstack/react-router';
-import classNames from 'classnames';
 import type { IDBPDatabase } from 'idb';
 import { Suspense, useCallback, useEffect, useState, useTransition } from 'react';
 import { getPushStatus } from '../../api/pushApi';
@@ -26,12 +23,13 @@ import { PersonalApiTokens } from '../../components/settings/PersonalApiTokens';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { getOrCreateDeviceId } from '../../db/deviceId';
 import { requestAndRegisterPushSubscription } from '../../db/pushSubscription';
+import { Card, RadioGroup as DsRadioGroup, type RadioOption, Text } from '../../designSystem';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { APP_NAME, METHOD_NAME } from '../../lib/appName';
 import { setShowBriefs, useShowBriefs } from '../../lib/briefPreference';
 import { getCalendarHorizonMonths, setCalendarHorizonMonths } from '../../lib/calendarHorizon';
 import { CLARIFY_MODE_KEY, type InlineClarifyMode, parseClarifyMode } from '../../lib/clarifyMode';
-import { COLOR_THEMES, type ColorThemeId, getColorTheme, setColorTheme } from '../../lib/colorTheme';
+import { type ColorSchemePreference, setColorSchemePreference, useColorSchemePreference } from '../../lib/colorScheme';
 import { LEGAL_DOCUMENTS } from '../../lib/legalDocuments';
 import { getRoutineIndicatorStyle, type RoutineIndicatorStyle, setRoutineIndicatorStyle } from '../../lib/routineIndicatorStyle';
 import type { MyDB } from '../../types/MyDB';
@@ -265,79 +263,29 @@ function SettingsPage() {
     );
 }
 
+const COLOR_SCHEME_OPTIONS: RadioOption<ColorSchemePreference>[] = [
+    { value: 'light', label: 'Light' },
+    { value: 'system', label: 'System', description: 'Follows your OS setting' },
+    { value: 'dark', label: 'Dark' },
+];
+
 function AppearanceSection() {
-    const { mode, setMode } = useColorScheme();
-    const [themeId, setThemeId] = useState<ColorThemeId>(getColorTheme);
-
-    function onThemeChange(id: ColorThemeId) {
-        setThemeId(id);
-        setColorTheme(id);
-    }
-
+    const preference = useColorSchemePreference();
     return (
-        <Paper variant="outlined" className={styles.section}>
-            <Box className={styles.sectionContent}>
-                <Typography
-                    variant="subtitle1"
-                    sx={{
-                        fontWeight: 600,
-                        mb: 0.5,
-                    }}
-                >
+        <Card padding="none" className={styles.section}>
+            <div className={styles.sectionContent}>
+                <Text variant="subtitle" weight="semibold" id="appearanceHeading" className={styles.sectionHeading}>
                     Appearance
-                </Typography>
-                <RadioGroup value={mode ?? 'system'} onChange={(e) => setMode(e.target.value as 'light' | 'dark' | 'system')}>
-                    <FormControlLabel value="light" control={<Radio size="small" />} label={<Typography variant="body2">Light</Typography>} />
-                    <FormControlLabel
-                        value="system"
-                        control={<Radio size="small" />}
-                        label={
-                            <Box>
-                                <Typography variant="body2">System</Typography>
-                                <Typography
-                                    variant="caption"
-                                    sx={{
-                                        color: 'text.secondary',
-                                    }}
-                                >
-                                    Follows your OS setting
-                                </Typography>
-                            </Box>
-                        }
-                    />
-                    <FormControlLabel value="dark" control={<Radio size="small" />} label={<Typography variant="body2">Dark</Typography>} />
-                </RadioGroup>
-                <Divider className={styles.divider} />
-                <Typography
-                    variant="body2"
-                    sx={{
-                        fontWeight: 500,
-                        mb: 1,
-                    }}
-                >
-                    Color theme
-                </Typography>
-                <Box className={styles.themeGrid}>
-                    {COLOR_THEMES.map((t) => (
-                        <ButtonBase
-                            key={t.id}
-                            className={classNames(styles.themeSwatch, themeId === t.id && styles.themeSwatchSelected)}
-                            onClick={() => onThemeChange(t.id)}
-                            aria-label={t.label}
-                            aria-pressed={themeId === t.id}
-                        >
-                            <Box className={styles.swatchColors}>
-                                <span className={styles.swatchCircle} style={{ backgroundColor: t.primary }} />
-                                <span className={styles.swatchCircle} style={{ backgroundColor: t.secondary }} />
-                            </Box>
-                            <Typography variant="caption" className={styles.swatchLabel}>
-                                {t.label}
-                            </Typography>
-                        </ButtonBase>
-                    ))}
-                </Box>
-            </Box>
-        </Paper>
+                </Text>
+                <DsRadioGroup
+                    aria-labelledby="appearanceHeading"
+                    value={preference}
+                    onValueChange={setColorSchemePreference}
+                    options={COLOR_SCHEME_OPTIONS}
+                    data-testid="colorSchemeRadio"
+                />
+            </div>
+        </Card>
     );
 }
 

@@ -1,0 +1,100 @@
+@layer gtd.composites {
+    /* Bottom-centre on phones, bottom-start on wider screens; newest at the bottom. */
+    .region {
+        position: fixed;
+        inset-block-end: var(--space-4);
+        inset-inline: var(--space-4);
+        z-index: var(--z-toast);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: var(--space-2);
+        pointer-events: none;
+
+        /* MUI's md breakpoint (900px) — see hooks/useIsMobile.ts. */
+        @media (width >= 900px) {
+            inset-inline-end: auto;
+            align-items: flex-start;
+        }
+    }
+
+    .toast {
+        display: flex;
+        align-items: center;
+        gap: var(--space-3);
+        min-inline-size: min(18rem, 100%);
+        max-inline-size: 35rem;
+        padding-block: var(--space-2);
+        padding-inline: var(--space-4) var(--space-2);
+        border-radius: var(--radius-md);
+        background-color: var(--color-text-primary);
+        color: var(--color-bg-surface);
+        box-shadow: var(--shadow-popup);
+        font-size: var(--type-sm-size);
+        line-height: var(--type-sm-line);
+        pointer-events: auto;
+        animation: toastEnter var(--duration-normal) var(--ease-standard);
+
+        &[data-tone="error"] {
+            background-color: var(--color-status-error);
+            color: var(--color-text-inverse);
+        }
+
+        &[data-tone="success"] {
+            background-color: var(--color-status-success);
+            color: var(--color-text-inverse);
+        }
+    }
+
+    .message {
+        flex: 1 1 auto;
+        min-inline-size: 0;
+        padding-block: var(--space-1-5);
+    }
+
+    .action {
+        display: flex;
+        flex-shrink: 0;
+        align-items: center;
+        gap: var(--space-1);
+
+        /* Buttons inside a toast inherit its inverted text colour. */
+        & > * {
+            --button-color: currentcolor;
+            --button-tint: var(--color-state-pressed);
+            --icon-button-color: currentcolor;
+        }
+    }
+
+    .close {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        inline-size: var(--control-height-sm);
+        block-size: var(--control-height-sm);
+        padding: 0;
+        border: 0;
+        border-radius: var(--radius-full);
+        background: transparent;
+        color: inherit;
+        font-size: var(--type-lg-size);
+        cursor: pointer;
+
+        &:focus-visible {
+            outline: var(--focus-ring-width) solid currentcolor;
+        }
+    }
+
+    @keyframes toastEnter {
+        from {
+            opacity: 0;
+            transform: translateY(0.5rem);
+        }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .toast {
+            animation: none;
+        }
+    }
+}

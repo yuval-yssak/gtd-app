@@ -1,0 +1,41 @@
+@layer gtd.components {
+    .root {
+        inline-size: 100%;
+    }
+
+    .track {
+        position: relative;
+        overflow: hidden;
+        block-size: 0.25rem;
+        border-radius: var(--radius-full);
+        background-color: var(--color-accent-tint-bg);
+    }
+
+    .indicator {
+        block-size: 100%;
+        background-color: var(--color-accent);
+        transition: inline-size var(--duration-normal) var(--ease-standard);
+
+        .root[data-indeterminate] & {
+            position: absolute;
+            inline-size: 40%;
+            animation: progressSlide 1.2s var(--ease-standard) infinite;
+        }
+    }
+
+    @keyframes progressSlide {
+        from {
+            transform: translateX(-100%);
+        }
+
+        to {
+            transform: translateX(250%);
+        }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .indicator {
+            animation-duration: 3s;
+        }
+    }
+}

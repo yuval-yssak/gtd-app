@@ -57,3 +57,6 @@
 - [URL-before-commit misattributed](project_url_before_commit_misattributed.md) — router 1.170 URL changes before render commits; e2e "transient unmount" flakes get blamed on the browser.
 - [Render-consumed ref vs lazy mount](project_render_consumed_ref_vs_lazy_mount.md) — one-shot ref reset in render is lost before a lazy child's mount-only prop capture; keep it in state.
 - [Routine open-item lock coverage](project_routine_open_item_lock_coverage.md) — lock covers materializer + disposal only; create/split/editor seeds unlocked; per-file locks fakes drop the {signal} form.
+- [Hover-pause latch survives close](feedback_hover_pause_latch_survives_close.md) — toast pause state latched when content unmounts under pointer; also legacy-key fallback rewritten by a bridge pins 'system'.
+- [Base UI render-link gets role=button](project_base_ui_render_link_role_button.md) — nativeButton:false stamps role=button on <a>; DS Button render={<Link>} stops being a link. Base UI roots are generic: drop casts.
+- [Gate selection drops failed retry](feedback_gate_selection_drops_failed_retry.md) — stop-hook e2e 'edited this turn only' never reruns a failed spec once the fix lands in app code; persist the failed set.

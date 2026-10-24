@@ -1,0 +1,30 @@
+@layer gtd.components {
+    .positioner {
+        z-index: var(--z-tooltip);
+    }
+
+    .popup {
+        max-inline-size: 18rem;
+        padding: var(--space-1) var(--space-2);
+        border-radius: var(--radius-sm);
+        background-color: var(--color-text-primary);
+        color: var(--color-bg-surface);
+        font-size: var(--type-xs-size);
+        line-height: var(--type-xs-line);
+        font-weight: var(--weight-medium);
+        transform-origin: var(--transform-origin);
+        transition:
+            opacity var(--duration-fast) var(--ease-standard),
+            transform var(--duration-fast) var(--ease-standard);
+
+        &[data-starting-style],
+        &[data-ending-style] {
+            opacity: 0;
+            transform: scale(0.96);
+        }
+
+        &[data-instant] {
+            transition: none;
+        }
+    }
+}

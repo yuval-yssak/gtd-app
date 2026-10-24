@@ -1,7 +1,7 @@
 /**
  * DOM glue shared by the keyboard regions (`hooks/useRovingRegion.ts`, the Next Actions list) and
- * the global shortcuts (`hooks/useGlobalShortcuts.ts`). Not unit-tested (no jsdom here); covered
- * by `e2e/keyboard-regions.spec.ts`.
+ * the global shortcuts (`hooks/useGlobalShortcuts.ts`). `isModalOpen` is unit-tested under jsdom
+ * (`tests/keyboardRegionDom.test.ts`); the focus helpers are covered by `e2e/keyboard-regions.spec.ts`.
  */
 
 /** Marks a region's container (F6 cycles them) and each item a region's arrow keys walk. */
@@ -12,11 +12,19 @@ export const LIST_SEARCH_TOGGLE_ATTR = 'data-list-search-toggle';
 export const LIST_SEARCH_INPUT_ATTR = 'data-list-search-input';
 
 /**
- * An open MUI modal (dialog, drawer, popover menu). Keep-mounted modals (AppNav's mobile drawer)
- * stay in the DOM permanently; MUI marks them aria-hidden while closed, so bare presence ≠ open.
+ * Stamped by every design-system popup that must silence page shortcuts while open (dialogs,
+ * drawers, menus, popovers, select and combobox lists) — never by tooltips or toasts.
+ */
+export const MODAL_POPUP_ATTR = 'data-modal-popup';
+
+/**
+ * An open modal popup. Base UI stamps `data-open` while open (and `data-closed` through the exit
+ * animation), and the design system never keep-mounts a closed popup. The MUI half covers the
+ * screens not yet migrated: its keep-mounted modals (AppNav's mobile drawer) stay in the DOM and
+ * are marked aria-hidden while closed, so bare presence ≠ open.
  */
 export function isModalOpen(): boolean {
-    return document.querySelector('.MuiModal-root:not([aria-hidden="true"])') !== null;
+    return document.querySelector(`[${MODAL_POPUP_ATTR}][data-open], .MuiModal-root:not([aria-hidden="true"])`) !== null;
 }
 
 /**

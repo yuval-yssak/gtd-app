@@ -1,0 +1,33 @@
+/* Composite: it reshapes the DS Button's corners and borders, so it must win over gtd.components. */
+@layer gtd.composites {
+    .group {
+        display: inline-flex;
+        min-inline-size: 0;
+        padding: 0;
+        margin: 0;
+        border: 0;
+
+        & > * {
+            border-radius: 0;
+        }
+
+        /* Collapse the doubled hairline between outline segments. */
+        & > * + * {
+            margin-inline-start: -1px;
+        }
+
+        & > *:first-child {
+            border-start-start-radius: var(--radius-md);
+            border-end-start-radius: var(--radius-md);
+        }
+
+        & > *:last-child {
+            border-start-end-radius: var(--radius-md);
+            border-end-end-radius: var(--radius-md);
+        }
+
+        & > *:focus-visible {
+            z-index: var(--z-raised);
+        }
+    }
+}

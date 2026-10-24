@@ -1,0 +1,95 @@
+@layer gtd.components {
+    .callout {
+        --callout-color: var(--color-status-info);
+        --callout-fill: var(--color-status-info-tint-bg);
+
+        display: flex;
+        align-items: flex-start;
+        gap: var(--space-3);
+        padding: var(--space-3) var(--space-4);
+        border: 1px solid transparent;
+        border-radius: var(--radius-md);
+        background-color: var(--callout-fill);
+        color: var(--color-text-primary);
+        font-size: var(--type-sm-size);
+        line-height: var(--type-sm-line);
+
+        &[data-tone="success"] {
+            --callout-color: var(--color-status-success);
+            --callout-fill: var(--color-status-success-tint-bg);
+        }
+
+        &[data-tone="warning"] {
+            --callout-color: var(--color-status-warning);
+            --callout-fill: var(--color-status-warning-tint-bg);
+        }
+
+        &[data-tone="error"] {
+            --callout-color: var(--color-status-error);
+            --callout-fill: var(--color-status-error-tint-bg);
+        }
+
+        &[data-variant="outline"] {
+            border-color: var(--callout-color);
+            background-color: transparent;
+        }
+    }
+
+    .icon {
+        flex-shrink: 0;
+        inline-size: var(--icon-size-md);
+        block-size: var(--icon-size-md);
+        fill: none;
+        stroke: var(--callout-color);
+        stroke-width: 1.5;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+    }
+
+    .body {
+        flex: 1 1 auto;
+        min-inline-size: 0;
+    }
+
+    .title {
+        margin-block-end: var(--space-0-5);
+        font-weight: var(--weight-semibold);
+    }
+
+    .action {
+        display: flex;
+        flex-shrink: 0;
+        align-items: center;
+        gap: var(--space-1);
+        margin-block: calc(var(--space-1) * -1);
+    }
+
+    .close {
+        display: inline-flex;
+        flex-shrink: 0;
+        align-items: center;
+        justify-content: center;
+        inline-size: var(--control-height-sm);
+        block-size: var(--control-height-sm);
+        margin-block: calc(var(--space-1) * -1);
+        padding: 0;
+        border: 0;
+        border-radius: var(--radius-full);
+        background: transparent;
+        color: var(--color-text-secondary);
+        cursor: pointer;
+
+        &:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+        }
+    }
+
+    .closeGlyph {
+        inline-size: var(--icon-size-sm);
+        block-size: var(--icon-size-sm);
+        fill: none;
+        stroke: currentcolor;
+        stroke-width: 1.75;
+        stroke-linecap: round;
+    }
+}

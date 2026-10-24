@@ -1,0 +1,33 @@
+@layer gtd.components {
+    .separator {
+        flex-shrink: 0;
+        border: 0;
+        background-color: var(--color-divider);
+
+        &[data-orientation="horizontal"] {
+            block-size: 1px;
+            inline-size: 100%;
+        }
+
+        &[data-orientation="vertical"] {
+            align-self: stretch;
+            inline-size: 1px;
+        }
+
+        &[data-orientation="horizontal"][data-spacing="sm"] {
+            margin-block: var(--space-2);
+        }
+
+        &[data-orientation="horizontal"][data-spacing="md"] {
+            margin-block: var(--space-4);
+        }
+
+        &[data-orientation="vertical"][data-spacing="sm"] {
+            margin-inline: var(--space-2);
+        }
+
+        &[data-orientation="vertical"][data-spacing="md"] {
+            margin-inline: var(--space-4);
+        }
+    }
+}

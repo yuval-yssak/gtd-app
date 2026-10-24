@@ -60,7 +60,7 @@ const notesHighlightStyle = HighlightStyle.define([
     { tag: tags.strikethrough, textDecoration: 'line-through' },
     { tag: tags.link, color: 'var(--mui-palette-primary-main, #1976d2)', textDecoration: 'underline' },
     { tag: tags.url, color: 'var(--mui-palette-primary-main, #1976d2)' },
-    { tag: tags.monospace, background: 'var(--gtd-code-bg)', borderRadius: '0.1875rem' },
+    { tag: tags.monospace, background: 'var(--color-code-bg)', borderRadius: '0.1875rem' },
     { tag: tags.quote, color: 'var(--mui-palette-text-secondary, rgba(0, 0, 0, 0.6))', fontStyle: 'italic' },
     { tag: tags.contentSeparator, color: 'var(--mui-palette-text-secondary, rgba(0, 0, 0, 0.6))' },
     // Structural markers: #, *, >, ``` fences, table pipes — de-emphasised like editor themes do.

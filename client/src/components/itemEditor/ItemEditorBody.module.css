@@ -16,7 +16,7 @@
      * ~154px for everything else, so long notes pushed the metadata out of view. 30vh keeps the
      * notes the largest single section while leaving room for the rest. Redefining the variable
      * (rather than the rule) re-caps the rendered preview AND the CodeMirror scroller at once. */
-    --gtd-notes-max-height: 30vh;
+    --notes-max-height: 30vh;
 }
 
 /* Expand variant renders below a row, so it needs a top border separator and tighter padding */
@@ -66,7 +66,7 @@
     composes: preview;
     /* Same cap as the CodeMirror editor's .cm-scroller: very long notes scroll inside the
      * preview instead of pushing the action buttons below the fold of the whole page. */
-    max-height: var(--gtd-notes-max-height);
+    max-height: var(--notes-max-height);
 }
 
 /* Review: the 7.5rem floor is a comfortable editing target but pure waste when scanning — a

@@ -35,7 +35,7 @@ export const AUTO_SCROLL_EDGE_PX = 48;
 const AUTO_SCROLL_STEP_PX = 12;
 /** The CSS variable rows translate by (`-next-actions.module.css` `.rowShell`). */
 export const DRAG_SHIFT_VAR = '--drag-shift';
-/** Body class while a pointer drag is live (`user-select: none`, see index.css). */
+/** Body class while a pointer drag is live (`user-select: none`, see designSystem/tokens/base.css). */
 export const BODY_DRAGGING_CLASS = 'nextActionsDragging';
 
 /** A reorder as the hook hands it to the page: the moved row and the visible neighbours it lands between (by id). */

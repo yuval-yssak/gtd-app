@@ -24,7 +24,7 @@
  * otherwise have to be dragged past the whole notes block to reach the rest of the card. */
 .notes {
     margin-top: 1rem;
-    max-height: var(--gtd-notes-max-height);
+    max-height: var(--notes-max-height);
     overflow-y: auto;
 }
 

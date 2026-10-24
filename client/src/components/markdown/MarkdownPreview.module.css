@@ -11,14 +11,14 @@
 }
 
 .markdownBody :global(code) {
-    background: var(--gtd-code-bg);
+    background: var(--color-code-bg);
     border-radius: 0.1875rem;
     padding: 0.1em 0.3em;
     font-size: 0.9em;
 }
 
 .markdownBody :global(pre) {
-    background: var(--gtd-code-bg);
+    background: var(--color-code-bg);
     border-radius: 0.25rem;
     padding: 0.75em 1em;
     overflow-x: auto;
@@ -60,7 +60,7 @@
 }
 
 .markdownBody :global(th) {
-    background: var(--gtd-code-bg);
+    background: var(--color-code-bg);
 }
 
 /* GFM task lists — hide the list bullet next to the checkbox. */

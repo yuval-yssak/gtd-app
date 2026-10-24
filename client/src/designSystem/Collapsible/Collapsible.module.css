@@ -1,0 +1,23 @@
+@layer gtd.components {
+    .panel {
+        overflow: hidden;
+        block-size: var(--collapsible-panel-height);
+        transition: block-size var(--duration-normal) var(--ease-standard);
+
+        &[data-starting-style],
+        &[data-ending-style] {
+            block-size: 0;
+        }
+
+        /* A hidden, kept-mounted panel stays out of layout and of the accessibility tree. */
+        &[hidden] {
+            display: none;
+        }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .panel {
+            transition: none;
+        }
+    }
+}

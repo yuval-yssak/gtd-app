@@ -1,15 +1,24 @@
 import { StrictMode, Suspense } from 'react';
 import { createRoot } from 'react-dom/client';
-import '@fontsource/roboto/300.css';
-import '@fontsource/roboto/400.css';
-import '@fontsource/roboto/500.css';
-import '@fontsource/roboto/700.css';
-import './index.css';
+import '@fontsource/inter/400.css';
+import '@fontsource/inter/500.css';
+import '@fontsource/inter/600.css';
+import '@fontsource/inter/700.css';
+// The layer order, tokens and document reset — loaded before any component stylesheet.
+import './designSystem/tokens/base.css';
 import App from './App';
 import { AppErrorBoundary } from './components/AppErrorBoundary';
 import { RouteFallback } from './components/RouteFallback';
 import { openAppDB } from './db/indexedDB';
+import { ensureToastRegion } from './designSystem';
 import { APP_NAME } from './lib/appName';
+import { startColorSchemeSync } from './lib/colorScheme';
+
+// Stamp <html data-theme> before anything renders (including the pre-React upgrade notice), so the
+// first paint is already in the user's scheme; it then follows the OS and other tabs for the page's life.
+startColorSchemeSync();
+// The toasts' live region exists before any toast, so even the first one is announced.
+ensureToastRegion();
 
 // Pre-React notice: openAppDB is still awaiting a schema upgrade blocked by an older connection
 // (a stale tab or PWA window running the previous bundle), so React cannot mount yet. Once the

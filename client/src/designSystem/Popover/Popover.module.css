@@ -1,0 +1,27 @@
+@layer gtd.composites {
+    .positioner {
+        z-index: var(--z-popup);
+    }
+
+    .popup {
+        max-inline-size: calc(100vw - var(--space-4));
+        max-block-size: var(--available-height);
+        overflow: auto;
+        border: 1px solid var(--color-border-default);
+        border-radius: var(--radius-lg);
+        background-color: var(--color-bg-surface-raised);
+        color: var(--color-text-primary);
+        box-shadow: var(--shadow-popup);
+        outline: none;
+        transform-origin: var(--transform-origin);
+        transition:
+            opacity var(--duration-fast) var(--ease-standard),
+            transform var(--duration-fast) var(--ease-standard);
+
+        &[data-starting-style],
+        &[data-ending-style] {
+            opacity: 0;
+            transform: scale(0.97);
+        }
+    }
+}

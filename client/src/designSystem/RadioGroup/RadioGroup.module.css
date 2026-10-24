@@ -1,0 +1,52 @@
+@layer gtd.components {
+    .field {
+        display: contents;
+    }
+
+    .group {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-0-5);
+
+        &[data-direction="row"] {
+            flex-flow: row wrap;
+            gap: var(--space-1) var(--space-4);
+        }
+    }
+
+    .radio {
+        display: inline-flex;
+        flex-shrink: 0;
+        align-items: center;
+        justify-content: center;
+        inline-size: 1.125rem;
+        block-size: 1.125rem;
+        margin: var(--space-2);
+        padding: 0;
+        border: 1.5px solid var(--color-text-secondary);
+        border-radius: var(--radius-full);
+        background-color: var(--color-bg-surface);
+        cursor: pointer;
+
+        &[data-checked] {
+            border-color: var(--color-accent);
+        }
+
+        &:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+        }
+
+        &[data-disabled] {
+            cursor: default;
+            opacity: 0.45;
+        }
+    }
+
+    .dot {
+        inline-size: 0.5rem;
+        block-size: 0.5rem;
+        border-radius: var(--radius-full);
+        background-color: var(--color-accent);
+    }
+}

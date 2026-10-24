@@ -1,0 +1,147 @@
+@layer gtd.components {
+    .delete {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        inline-size: 1rem;
+        block-size: 1rem;
+        padding: 0;
+        margin-inline: var(--space-0-5) calc(var(--space-1) * -1);
+        border: 0;
+        border-radius: var(--radius-full);
+        background: transparent;
+        color: inherit;
+        opacity: 0.7;
+        cursor: pointer;
+
+        @media (hover: hover) {
+            &:hover {
+                opacity: 1;
+                background-color: var(--color-state-pressed);
+            }
+        }
+
+        &:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+        }
+    }
+
+    .deleteGlyph {
+        inline-size: 0.75rem;
+        block-size: 0.75rem;
+        fill: none;
+        stroke: currentcolor;
+        stroke-width: 1.75;
+        stroke-linecap: round;
+    }
+
+    .chip {
+        --chip-color: var(--color-text-primary);
+        --chip-fill: var(--color-fill-muted);
+        --chip-border: var(--color-border-strong);
+
+        display: inline-flex;
+        align-items: center;
+        gap: var(--space-1);
+        max-inline-size: 100%;
+        block-size: 1.5rem;
+        padding: 0 var(--space-2);
+        margin: 0;
+        border: 1px solid transparent;
+        border-radius: var(--radius-full);
+        background-color: var(--chip-fill);
+        color: var(--chip-color);
+        font-family: inherit;
+        font-size: var(--type-xs-size);
+        line-height: var(--type-xs-line);
+        font-weight: var(--weight-medium);
+        white-space: nowrap;
+        vertical-align: middle;
+
+        &[data-size="md"] {
+            block-size: 2rem;
+            padding: 0 var(--space-3);
+            font-size: var(--type-sm-size);
+        }
+
+        &[data-variant="outline"] {
+            border-color: var(--chip-border);
+            background-color: transparent;
+        }
+
+        &[data-tone="accent"] {
+            --chip-color: var(--color-accent);
+            --chip-fill: var(--color-accent-tint-bg);
+            --chip-border: var(--color-accent-tint-border);
+        }
+
+        &[data-tone="success"] {
+            --chip-color: var(--color-status-success);
+            --chip-fill: var(--color-status-success-tint-bg);
+            --chip-border: var(--color-status-success);
+        }
+
+        &[data-tone="warning"] {
+            --chip-color: var(--color-status-warning);
+            --chip-fill: var(--color-status-warning-tint-bg);
+            --chip-border: var(--color-status-warning);
+        }
+
+        &[data-tone="error"] {
+            --chip-color: var(--color-status-error);
+            --chip-fill: var(--color-status-error-tint-bg);
+            --chip-border: var(--color-status-error);
+        }
+
+        &[data-tone="info"] {
+            --chip-color: var(--color-status-info);
+            --chip-fill: var(--color-status-info-tint-bg);
+            --chip-border: var(--color-status-info);
+        }
+
+        &[data-clickable] {
+            cursor: pointer;
+            transition:
+                background-color var(--duration-fast) var(--ease-standard),
+                border-color var(--duration-fast) var(--ease-standard);
+
+            @media (hover: hover) {
+                &:hover:not(:disabled) {
+                    border-color: var(--color-text-secondary);
+                }
+            }
+
+            &:focus-visible {
+                outline: var(--focus-ring-width) solid var(--focus-ring-color);
+                outline-offset: var(--focus-ring-offset);
+            }
+
+            &:disabled {
+                cursor: default;
+                opacity: 0.45;
+            }
+        }
+
+        /* A toggled-on chip: solid accent, whatever its tone (MUI filled + primary). */
+        &[data-selected] {
+            border-color: var(--color-accent);
+            background-color: var(--color-accent);
+            color: var(--color-on-accent);
+        }
+    }
+
+    .icon {
+        display: inline-flex;
+        flex-shrink: 0;
+
+        & > * {
+            inline-size: 0.875rem;
+            block-size: 0.875rem;
+        }
+    }
+
+    .label {
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+}

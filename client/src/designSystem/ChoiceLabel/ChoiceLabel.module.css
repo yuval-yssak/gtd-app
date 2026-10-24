@@ -1,0 +1,41 @@
+@layer gtd.components {
+    .field {
+        display: contents;
+    }
+
+    .choiceLabel {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--space-2);
+        min-block-size: var(--control-height-md);
+        cursor: pointer;
+        user-select: none;
+
+        &[data-placement="end"] {
+            flex-direction: row-reverse;
+            justify-content: space-between;
+        }
+
+        &[data-disabled] {
+            cursor: default;
+            color: var(--color-text-disabled);
+        }
+    }
+
+    .text {
+        display: flex;
+        flex-direction: column;
+        min-inline-size: 0;
+    }
+
+    .label {
+        font-size: var(--type-sm-size);
+        line-height: var(--type-sm-line);
+    }
+
+    .description {
+        color: var(--color-text-secondary);
+        font-size: var(--type-xs-size);
+        line-height: var(--type-xs-line);
+    }
+}

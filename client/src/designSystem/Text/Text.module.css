@@ -1,0 +1,125 @@
+@layer gtd.components {
+    .text {
+        margin: 0;
+        font-family: inherit;
+        font-weight: var(--weight-regular);
+        overflow-wrap: break-word;
+
+        &[data-variant="display"] {
+            font-size: var(--type-3xl-size);
+            line-height: var(--type-3xl-line);
+        }
+
+        &[data-variant="headline"] {
+            font-size: var(--type-2xl-size);
+            line-height: var(--type-2xl-line);
+            letter-spacing: -0.01em;
+        }
+
+        &[data-variant="title"] {
+            font-size: var(--type-xl-size);
+            line-height: var(--type-xl-line);
+            font-weight: var(--weight-semibold);
+            letter-spacing: -0.01em;
+        }
+
+        &[data-variant="titleSm"] {
+            font-size: var(--type-lg-size);
+            line-height: var(--type-lg-line);
+            font-weight: var(--weight-semibold);
+        }
+
+        /* subtitle1/subtitle2 line heights (1.75 / 1.57) kept so list group headers keep their height. */
+        &[data-variant="subtitle"] {
+            font-size: var(--type-md-size);
+            line-height: 1.75rem;
+        }
+
+        &[data-variant="subtitleSm"] {
+            font-size: var(--type-sm-size);
+            line-height: 1.375rem;
+            font-weight: var(--weight-semibold);
+        }
+
+        &[data-variant="body"] {
+            font-size: var(--type-md-size);
+            line-height: var(--type-md-line);
+        }
+
+        &[data-variant="bodySm"] {
+            font-size: var(--type-sm-size);
+            line-height: var(--type-sm-line);
+        }
+
+        &[data-variant="caption"] {
+            font-size: var(--type-xs-size);
+            line-height: var(--type-xs-line);
+        }
+
+        &[data-variant="overline"] {
+            font-size: var(--type-xs-size);
+            line-height: var(--type-xs-line);
+            font-weight: var(--weight-semibold);
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+        }
+
+        &[data-tone="primary"] {
+            color: var(--color-text-primary);
+        }
+
+        &[data-tone="secondary"] {
+            color: var(--color-text-secondary);
+        }
+
+        &[data-tone="disabled"] {
+            color: var(--color-text-disabled);
+        }
+
+        &[data-tone="accent"] {
+            color: var(--color-accent);
+        }
+
+        &[data-tone="error"] {
+            color: var(--color-status-error);
+        }
+
+        &[data-tone="warning"] {
+            color: var(--color-status-warning);
+        }
+
+        &[data-tone="success"] {
+            color: var(--color-status-success);
+        }
+
+        &[data-tone="info"] {
+            color: var(--color-status-info);
+        }
+
+        &[data-tone="inherit"] {
+            color: inherit;
+        }
+
+        &[data-weight="regular"] {
+            font-weight: var(--weight-regular);
+        }
+
+        &[data-weight="medium"] {
+            font-weight: var(--weight-medium);
+        }
+
+        &[data-weight="semibold"] {
+            font-weight: var(--weight-semibold);
+        }
+
+        &[data-weight="bold"] {
+            font-weight: var(--weight-bold);
+        }
+
+        &[data-truncate] {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+    }
+}

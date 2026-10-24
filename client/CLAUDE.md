@@ -159,7 +159,7 @@ This layout route is the central orchestrator for all authenticated state.
 3. Open SSE connection
 4. Register push subscription
 
-**Provides:** `AppDataProvider` to all child routes, and `Outlet` inside the MUI layout (sidebar nav + mobile AppBar).
+**Provides:** `AppDataProvider` to all child routes, and `Outlet` inside the app shell (sidebar nav + mobile app bar).
 
 Note that `AppNav` double-mounts, so state that must survive a remount (e.g. the reauth banner) belongs in a module-level store, not component state.
 
@@ -192,7 +192,7 @@ Per-entity IDB access is split `<entity>Helpers.ts` (reads) / `<entity>Mutations
 - **Never suppress `useExhaustiveDependencies`** — list every reactive value the effect reads. If exhaustive deps would cause unwanted re-runs, the effect is structured wrong: split it, gate its action with an early return on stable conditions, or move the logic out of an effect entirely; restructure rather than `biome-ignore`. `useState`/`useReducer` setters are stable and may be omitted; props, derived values, `navigate` and refs read via `.current` inside the body must be listed.
 - Effects that subscribe — `EventSource`, `addEventListener`, `BroadcastChannel`, observers, Web Locks — must clean up on unmount. A missing cleanup is a defect, not a style issue.
 - IndexedDB, read through `useAppData()`, is the source of truth for every synced entity. Never mirror its rows into component `useState`; read the provider's lists and call the matching `refresh*()` after a write. Local `useState` is for UI-only state: open/closed, drafts, pending-row sets.
-- No `forwardRef` — React 19 passes `ref` through props. A reusable component's props extend `React.ComponentProps<'…'>` (or the wrapped MUI component's props) plus its own; an incoming `className` is merged last via `classnames`, never dropped or overridden. Never name a prop `role` — it collides with the ARIA attribute already in `ComponentProps`.
+- No `forwardRef` — React 19 passes `ref` through props. A reusable component's props extend `React.ComponentProps<'…'>` (or the wrapped Base UI part's props) plus its own; an incoming `className` is merged last via `clsx`, never dropped or overridden. Never name a prop `role` — it collides with the ARIA attribute already in `ComponentProps`.
 
 ### React 19 & Suspense
 
@@ -210,16 +210,19 @@ Per-entity IDB access is split `<entity>Helpers.ts` (reads) / `<entity>Mutations
 - When a component renders many instances (list rows, chips), disambiguate with a data attribute carrying the entity id (`data-item-id`, as `ROW_ITEM_ATTR` in `hooks/useNextActionsDrag.ts` does) rather than mangling the testid (`inboxItem-<id>`). A testid names a role; the attribute names the instance.
 
 ### CSS / Styling
-- Use **typed CSS Modules** for all custom styling (`Component.module.css` beside `Component.tsx`; `generate-typed-css-modules` regenerates the committed `.css.d.ts`). No inline styles, no `styled()` / `styled-components`, no Tailwind, no other CSS-in-JS.
-- **Static vs dynamic.** Only static styling belongs in the module. Genuinely dynamic values — prop/state-driven numbers, theme callbacks (`sx={(theme) => …}`), breakpoint objects you can't prove map to a fixed media query — stay inline in `sx`/`style`. A partially dynamic style splits: static keys → class, dynamic keys → a trimmed inline remainder. Beyond that, `sx` is only for layout-specific overrides on wrapper elements, never for component appearance.
-- **Design decisions live in the MUI theme** (`extendTheme` in `__root.tsx`, mirrored by `.storybook/preview.tsx`): palette, typography, spacing, shape and component variants. If several components restate the same values, that's a theme gap — fix the theme. CSS Modules own layout and component-local styling; the theme owns the design system. One theme, mounted once at the root — no per-subtree themes.
-- **MUI runtime classes inside module selectors must be wrapped in `:global(...)`** — `.chip :global(.MuiChip-deleteIcon)`, `.row:global(.Mui-selected)` — otherwise CSS Modules hashes them and they never match the DOM.
-- **Never `!important`.** Outspecify instead: the two-class idiom (`.cls.cls { … }`) beats Emotion's single-class rules; add a short comment saying what it outspecifies. (Rare, documented exception: overriding inline styles from a third-party library you don't control.)
+
+The UI is built from the design system in `src/designSystem/` (Base UI + typed CSS Modules + tokens) — its own [`CLAUDE.md`](src/designSystem/CLAUDE.md) holds the layer contract, the token rules and the component contracts the app relies on. **No MUI, no Emotion**: build from a DS component, or from plain elements styled by a module.
+
+- Use **typed CSS Modules** for all custom styling (`Component.module.css` beside `Component.tsx`; `generate-typed-css-modules` regenerates the committed `.css.d.ts`). No `styled()` / `styled-components`, no Tailwind, no other CSS-in-JS.
+- **Static vs dynamic.** Only static styling belongs in the module. A genuinely dynamic value — a prop- or state-driven number, a per-account colour — goes in through `style`, preferably as a custom property the module reads (`style={{ '--account-color': color }}`). Never `style` for appearance a class or a data attribute can express.
+- **Design decisions live in the tokens** (`src/designSystem/tokens/variables.css`) and the DS components: colour, type ramp, spacing, radius, z-index. If several modules restate the same value, that's a missing token or a missing DS component — add it there.
+- **Variants are data attributes**, never class-name maps: `data-selected={isSelected || undefined}` styled as `&[data-selected]`.
+- **Never `!important`, never outspecify.** App modules are unlayered and beat every `@layer gtd.*` rule, so a plain class always wins over a DS component's own styles.
 - **`rem`, not `px`**, for sizes and spacing. Hairline borders, outlines and shadows (`1px solid …`) are the accepted `px` case.
-- Colors and z-indexes reference MUI's CSS variables (`var(--mui-palette-divider)`, `var(--mui-zIndex-appBar)`) or the custom properties in `client/src/index.css` — no raw hex and no bare z-index literal in a module. A literal that must exist carries a comment saying what it maps to (the `z-index` fallbacks in `AppNav.module.css` are the pattern).
+- Colours, type sizes and z-indexes come from tokens (`var(--color-divider)`, `var(--type-sm-size)`, `var(--z-app-bar)`) — no raw colour, no literal `font-size`, no bare z-index. `stylelint.config.js` (`npm run lint:css`) enforces this together with logical properties only (`margin-inline-start`, never `margin-left`).
 - Never center with the `left: 50%; transform: translateX(-50%)` hack — use flex/grid alignment.
-- Global CSS variables go in `client/src/index.css`.
-- **Never concatenate classNames with array `.join(" ")`.** Use the `classnames` package instead: `import classNames from "classnames"`.
+- Global rules (the reset, `.srOnly`) live in `src/designSystem/tokens/base.css`; global custom properties in `tokens/variables.css`.
+- **Never concatenate classNames with array `.join(" ")`.** Use `clsx`: `import { clsx } from 'clsx'`.
 - **Never use bracket notation for CSS Module classes** (`styles["preview"]`). Use dot notation (`styles.preview`) — `generate-typed-css-modules` ensures all classes are typed and accessible this way.
 
 ### Storybook — stories are the visual tests

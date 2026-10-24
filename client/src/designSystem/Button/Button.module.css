@@ -1,0 +1,139 @@
+@layer gtd.components {
+    .button {
+        /* Tone colours, re-pointed per data-tone below; the variants read only these three. */
+        --button-color: var(--color-accent);
+        --button-color-hover: var(--color-accent-hover);
+        --button-on-color: var(--color-on-accent);
+        --button-tint: var(--color-accent-tint-bg);
+
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: var(--space-2);
+        flex-shrink: 0;
+        min-block-size: var(--control-height-md);
+        padding: 0 var(--space-4);
+        margin: 0;
+        border: 1px solid transparent;
+        border-radius: var(--radius-md);
+        background: transparent;
+        color: var(--button-color);
+        font-family: inherit;
+        font-size: var(--type-sm-size);
+        line-height: var(--type-sm-line);
+        font-weight: var(--weight-medium);
+        text-decoration: none;
+        white-space: nowrap;
+        cursor: pointer;
+        user-select: none;
+        transition:
+            background-color var(--duration-fast) var(--ease-standard),
+            border-color var(--duration-fast) var(--ease-standard),
+            color var(--duration-fast) var(--ease-standard);
+
+        &:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+        }
+
+        &[data-disabled] {
+            cursor: default;
+            opacity: 0.45;
+        }
+
+        &[data-loading] {
+            cursor: progress;
+            opacity: 0.75;
+        }
+
+        &[data-size="sm"] {
+            min-block-size: var(--control-height-sm);
+            padding: 0 var(--space-3);
+            font-size: var(--type-xs-size);
+        }
+
+        &[data-size="lg"] {
+            min-block-size: var(--control-height-lg);
+            padding: 0 var(--space-6);
+            font-size: var(--type-md-size);
+        }
+
+        &[data-full-width] {
+            inline-size: 100%;
+        }
+
+        &[data-tone="neutral"] {
+            --button-color: var(--color-text-primary);
+            --button-color-hover: var(--color-text-primary);
+            --button-on-color: var(--color-bg-surface);
+            --button-tint: var(--color-state-hover);
+        }
+
+        &[data-tone="danger"] {
+            --button-color: var(--color-status-error);
+            --button-color-hover: var(--color-status-error);
+            --button-on-color: var(--color-text-inverse);
+            --button-tint: var(--color-status-error-tint-bg);
+        }
+
+        &[data-tone="warning"] {
+            --button-color: var(--color-status-warning);
+            --button-color-hover: var(--color-status-warning);
+            --button-on-color: var(--color-text-inverse);
+            --button-tint: var(--color-status-warning-tint-bg);
+        }
+
+        &[data-tone="success"] {
+            --button-color: var(--color-status-success);
+            --button-color-hover: var(--color-status-success);
+            --button-on-color: var(--color-text-inverse);
+            --button-tint: var(--color-status-success-tint-bg);
+        }
+
+        &[data-variant="solid"] {
+            background-color: var(--button-color);
+            color: var(--button-on-color);
+
+            @media (hover: hover) {
+                &:hover:not([data-disabled]) {
+                    background-color: var(--button-color-hover);
+                }
+            }
+        }
+
+        &[data-variant="outline"] {
+            border-color: var(--color-border-strong);
+
+            @media (hover: hover) {
+                &:hover:not([data-disabled]) {
+                    background-color: var(--button-tint);
+                    border-color: var(--button-color);
+                }
+            }
+        }
+
+        &[data-variant="ghost"] {
+            padding-inline: var(--space-2);
+
+            @media (hover: hover) {
+                &:hover:not([data-disabled]) {
+                    background-color: var(--button-tint);
+                }
+            }
+        }
+
+        &:active:not([data-disabled]) {
+            filter: brightness(0.94);
+        }
+    }
+
+    .iconSlot {
+        display: inline-flex;
+        flex-shrink: 0;
+
+        & > * {
+            inline-size: var(--icon-size-sm);
+            block-size: var(--icon-size-sm);
+        }
+    }
+}

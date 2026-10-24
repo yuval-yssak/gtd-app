@@ -1,0 +1,33 @@
+@layer gtd.components {
+    .skeleton {
+        display: block;
+        background-color: var(--color-fill-muted);
+        animation: skeletonPulse 1.6s ease-in-out infinite;
+
+        &[data-shape="text"] {
+            block-size: 1em;
+            margin-block: 0.25em;
+            border-radius: var(--radius-sm);
+        }
+
+        &[data-shape="rect"] {
+            border-radius: var(--radius-md);
+        }
+
+        &[data-shape="circle"] {
+            border-radius: var(--radius-full);
+        }
+    }
+
+    @keyframes skeletonPulse {
+        50% {
+            opacity: 0.5;
+        }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .skeleton {
+            animation: none;
+        }
+    }
+}

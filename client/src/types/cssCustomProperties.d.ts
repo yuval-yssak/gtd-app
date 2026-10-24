@@ -1,9 +1,9 @@
 import 'react';
 
-// Lets a component set the drag displacement variable through `style` without a cast
-// (`routes/_authenticated/next-actions.tsx`); the CSS module's `.rowShell` reads it.
+// Lets `style` carry CSS custom properties (`style={{ '--account-color': color }}`) — the way a
+// per-call value reaches a CSS Module — without casting.
 declare module 'react' {
     interface CSSProperties {
-        '--drag-shift'?: string;
+        [customProperty: `--${string}`]: string | number | undefined;
     }
 }

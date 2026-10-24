@@ -110,6 +110,6 @@
     width: 2rem;
     height: 0.25rem;
     border-radius: 0.125rem;
-    background: var(--gtd-sheet-handle);
+    background: var(--color-sheet-handle);
     margin: 0.5rem auto 0.75rem;
 }

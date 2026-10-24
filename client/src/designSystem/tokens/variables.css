@@ -1,0 +1,199 @@
+/*
+ * Design tokens for the Done client. Every colour, radius, spacing step, type size, shadow and
+ * z-index used by a CSS Module comes from here; stylelint rejects literals anywhere else.
+ *
+ * Two tiers: the light values live on :root, the dark counterparts on :root[data-theme="dark"]
+ * (stamped by lib/colorScheme.ts). Alpha colours are 8-digit hex rather than color-mix() because
+ * the iOS PWA runs WebKit, where relative colour functions can silently fall back to nothing.
+ *
+ * Spacing is a 4px scale. MUI's spacing unit was 8px, so an old `sx={{ p: n }}` is `--space-{2n}`;
+ * keeping that mapping exact is what keeps the facelift density-neutral.
+ */
+@layer gtd.tokens {
+    :root {
+        /* Surfaces */
+        --color-bg-page: #f7f8fa;
+        --color-bg-surface: #ffffff;
+        --color-bg-surface-raised: #ffffff;
+        --color-bg-sunken: #eef0f3;
+        /* A neutral fill that reads on page and surface alike (chips, skeletons). */
+        --color-fill-muted: #eceef1;
+        /* The switch thumb stays light in both schemes. */
+        --color-thumb: #ffffff;
+        /* Text on a per-account palette swatch (account chips), white in both schemes. */
+        --color-on-swatch: #ffffff;
+        --color-backdrop: #0f172a66;
+
+        /* Borders */
+        --color-border-default: #dfe2e7;
+        --color-border-strong: #c4c9d1;
+        --color-divider: #e6e8ec;
+
+        /* Text */
+        --color-text-primary: #16181d;
+        --color-text-secondary: #5c6370;
+        --color-text-disabled: #9aa0aa;
+        --color-text-inverse: #ffffff;
+
+        /* Accent — today's primary blue, kept so the app still reads as itself. */
+        --color-accent: #1976d2;
+        --color-accent-hover: #1565c0;
+        --color-accent-tint-bg: #1976d21a;
+        --color-accent-tint-border: #1976d259;
+        --color-on-accent: #ffffff;
+
+        /* The editor's secondary syntax colour (function and definition names). */
+        --color-accent-secondary: #8e24aa;
+
+        /* Status */
+        --color-status-error: #c62828;
+        --color-status-error-tint-bg: #c628281a;
+        --color-status-warning: #a15c00;
+        --color-status-warning-tint-bg: #ed6c021f;
+        --color-status-success: #2e7d32;
+        --color-status-success-tint-bg: #2e7d321a;
+        --color-status-info: #0277bd;
+        --color-status-info-tint-bg: #0288d11a;
+
+        /* Interaction state layers */
+        --color-state-hover: #0f172a0a;
+        --color-state-selected: #1976d214;
+        --color-state-pressed: #0f172a14;
+
+        /* Misc surfaces carried over from the old index.css */
+        --color-code-bg: #0000000f;
+        --color-scrollbar: #b4b9c2;
+        --color-sheet-handle: #00000033;
+
+        /* The one elevation in a flat design: floating popups (menus, popovers, toasts, drag
+           ghosts). Cards and dialogs separate from the page with a hairline border instead. */
+        --shadow-popup: 0 4px 16px 0 #0f172a1f, 0 1px 3px 0 #0f172a14;
+
+        /* Typography. Sizes follow the old MUI ramp (caption 12, body2 14, body1 16, h6 20, h5 24,
+           h4 34, h3 48) and line heights match it to the pixel so rows keep their height. */
+        --font-sans: "Inter", -apple-system, blinkmacsystemfont, "Segoe UI", system-ui, sans-serif;
+        --font-mono: ui-monospace, "SF Mono", menlo, consolas, monospace;
+        --type-xs-size: 0.75rem;
+        --type-xs-line: 1.25rem;
+        --type-sm-size: 0.875rem;
+        --type-sm-line: 1.25rem;
+        --type-md-size: 1rem;
+        --type-md-line: 1.5rem;
+        --type-lg-size: 1.25rem;
+        --type-lg-line: 2rem;
+        --type-xl-size: 1.5rem;
+        --type-xl-line: 2rem;
+        --type-2xl-size: 2.125rem;
+        --type-2xl-line: 2.625rem;
+        --type-3xl-size: 3rem;
+        --type-3xl-line: 3.5rem;
+        --weight-regular: 400;
+        --weight-medium: 500;
+        --weight-semibold: 600;
+        --weight-bold: 700;
+
+        /* Spacing (4px scale) */
+        --space-0-5: 0.125rem;
+        --space-1: 0.25rem;
+        --space-1-5: 0.375rem;
+        --space-2: 0.5rem;
+        --space-3: 0.75rem;
+        --space-4: 1rem;
+        --space-5: 1.25rem;
+        --space-6: 1.5rem;
+        --space-8: 2rem;
+        --space-10: 2.5rem;
+        --space-12: 3rem;
+        --space-16: 4rem;
+
+        /* Radius */
+        --radius-sm: 0.25rem;
+        --radius-md: 0.5rem;
+        --radius-lg: 0.75rem;
+        --radius-full: 624.9375rem;
+
+        /* Control sizes — the old MUI heights (small input 40px, small button 30px, icon button 34px
+           small / 40px medium) so touch targets and row heights do not move. */
+        --control-height-sm: 1.875rem;
+        --control-height-md: 2.25rem;
+        --control-height-lg: 2.5rem;
+        --icon-button-sm: 2.125rem;
+        --icon-button-md: 2.5rem;
+        --icon-size-sm: 1.125rem;
+        --icon-size-md: 1.25rem;
+        --icon-size-lg: 1.5rem;
+
+        /* Focus ring — one look everywhere: solid 2px accent at 2px offset. */
+        --focus-ring-width: 2px;
+        --focus-ring-offset: 2px;
+        --focus-ring-color: var(--color-accent);
+
+        /* Motion */
+        --duration-fast: 120ms;
+        --duration-normal: 200ms;
+        --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+
+        /* z-index scale — the old MUI values, so anything still on MUI during the migration stacks
+           consistently with the design system. */
+        --z-raised: 1;
+        --z-sticky: 10;
+        --z-app-bar: 1100;
+        --z-drawer: 1200;
+        --z-dialog: 1300;
+        --z-popup: 1350;
+        --z-toast: 1400;
+        --z-tooltip: 1500;
+
+        /* Layout. Media queries cannot read custom properties, so the md breakpoint (900px, MUI's
+           `md`) is also a literal in hooks/useIsMobile.ts and in each @media rule that uses it. */
+        --sidebar-width: 15rem;
+        --notes-max-height: 60vh;
+    }
+
+    :root[data-theme="dark"] {
+        --color-bg-page: #0f1115;
+        --color-bg-surface: #16181d;
+        --color-bg-surface-raised: #1d2026;
+        --color-bg-sunken: #0b0d10;
+        --color-fill-muted: #2a2e36;
+        --color-thumb: #f4f5f7;
+        --color-on-swatch: #ffffff;
+        --color-backdrop: #000000a3;
+
+        --color-border-default: #2b2f37;
+        --color-border-strong: #3d424c;
+        --color-divider: #252930;
+
+        --color-text-primary: #eceef2;
+        --color-text-secondary: #a3a9b4;
+        --color-text-disabled: #6b717c;
+        --color-text-inverse: #16181d;
+
+        --color-accent: #6aa8f7;
+        --color-accent-hover: #8dbcf9;
+        --color-accent-tint-bg: #6aa8f721;
+        --color-accent-tint-border: #6aa8f766;
+        --color-on-accent: #0b1a2e;
+
+        --color-accent-secondary: #d39be6;
+
+        --color-status-error: #f28b82;
+        --color-status-error-tint-bg: #f28b8224;
+        --color-status-warning: #f6c26b;
+        --color-status-warning-tint-bg: #f6c26b1f;
+        --color-status-success: #81c995;
+        --color-status-success-tint-bg: #81c9951f;
+        --color-status-info: #7cc7f2;
+        --color-status-info-tint-bg: #7cc7f21f;
+
+        --color-state-hover: #ffffff0d;
+        --color-state-selected: #6aa8f726;
+        --color-state-pressed: #ffffff1a;
+
+        --color-code-bg: #ffffff1a;
+        --color-scrollbar: #4a4f59;
+        --color-sheet-handle: #ffffff4d;
+
+        --shadow-popup: 0 6px 20px 0 #00000080, 0 1px 3px 0 #00000066;
+    }
+}

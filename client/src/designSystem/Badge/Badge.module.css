@@ -1,0 +1,45 @@
+@layer gtd.components {
+    .anchor {
+        position: relative;
+        display: inline-flex;
+        flex-shrink: 0;
+    }
+
+    .bubble {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-inline-size: 1.25rem;
+        block-size: 1.25rem;
+        padding: 0 var(--space-1-5);
+        border-radius: var(--radius-full);
+        background-color: var(--color-accent);
+        color: var(--color-on-accent);
+        font-size: var(--type-xs-size);
+        line-height: 1;
+        font-weight: var(--weight-semibold);
+        font-variant-numeric: tabular-nums;
+
+        &[data-anchored] {
+            position: absolute;
+            inset-block-start: 0;
+            inset-inline-end: 0;
+            translate: 40% -40%;
+        }
+
+        &[data-tone="error"] {
+            background-color: var(--color-status-error);
+            color: var(--color-text-inverse);
+        }
+
+        &[data-tone="warning"] {
+            background-color: var(--color-status-warning);
+            color: var(--color-text-inverse);
+        }
+
+        &[data-tone="neutral"] {
+            background-color: var(--color-bg-sunken);
+            color: var(--color-text-secondary);
+        }
+    }
+}

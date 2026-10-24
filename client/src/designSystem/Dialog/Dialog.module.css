@@ -1,0 +1,96 @@
+@layer gtd.composites {
+    .backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: var(--z-dialog);
+        background-color: var(--color-backdrop);
+        transition: opacity var(--duration-normal) var(--ease-standard);
+
+        /* iOS: an absolute backdrop covers the whole visual viewport, a fixed one can stop short. */
+        @supports (-webkit-touch-callout: none) {
+            position: absolute;
+        }
+
+        &[data-starting-style],
+        &[data-ending-style] {
+            opacity: 0;
+        }
+    }
+
+    .viewport {
+        position: fixed;
+        inset: 0;
+        z-index: var(--z-dialog);
+        display: grid;
+        place-items: center;
+        padding: var(--space-4);
+        overflow: hidden;
+    }
+
+    .popup {
+        display: flex;
+        flex-direction: column;
+        max-inline-size: 37.5rem;
+        max-block-size: calc(100dvh - var(--space-8));
+        min-inline-size: min(20rem, 100%);
+        border: 1px solid var(--color-border-default);
+        border-radius: var(--radius-lg);
+        background-color: var(--color-bg-surface-raised);
+        color: var(--color-text-primary);
+        outline: none;
+        transition:
+            opacity var(--duration-normal) var(--ease-standard),
+            transform var(--duration-normal) var(--ease-standard);
+
+        &[data-size="xs"] {
+            max-inline-size: 27.75rem;
+        }
+
+        &[data-size="md"] {
+            max-inline-size: 56.25rem;
+        }
+
+        &[data-full-width] {
+            inline-size: 100%;
+        }
+
+        &[data-starting-style],
+        &[data-ending-style] {
+            opacity: 0;
+            transform: scale(0.97);
+        }
+    }
+
+    .title {
+        flex-shrink: 0;
+        margin: 0;
+        padding: var(--space-5) var(--space-6) var(--space-2);
+        font-size: var(--type-lg-size);
+        line-height: var(--type-lg-line);
+        font-weight: var(--weight-semibold);
+    }
+
+    .description {
+        margin: 0;
+        color: var(--color-text-secondary);
+        font-size: var(--type-md-size);
+        line-height: var(--type-md-line);
+    }
+
+    .content {
+        flex: 1 1 auto;
+        min-block-size: 0;
+        overflow-y: auto;
+        padding: var(--space-2) var(--space-6);
+    }
+
+    .actions {
+        display: flex;
+        flex-shrink: 0;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: flex-end;
+        gap: var(--space-2);
+        padding: var(--space-3) var(--space-4) var(--space-4);
+    }
+}
