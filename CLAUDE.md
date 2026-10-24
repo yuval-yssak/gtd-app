@@ -191,9 +191,15 @@ Design detail: [`docs/plans/item-brief.md`](docs/plans/item-brief.md); schema: [
 
 These apply repo-wide. `client/CLAUDE.md` and `api-server/CLAUDE.md` add only project-specific rules on top.
 
+### Scripts are code
+
+The standards apply to **every** JS/TS file, not only the request-serving server and the app: the operator CLIs under `api-server/src/scripts/`, `e2e/scripts/`, Storybook config and one-off migration runners included. Keep a script's decisions — what to patch, which rows qualify, what the counts mean — in pure, exported functions with a test beside the other tests (`backfillItemRanks.test.ts`, `deleteUserCli.test.ts` are the pattern); the database side stays thin. Two script-specific facts: the CLIs print to a terminal and are therefore exempt from the log-redaction scan (§ Logging), so request-serving code must never import from `scripts/`; and a one-off mongosh runner is plain JavaScript (mongosh runs no TypeScript), so the TypeScript section is the only one that does not apply to it.
+
 ### Comments
 
 Whenever making a code change that is not immediately obvious — e.g. a workaround, a non-obvious prop or flag, a subtle timing dependency, or a browser-specific fix — add a concise inline comment explaining why it is needed. One to three lines is usually enough. Skip comments where the code is self-evident.
+
+Do not write comments that paraphrase the code, restate the function name, or narrate the current task ("added for the brief flow", "used by X"). Those rot and add noise. Write the comment only when removing it would leave a future reader puzzled.
 
 ### File Naming
 
@@ -205,6 +211,11 @@ Whenever making a code change that is not immediately obvious — e.g. a workaro
 - Prefer inferred types over explicit annotations — including function return types. Only annotate when inference would produce `any` or an unacceptably wide type.
 - Prefer generics (`<T>`) and mapped/conditional/template literal types over `as` casts. Type assertions must be rare and justified.
 - Use `hasAtLeastOne(arr)` from `lib/typeUtils.ts` instead of `arr.length > 0` — it narrows `T[]` to `NonEmptyArray<T>`, eliminating `arr[0]!` assertions. Use `NonEmptyString` (same file) for strings known to be non-empty.
+- **Generated files are exempt and never hand-edited**: `client/src/routeTree.gen.ts` (TanStack Router; Biome ignores it) and every `*.css.d.ts` (rewritten by `generate-typed-css-modules`). Do not flag violations inside them; fix the source they are generated from.
+
+### Lint suppressions
+
+A `biome-ignore` is a documented exception, never a shortcut to a green turn: it names the narrowest rule, carries the reason on the same line, and is written only when the code cannot reasonably be restructured. The accepted cases in this repo are bracket access on index-signature types in tests (`useLiteralKeys`) and a context whose non-null default is provably safe. `useExhaustiveDependencies` is never suppressed — see `client/CLAUDE.md` § React.
 
 ### Functions
 - ≤ 5 meaningful actions per function, typically ~5 lines.
@@ -232,11 +243,20 @@ Whenever making a code change that is not immediately obvious — e.g. a workaro
 - `const` everywhere. `let` requires justification. `var` is prohibited.
 - If a `let` exists, evaluate whether the mutation can be eliminated by extracting a function or simplifying the logic.
 
-### Abstraction
-- A function must operate at a single level of abstraction. When a function mixes levels (orchestration alongside low-level implementation details), extract the lower-level concerns into named helpers.
-- Any repeated pattern appearing 2+ times must be extracted to a named abstraction.
-- Pagination/streaming → async generator functions.
-- Rate-limiting/debouncing → a decorator/wrapper function, not inline logic.
+### Abstraction: name concepts, don't count repetitions
+
+Extract code into a function, hook, generator or component when it embodies a **concept worth naming** — a unit of meaning a reader grasps from the name alone, so the calling code reads as a sentence instead of making the reader re-derive the logic. That is the purpose of abstraction: not avoiding repetition, but giving each piece of logic its own identity.
+
+This cuts in three directions:
+
+- **Extract even a single occurrence** when naming it makes the caller read better — a predicate like `isHiddenByTickler(item, today)` beats an inline three-clause boolean, even if it appears exactly once.
+- **Extract to separate layers of concern**, even with zero repetition. A loop that interleaves business logic with mechanics — pagination, retries, batching, rate-limiting — is two concepts fused; pull the mechanics into a named abstraction so the remaining code is pure logic and each piece reads at a single level. Canonical shapes:
+  - Pagination/streaming → an async generator (the caller just `for await`s; cursor handling is hidden).
+  - Rate-limiting/debouncing/retries → a decorator/wrapper function, not inline `setTimeout` logic.
+  - A function mixing orchestration with low-level implementation details → extract the lower-level concerns into named helpers.
+- **Don't extract code that is already its own best expression.** If the inline code is short and self-evident, wrapping it in a parameterized helper adds indirection without adding meaning. A name must compress; if reading the call site still requires jumping to the definition, the abstraction failed.
+
+Repetition is a *signal*, not a rule. Repeated code suggests a concept may be hiding there — merge the copies only if you can give the result an honest name. If the best name available is vague (`processData`, `handleItem`) or the helper needs flags to serve all its callers, the copies are similar by coincidence, not by concept; leave them duplicated until the real concept emerges.
 
 ### Functional Programming
 - Prefer pure functions, immutability, and function composition over imperative mutation.
@@ -248,9 +268,46 @@ Whenever making a code change that is not immediately obvious — e.g. a workaro
 
 ### Dates
 - Use `dayjs` for all date parsing, formatting, manipulation, duration arithmetic, and timestamp comparisons. Do not use the native `Date` API or other date libraries.
+- **Exception — mongosh.** A one-off mongosh query or runner loads no npm packages, and a query on a BSON `Date` field needs `Date` bounds, so native `Date` is correct there. Say so in a one-line comment where the `Date` is built.
 
-### Tests
-Every implementation step adds unit **and** Playwright e2e coverage. Lint/typecheck/existing tests passing is not enough.
+### Logging
+
+Both packages log with `console.*`. On the server those lines reach Cloud Logging through Cloud Run, which stamps stderr lines as `ERROR` — Node writes `console.warn` **and** `console.error` to stderr — and stdout lines (`console.log` / `console.info`) as informational, unless the line is JSON carrying its own `severity` (the per-request lines from `lib/v1Logger.ts` are the only structured ones so far). Severity filters key off that, so:
+
+- **Classify by what actually happened, not by where the code sits.** An *expected* outcome — a validation rejection, a 4xx, an idempotent replay, a skipped duplicate, a push against a `suspended` integration, a user with nothing to sweep — is normal behavior, not an error; record it with `console.log` if a record is needed at all. `console.error` / `console.warn` are for genuine failures.
+- **Watch the catch-all trap.** A `throw` for an expected denial that lands in a surrounding `try/catch` gets error-logged by the catch, turning routine denials into recurring error noise. Hoist the guard above the `try`, or special-case the expected exception in the catch, so only real failures are error-logged.
+- **Emit an error or warning only when it is actionable.** A line that fires routinely erodes the channel; delete it or demote it.
+- **Structure: `[scope]` prefix, structured metadata object last** — `console.error('[apiTokens] touchLastUsed failed', { tokenId, err })`. Identifiers (ids, route, status, counts, durations) go in the object, never interpolated into prose.
+- **Never log user content or secrets.** The privacy policy describes server logs as holding route, timing, status and identifiers — never item titles or notes, calendar event summaries, locations, attendees, email addresses, session tokens or OAuth credentials. `api-server/src/tests/logRedaction.test.ts` scans every `console.*` call in request-serving code and fails on an interpolated content field; whole error objects are scrubbed by `lib/googleErrorRedactor.ts`. Operator CLIs under `src/scripts/` are exempt because they print to a terminal.
+
+### Tests — tests dictate behavior (TDD)
+
+Tests are written **before** the implementation and serve as its specification. Lint/typecheck/existing tests passing is not enough.
+
+- **Test-first per feature.** Before implementing, write the tests describing the planned behavior, watch them fail, then implement until green. Do not write the implementation and back-fill tests. A test that never failed proves nothing — if a fix lands before its test, revert the fix once to prove the test discriminates.
+- **Every logic gets a test.** Any function with branching, computation or transformation has unit tests. Pure wiring (re-exports, trivial delegation) is exempt.
+- **Layered coverage — every layer that applies to the change is mandatory; they are not alternatives:**
+  - **Unit** — Vitest, fast and isolated (`src/tests/` in api-server and client).
+  - **Integration** — modules tested in-process with their real collaborators, only true externals faked: an api-server route test runs the Hono handler through the real DAO against the per-file Mongo database; a client db-helper test runs against `fake-indexeddb`.
+  - **E2E** — every user-visible or cross-surface change gets a Playwright spec in `e2e/` (drives the real client + API).
+  - **Stories** — every visual state of a component has a story (`client/CLAUDE.md` § Storybook).
+- **Untested legacy code: pin first.** Before modifying logic that has no tests, write characterization tests for its current behavior, then change it test-first.
+- **Mock boundaries only.** Fake network (Google, Anthropic — the api-server harness already aborts outbound HTTP), time (`vi.useFakeTimers` / `vi.setSystemTime`), randomness and environment (`vi.stubEnv`). Never mock internal modules — a test that needs `vi.mock` on a sibling module is exposing a design problem; refactor instead. (In api-server such a file is also forced into the slower `isolated` vitest project.)
+- Test code is held to the same standards as production code: setup in named helpers, arrange/act/assert readable in isolation, behavior specified rather than implementation mirrored.
+
+### Same-change registries
+
+Several catalogs describe the system to tooling, operators or users; adding a thing without its catalog entry ships a thing nobody can see. Update the catalog **in the same change**:
+
+| When you add or rename… | Also update |
+|---|---|
+| A server env var | `api-server/src/env.d.ts` (typed access), `api-server/.env.example`, `api-server/README.md` § Environment Variables, the Secrets/Variables tables in `docs/gcp-deploy-plan.md`, and the GitHub environment itself — the deploy writes the **full** set, so a secret missing there deploys as an empty string |
+| A collection, or a field holding a credential/token/secret | `api-server/src/lib/userDataInventory.ts` — deletion + export scope (§ User data scope above) |
+| A public field on an item or routine | the `PUBLIC_FIELDS` allowlist in `api-server/src/routes/v1/projections/` and `docs/PUBLIC_API.md` |
+| An MCP tool or its schema | both copies — `mcp-server/src/tools/` (source of truth) and `api-server/src/mcp/tools/` — `api-server/src/tests/mcpToolParity.test.ts` fails when the exposed tool sets drift |
+| A synced entity | `client/src/db/syncHelpers.ts` + the IDB store + the op snapshot schema (§ Key Types above) |
+| A periodic job | a Cloud Scheduler job documented in `docs/gcp-deploy-plan.md` — no in-process timers |
+| A route | its `useDocumentTitle` + `client/src/tests/pageTitle.test.ts` (nav-label parity) |
 
 ## Post-Change Checklist
 

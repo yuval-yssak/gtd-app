@@ -189,6 +189,10 @@ Per-entity IDB access is split `<entity>Helpers.ts` (reads) / `<entity>Mutations
 - Custom hooks are the extraction unit for reusable stateful logic — not utility functions with `use*` names for logic that doesn't touch React state or refs.
 - Avoid `useEffect` for derived state; compute it inline or with `useMemo`.
 - Never read from a ref during render — refs are for imperative escape hatches, not rendering logic.
+- **Never suppress `useExhaustiveDependencies`** — list every reactive value the effect reads. If exhaustive deps would cause unwanted re-runs, the effect is structured wrong: split it, gate its action with an early return on stable conditions, or move the logic out of an effect entirely; restructure rather than `biome-ignore`. `useState`/`useReducer` setters are stable and may be omitted; props, derived values, `navigate` and refs read via `.current` inside the body must be listed.
+- Effects that subscribe — `EventSource`, `addEventListener`, `BroadcastChannel`, observers, Web Locks — must clean up on unmount. A missing cleanup is a defect, not a style issue.
+- IndexedDB, read through `useAppData()`, is the source of truth for every synced entity. Never mirror its rows into component `useState`; read the provider's lists and call the matching `refresh*()` after a write. Local `useState` is for UI-only state: open/closed, drafts, pending-row sets.
+- No `forwardRef` — React 19 passes `ref` through props. A reusable component's props extend `React.ComponentProps<'…'>` (or the wrapped MUI component's props) plus its own; an incoming `className` is merged last via `classnames`, never dropped or overridden. Never name a prop `role` — it collides with the ARIA attribute already in `ComponentProps`.
 
 ### React 19 & Suspense
 
@@ -203,13 +207,39 @@ Per-entity IDB access is split `<entity>Helpers.ts` (reads) / `<entity>Mutations
 
 - `data-testid` values are camelCase: `inboxItem`, `clarifyButton`
 - Prefer `data-testid` over selecting by text or CSS class — text changes break tests, class names are implementation details
+- When a component renders many instances (list rows, chips), disambiguate with a data attribute carrying the entity id (`data-item-id`, as `ROW_ITEM_ATTR` in `hooks/useNextActionsDrag.ts` does) rather than mangling the testid (`inboxItem-<id>`). A testid names a role; the attribute names the instance.
 
 ### CSS / Styling
-- Use CSS Modules for all custom styling. No inline styles, no `styled-components`, no Tailwind, no other CSS-in-JS.
-- MUI components are styled via the centralized MUI theme — use `sx` props only for layout-specific overrides on wrapper elements, not for component appearance.
+- Use **typed CSS Modules** for all custom styling (`Component.module.css` beside `Component.tsx`; `generate-typed-css-modules` regenerates the committed `.css.d.ts`). No inline styles, no `styled()` / `styled-components`, no Tailwind, no other CSS-in-JS.
+- **Static vs dynamic.** Only static styling belongs in the module. Genuinely dynamic values — prop/state-driven numbers, theme callbacks (`sx={(theme) => …}`), breakpoint objects you can't prove map to a fixed media query — stay inline in `sx`/`style`. A partially dynamic style splits: static keys → class, dynamic keys → a trimmed inline remainder. Beyond that, `sx` is only for layout-specific overrides on wrapper elements, never for component appearance.
+- **Design decisions live in the MUI theme** (`extendTheme` in `__root.tsx`, mirrored by `.storybook/preview.tsx`): palette, typography, spacing, shape and component variants. If several components restate the same values, that's a theme gap — fix the theme. CSS Modules own layout and component-local styling; the theme owns the design system. One theme, mounted once at the root — no per-subtree themes.
+- **MUI runtime classes inside module selectors must be wrapped in `:global(...)`** — `.chip :global(.MuiChip-deleteIcon)`, `.row:global(.Mui-selected)` — otherwise CSS Modules hashes them and they never match the DOM.
+- **Never `!important`.** Outspecify instead: the two-class idiom (`.cls.cls { … }`) beats Emotion's single-class rules; add a short comment saying what it outspecifies. (Rare, documented exception: overriding inline styles from a third-party library you don't control.)
+- **`rem`, not `px`**, for sizes and spacing. Hairline borders, outlines and shadows (`1px solid …`) are the accepted `px` case.
+- Colors and z-indexes reference MUI's CSS variables (`var(--mui-palette-divider)`, `var(--mui-zIndex-appBar)`) or the custom properties in `client/src/index.css` — no raw hex and no bare z-index literal in a module. A literal that must exist carries a comment saying what it maps to (the `z-index` fallbacks in `AppNav.module.css` are the pattern).
+- Never center with the `left: 50%; transform: translateX(-50%)` hack — use flex/grid alignment.
 - Global CSS variables go in `client/src/index.css`.
 - **Never concatenate classNames with array `.join(" ")`.** Use the `classnames` package instead: `import classNames from "classnames"`.
 - **Never use bracket notation for CSS Module classes** (`styles["preview"]`). Use dot notation (`styles.preview`) — `generate-typed-css-modules` ensures all classes are typed and accessible this way.
+
+### Storybook — stories are the visual tests
+
+Stories are how test-first shows up for components (root `CLAUDE.md` § Tests): write the story for a state before or alongside implementing it, not after. They are **not** part of `npm run test` here, so render them (`npm run storybook`, port 6006) to verify a change — don't assert "it looks right" from code alone. The a11y addon reports violations on every story.
+
+- **Every state of every component has its own story**, and the play function must leave the component **in that state** — a state with no story is invisible to review. A collapsible list with scrolling needs separate stories for collapsed, expanded, expanded-and-scrolled-to-the-end, focused, hovered, disabled.
+- **Composite components** don't need every state of every inner component — they need a story for **every logical case** of the composite: empty, loading, populated, error, overflow/long content.
+- **Per-story arrangement goes in `beforeEach`, not `decorators`** — mocks, module-level state priming (`setRoutineIndicatorStyle('icon')`), permission stubs. `beforeEach` may return a cleanup function, so setup and teardown stay co-located:
+  ```ts
+  export const ErrorState: Story = {
+      beforeEach: () => {
+          myMock.mockRejectedValueOnce(new Error('failed'));
+          return () => myMock.mockReset();
+      },
+  };
+  ```
+  `decorators` wrap the tree in providers (`RouterDecorator`); they do not arrange state.
+- **Play function patterns:** query via `within(canvasElement).findByTestId('camelCaseId')`; async assertions via `waitFor(() => expect(…).toBeVisible())`; never `setTimeout`.
+- **Bug fixes:** when a fix affects a visible UI state, add a story that reproduces the fixed state — it documents the correct behavior and blocks regression.
 
 ### Filters
 
