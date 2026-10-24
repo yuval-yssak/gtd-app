@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AccountSyncConfigsBundle } from '../api/calendarApi';
 import * as calendarApi from '../api/calendarApi';
-import { _resetCalendarOptionsCacheForTests, prefetchCalendarOptions } from '../hooks/useCalendarOptions';
+import { _resetCalendarOptionsCacheForTests, CALENDAR_OPTIONS_RETRY_AFTER_FAILURE_MS, prefetchCalendarOptions } from '../hooks/useCalendarOptions';
 
 const BUNDLE_A: AccountSyncConfigsBundle = {
     userId: 'user-A',
@@ -61,17 +61,24 @@ describe('useCalendarOptions cache', () => {
         expect(spy).toHaveBeenCalledTimes(1);
     });
 
-    it('on rejection drops the cache so a later call retries instead of memoizing the failure', async () => {
-        const spy = vi.spyOn(calendarApi, 'getAllSyncConfigs').mockRejectedValueOnce(new Error('network down')).mockResolvedValueOnce([BUNDLE_A]);
-        prefetchCalendarOptions();
-        // Drain microtasks until the catch handler that nulls the cache fires.
-        await Promise.resolve();
-        await Promise.resolve();
-        await Promise.resolve();
-        // Second prefetch should issue a fresh network call rather than reusing the rejected promise.
-        prefetchCalendarOptions();
-        await Promise.resolve();
-        await Promise.resolve();
-        expect(spy).toHaveBeenCalledTimes(2);
+    it('a failure is not refetched by every read: the empty result holds until the retry window passes', async () => {
+        vi.useFakeTimers();
+        try {
+            const spy = vi.spyOn(calendarApi, 'getAllSyncConfigs').mockRejectedValueOnce(new Error('network down')).mockResolvedValueOnce([BUNDLE_A]);
+            prefetchCalendarOptions();
+            await vi.advanceTimersByTimeAsync(0);
+            // A re-render right after the failure reads the settled (empty) result — no new round-trip.
+            prefetchCalendarOptions();
+            await vi.advanceTimersByTimeAsync(0);
+            expect(spy).toHaveBeenCalledTimes(1);
+
+            // Once the window has passed, the next read retries instead of memoizing the failure forever.
+            await vi.advanceTimersByTimeAsync(CALENDAR_OPTIONS_RETRY_AFTER_FAILURE_MS + 1);
+            prefetchCalendarOptions();
+            await vi.advanceTimersByTimeAsync(0);
+            expect(spy).toHaveBeenCalledTimes(2);
+        } finally {
+            vi.useRealTimers();
+        }
     });
 });

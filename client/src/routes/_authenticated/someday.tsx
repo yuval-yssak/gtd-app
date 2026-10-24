@@ -10,9 +10,7 @@ import ListItemButton from '@mui/material/ListItemButton';
 import ListItemText from '@mui/material/ListItemText';
 import Paper from '@mui/material/Paper';
 import Snackbar from '@mui/material/Snackbar';
-import { useTheme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
-import useMediaQuery from '@mui/material/useMediaQuery';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -59,10 +57,8 @@ function SomedayPage() {
     const { db } = Route.useRouteContext();
     const { q } = Route.useSearch();
     const navigate = useNavigate();
-    const { items, people, workContexts, routines, refreshItems, isInitialSyncing } = useAppData();
-    const theme = useTheme();
-    const isMobile = useMediaQuery(theme.breakpoints.down('md'));
-    const editor = useItemEditor({ db, people, workContexts, refreshItems, isMobile });
+    const { items, routines, refreshItems, isInitialSyncing } = useAppData();
+    const editor = useItemEditor();
     useListScrollRestoration();
     const { itemsWithGhosts, isGhost, onGhostExited } = useListGhosts(items);
 
@@ -219,7 +215,6 @@ function SomedayPage() {
                                         />
                                     </ListItemButton>
                                 </ListItem>
-                                {editor.renderExpandFor(item._id)}
                                 {!isLastInSection && <Divider />}
                             </ListRowShell>
                         );
@@ -259,8 +254,7 @@ function SomedayPage() {
             {renderBody()}
             {/* Keyboard hints, the reorder announcer, the failure toast and the Move to sheet. */}
             <RankedListChrome ranked={ranked} actions={RANKED_LIST_ROW_ACTIONS} sectionNoun="list" liveTestId="somedayReorderLive" />
-            {editor.renderGlobal()}
-            <Snackbar open={editor.instantToast.open} autoHideDuration={3000} onClose={editor.closeInstantToast} message={editor.instantToast.message} />
+            <Snackbar open={editor.toast.open} autoHideDuration={3000} onClose={editor.closeToast} message={editor.toast.message} />
         </Box>
     );
 }

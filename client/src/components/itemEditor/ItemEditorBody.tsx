@@ -10,7 +10,6 @@ import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Chip from '@mui/material/Chip';
-import DialogActions from '@mui/material/DialogActions';
 import Divider from '@mui/material/Divider';
 import Stack from '@mui/material/Stack';
 import TextField from '@mui/material/TextField';
@@ -85,12 +84,10 @@ import {
     decideSavePath,
     type EditableStatus,
     type EditorForms,
-    type ItemEditorChrome,
     isSaveDisabled,
     mergeFormsIntoItem,
     normalizeTitleAndNotes,
     pickDefaultConfigForUser,
-    shouldAutoFocusTitle,
     shouldDetachFromRoutine,
     stripRoutineId,
 } from '../editItemDialogLogic';
@@ -124,8 +121,6 @@ import { ReassignInFlightInline } from './ReassignInFlightInline';
 import { SendUpdatesDialog } from './SendUpdatesDialog';
 import { shouldFireSendUpdatesDialog } from './sendUpdatesDialogLogic';
 import { useBriefGeneration } from './useBriefGeneration';
-
-export type { ItemEditorChrome } from '../editItemDialogLogic';
 
 interface StatusChipConfig {
     value: ClarifyDestination;
@@ -213,14 +208,12 @@ export interface ItemEditorBodyProps {
     onDirtyLockChange?: (isLocked: boolean) => void;
     /**
      * Fired post-save when the user transitions a `fromGmail` calendar item to a status the server
-     * would normally push to GCal. The body has no Snackbar of its own — the host (useItemEditor)
-     * wires this to `setInstantToast` so the warning surfaces through the page's existing toast.
+     * would normally push to GCal. The body has no toast of its own — the host wires this to its
+     * page toast (useItemEditor's `onFromGmailReadOnly`) so the warning surfaces there.
      */
     onFromGmailReadOnly?: () => void;
     /** Pre-selects the status chip on open. When omitted, defaults to item.status. */
     initialStatus?: EditableStatus;
-    /** Determines which actions container is rendered and visual padding. Dialog wrapper sets 'dialog'. */
-    chrome: ItemEditorChrome;
     /**
      * `review` (weekly-review cards): when the item has a brief on show, the card leads with the
      * brief line and folds the notes behind "Show notes". Presentation only — same editor, same
@@ -237,7 +230,7 @@ export interface ItemEditorBodyProps {
      */
     actionsContainer?: HTMLElement | null;
     /**
-     * The host renders its own CopyIdButton in its header (EditItemDialog, item page), so the
+     * The host renders its own CopyIdButton in its header (the item page), so the
      * meta row skips its copy button to keep exactly one copy affordance per screen — two
      * identical buttons once shipped because distinct testids hid the duplicate. The ID text
      * itself always renders.
@@ -257,20 +250,17 @@ function mergeKeyOf(itemTs: string, briefTs: string | undefined): string {
     return `${itemTs}|${briefTs ?? ''}`;
 }
 
-/** Resolves the body-class for the chrome variant. dialog/page render the bare flex column;
- *  expand and popover add their own padding/borders. The review presentation adds a density
- *  modifier on top (tighter section gap, no notes-preview height floor). */
-export function bodyClassFor(chrome: ItemEditorChrome, presentation: EditorPresentation): string {
-    const base = chrome === 'expand' ? styles.bodyExpand : chrome === 'popover' ? styles.bodyPopover : styles.body;
-    return classNames(base, { [styles.bodyReview]: presentation === 'review' });
+/** Resolves the body class. The review presentation adds a density modifier on top of the bare
+ *  flex column (tighter section gap, no notes-preview height floor). */
+export function bodyClassFor(presentation: EditorPresentation): string {
+    return classNames(styles.body, { [styles.bodyReview]: presentation === 'review' });
 }
 
 /**
- * Unified item editor body — owns all state, save logic, and the per-status forms. Chrome wrappers
- * (Dialog/Popover/Collapse/page) supply only the surrounding container; the body's appearance is
- * tuned via `chrome` to match each variant.
+ * Unified item editor body — owns all state, save logic, and the per-status forms. Hosts (the item
+ * page, the Process Inbox wizard, the weekly review cards) supply only the surrounding container.
  *
- * Wrappers MUST set `key={item._id}` so React remounts the body when the editor opens on a
+ * Hosts MUST set `key={item._id}` so React remounts the body when the editor opens on a
  * different item — otherwise local form state would seed from the wrong item.
  */
 export function ItemEditorBody({
@@ -284,7 +274,6 @@ export function ItemEditorBody({
     onDirtyLockChange,
     onFromGmailReadOnly,
     initialStatus,
-    chrome,
     presentation = 'edit',
     renderActions,
     actionsContainer,
@@ -592,10 +581,10 @@ export function ItemEditorBody({
         hasUnsavedChangesOnUnload: () => hasStructuralEdits() || textAutosave.isDirty(),
     });
 
-    // Page chrome only — the other chromes get ESC from MUI Modal. Deliberately the raw `onClose`
-    // (not closeEditor): the resulting router navigation must stay behind the guard above, exactly
-    // like the header's back arrow.
-    usePageEscapeToClose({ enabled: chrome === 'page', onEscape: onClose });
+    // Deliberately the raw `onClose` (not closeEditor): on a route host the resulting navigation stays
+    // behind the guard above, exactly like the header's back arrow. Inline hosts (review card, Process
+    // Inbox wizard) close without navigating, so they own the discard decision themselves.
+    usePageEscapeToClose({ enabled: true, onEscape: onClose });
 
     // ── Live merge ───────────────────────────────────────────────────────────
     // When sync rewrites the open item: clean fields adopt the incoming values; dirty fields keep
@@ -1052,16 +1041,13 @@ export function ItemEditorBody({
     });
 
     if (reassignInFlight) {
-        // Dialog wrapper short-circuits to ReassignInFlightDialog before mounting the body, so this
-        // branch only fires under popover/expand/page.
         return (
-            <Box className={bodyClassFor(chrome, presentation)}>
+            <Box className={bodyClassFor(presentation)}>
                 <ReassignInFlightInline onClose={closeEditor} />
             </Box>
         );
     }
 
-    const shouldAutoFocus = shouldAutoFocusTitle(chrome, initialStatus);
     const briefRowState = briefState(liveItem, liveBrief);
     const isBriefLeading = isBriefFirst(presentation, isShowBriefsOn, briefRowState);
 
@@ -1082,22 +1068,14 @@ export function ItemEditorBody({
     );
     const actionsPlacement = resolveActionsPlacement(actionsContainer);
     // Portaled rows stretch across the host bar's content slot — see .stretchedActions.
-    const actionsRow =
-        chrome === 'dialog' ? (
-            <DialogActions sx={{ px: 0 }}>{actionButtons}</DialogActions>
-        ) : (
-            <Box className={classNames(styles.inlineActions, { [styles.stretchedActions]: actionsPlacement.kind === 'portal' })}>{actionButtons}</Box>
-        );
+    const actionsRow = (
+        <Box className={classNames(styles.inlineActions, { [styles.stretchedActions]: actionsPlacement.kind === 'portal' })}>{actionButtons}</Box>
+    );
 
     return (
         // tabIndex -1: a click on the editor's empty space focuses the editor itself (not the page body), so its
         // letter and Alt+arrow shortcuts keep working; it is never a Tab stop.
-        <Box
-            className={classNames(bodyClassFor(chrome, presentation), styles.keyScope)}
-            tabIndex={-1}
-            {...{ [EDITOR_KEY_SCOPE_ATTR]: '' }}
-            onKeyDown={onEditorKeyDown}
-        >
+        <Box className={classNames(bodyClassFor(presentation), styles.keyScope)} tabIndex={-1} {...{ [EDITOR_KEY_SCOPE_ATTR]: '' }} onKeyDown={onEditorKeyDown}>
             {conflictFields.length > 0 && (
                 <Alert
                     severity="info"
@@ -1131,7 +1109,6 @@ export function ItemEditorBody({
                 }}
                 fullWidth
                 required
-                {...(shouldAutoFocus ? { autoFocus: true } : {})}
             />
 
             <BriefSection
@@ -1154,7 +1131,7 @@ export function ItemEditorBody({
                 />
             )}
 
-            <NotesSection notes={notes} onNotesChange={onNotesChange} chrome={chrome} collapsible={isBriefLeading} />
+            <NotesSection notes={notes} onNotesChange={onNotesChange} collapsible={isBriefLeading} />
 
             <Divider />
 
@@ -1188,6 +1165,8 @@ export function ItemEditorBody({
                                 // The Tooltip would name the chip by its title ("Done (d)"); the name stays the label,
                                 // the key is announced from aria-keyshortcuts.
                                 aria-label={cfg.label}
+                                // A toggle group of statuses: the selected one is announced as pressed (the DS Chip contract).
+                                aria-pressed={status === cfg.value}
                                 aria-keyshortcuts={statusKeyOf(cfg.value)?.toUpperCase()}
                                 onClick={() => {
                                     setRoutineSaveError(null);

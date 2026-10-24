@@ -31,7 +31,7 @@ interface StageDecisionNavigationHost {
  */
 export function useStageDecisionNavigation({ db, queue, onQueueChange, onUndoFailed }: StageDecisionNavigationHost) {
     // Whether the CURRENT item committed an EXPLICIT save (onSaveCommitted). ItemEditorBody fires
-    // onClose from the save path, from page-chrome Escape, and from its reassign-in-flight branch —
+    // onClose from the save path, from Escape, and from its reassign-in-flight branch —
     // only an explicit save is a review decision. Deliberately NOT set from onSaved: a debounced
     // text-autosave commit (which can land after advancing, via the unmount flush) also fires
     // onSaved, and inferring "saved" from it would turn a later Escape into a phantom decision.
@@ -133,7 +133,7 @@ export function useStageDecisionNavigation({ db, queue, onQueueChange, onUndoFai
 
     /**
      * ItemEditorBody's onClose: a close following an explicit save records the decision (with the
-     * armed undo payload); any other close (page-chrome Escape, reassign kickoff) is NOT a
+     * armed undo payload); any other close (Escape, reassign kickoff) is NOT a
      * decision — the walk steps past the item, leaving it undecided.
      */
     function closeAsDecisionOrSkip() {

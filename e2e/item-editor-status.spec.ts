@@ -3,11 +3,11 @@ import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
 
-// Tests the unified EditItemDialog: status-aware editor with chip-based status switching.
+// Tests the unified item editor: status-aware editor with chip-based status switching.
 // Each test drives the UI (clicks, form inputs) rather than calling __gtd directly so we
-// cover the dialog's wiring in addition to the underlying mutations.
+// cover the editor's wiring in addition to the underlying mutations.
 
-test.describe('EditItemDialog — unified status editor', () => {
+test.describe('Item editor — unified status editor', () => {
     test('edit inbox item title and notes in place', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `edit-inbox-${dayjs().valueOf()}@example.com`, async (page) => {
             await gtd.collect(page, 'Original inbox title');
@@ -16,13 +16,13 @@ test.describe('EditItemDialog — unified status editor', () => {
 
             // Inbox rows render an Edit icon button as the first action (tooltip: "Edit").
             await page.getByRole('button', { name: 'Edit' }).first().click();
-            const dialog = page.getByRole('dialog', { name: 'Edit item' });
-            await expect(dialog).toBeVisible();
+            const editor = page.getByTestId('itemPageWrapper');
+            await expect(editor).toBeVisible();
 
-            await dialog.getByLabel('Title').fill('Revised inbox title');
-            await dialog.getByLabel('Notes (Markdown)').fill('**bold** note body');
-            await dialog.getByRole('button', { name: 'Save changes' }).click();
-            await expect(dialog).toBeHidden();
+            await editor.getByLabel('Title').fill('Revised inbox title');
+            await editor.getByLabel('Notes (Markdown)').fill('**bold** note body');
+            await editor.getByRole('button', { name: 'Save changes' }).click();
+            await expect(editor).toBeHidden();
 
             await gtd.flush(page);
             const items = await gtd.listItems(page);
@@ -40,15 +40,15 @@ test.describe('EditItemDialog — unified status editor', () => {
             await page.waitForSelector('text=Something actionable');
 
             await page.getByRole('button', { name: 'Edit' }).first().click();
-            const dialog = page.getByRole('dialog', { name: 'Edit item' });
+            const editor = page.getByTestId('itemPageWrapper');
 
             // The Next Action chip appears in the Status section.
-            await dialog.getByRole('button', { name: 'Next Action' }).click();
+            await editor.getByRole('button', { name: 'Next Action' }).click();
             // Next-action fields should now be visible (Energy / Time / etc).
-            await expect(dialog.getByText('Energy', { exact: false })).toBeVisible();
+            await expect(editor.getByText('Energy', { exact: false })).toBeVisible();
 
-            await dialog.getByRole('button', { name: 'Save changes' }).click();
-            await expect(dialog).toBeHidden();
+            await editor.getByRole('button', { name: 'Save changes' }).click();
+            await expect(editor).toBeHidden();
 
             await gtd.flush(page);
             const items = await gtd.listItems(page);
@@ -64,14 +64,14 @@ test.describe('EditItemDialog — unified status editor', () => {
             await page.waitForSelector('text=Parking lot idea');
 
             await page.getByRole('button', { name: 'Edit' }).first().click();
-            const dialog = page.getByRole('dialog', { name: 'Edit item' });
+            const editor = page.getByTestId('itemPageWrapper');
 
-            await dialog.getByRole('button', { name: 'Someday / Maybe' }).click();
+            await editor.getByRole('button', { name: 'Someday / Maybe' }).click();
             // Someday/Maybe has no specific fields beyond title/notes — just the placeholder copy.
-            await expect(dialog.getByText('Parked for later review', { exact: false })).toBeVisible();
+            await expect(editor.getByText('Parked for later review', { exact: false })).toBeVisible();
 
-            await dialog.getByRole('button', { name: 'Save changes' }).click();
-            await expect(dialog).toBeHidden();
+            await editor.getByRole('button', { name: 'Save changes' }).click();
+            await expect(editor).toBeHidden();
 
             await gtd.flush(page);
             const items = await gtd.listItems(page);
@@ -84,7 +84,7 @@ test.describe('EditItemDialog — unified status editor', () => {
         });
     });
 
-    test('detach routine-generated calendar item when moved to next-action via dialog', async ({ browser }) => {
+    test('detach routine-generated calendar item when moved to next-action via the editor', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `edit-detach-${dayjs().valueOf()}@example.com`, async (page) => {
             // Seed a calendar routine + an item carrying routineId as if generated by that routine.
             const routine = await gtd.createRoutine(page, {
@@ -95,7 +95,7 @@ test.describe('EditItemDialog — unified status editor', () => {
                 calendarItemTemplate: { timeOfDay: '09:00', duration: 30 },
                 active: true,
             });
-            const inbox = await gtd.collect(page, 'Dialog-detach target');
+            const inbox = await gtd.collect(page, 'Editor-detach target');
             const calItem = await gtd.clarifyToCalendar(page, inbox, {
                 timeStart: dayjs().add(7, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString(),
                 timeEnd: dayjs().add(7, 'day').hour(9).minute(30).second(0).millisecond(0).toISOString(),
@@ -103,16 +103,16 @@ test.describe('EditItemDialog — unified status editor', () => {
             const withRoutine = await gtd.updateItem(page, { ...calItem, routineId: routine._id });
             expect(withRoutine.routineId).toBe(routine._id);
 
-            // Drive the dialog: click Edit on the calendar row, switch status to Next Action, save.
+            // Drive the editor: click Edit on the calendar row, switch status to Next Action, save.
             await page.goto('/calendar');
-            await page.waitForSelector('text=Dialog-detach target');
+            await page.waitForSelector('text=Editor-detach target');
             await page.getByRole('button', { name: 'Edit' }).first().click();
-            const dialog = page.getByRole('dialog', { name: 'Edit item' });
-            await dialog.getByRole('button', { name: 'Next Action' }).click();
-            await dialog.getByRole('button', { name: 'Save changes' }).click();
-            await expect(dialog).toBeHidden();
+            const editor = page.getByTestId('itemPageWrapper');
+            await editor.getByRole('button', { name: 'Next Action' }).click();
+            await editor.getByRole('button', { name: 'Save changes' }).click();
+            await expect(editor).toBeHidden();
 
-            // After the dialog's shouldDetach path, the persisted item should have no routineId.
+            // After the editor's shouldDetach path, the persisted item should have no routineId.
             const items = await gtd.listItems(page);
             const updated = items.find((i) => i._id === withRoutine._id);
             expect(updated?.status).toBe('nextAction');

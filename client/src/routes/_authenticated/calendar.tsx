@@ -9,10 +9,8 @@ import ListItem from '@mui/material/ListItem';
 import ListItemButton from '@mui/material/ListItemButton';
 import ListItemText from '@mui/material/ListItemText';
 import Snackbar from '@mui/material/Snackbar';
-import { useTheme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
-import useMediaQuery from '@mui/material/useMediaQuery';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import { useCallback, useMemo } from 'react';
@@ -50,10 +48,8 @@ function CalendarPage() {
     const { db } = Route.useRouteContext();
     const { q } = Route.useSearch();
     const navigate = useNavigate();
-    const { items, routines, people, workContexts, refreshItems, isInitialSyncing, isCalendarSyncing } = useAppData();
-    const theme = useTheme();
-    const isMobile = useMediaQuery(theme.breakpoints.down('md'));
-    const editor = useItemEditor({ db, people, workContexts, refreshItems, isMobile });
+    const { items, routines, refreshItems, isInitialSyncing, isCalendarSyncing } = useAppData();
+    const editor = useItemEditor();
     useListScrollRestoration();
 
     const writeUrlQuery = useCallback((query: string) => void navigate({ to: '/calendar', search: { q: query || undefined }, replace: true }), [navigate]);
@@ -175,7 +171,6 @@ function CalendarPage() {
                                             />
                                         </ListItemButton>
                                     </ListItem>
-                                    {editor.renderExpandFor(item._id)}
                                     {idx < groupItems.length - 1 && <Divider />}
                                 </Box>
                             ))}
@@ -211,8 +206,7 @@ function CalendarPage() {
                 />
             )}
             {renderBody()}
-            {editor.renderGlobal()}
-            <Snackbar open={editor.instantToast.open} autoHideDuration={3000} onClose={editor.closeInstantToast} message={editor.instantToast.message} />
+            <Snackbar open={editor.toast.open} autoHideDuration={3000} onClose={editor.closeToast} message={editor.toast.message} />
         </Box>
     );
 }

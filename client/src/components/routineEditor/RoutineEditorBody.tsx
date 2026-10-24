@@ -1,7 +1,6 @@
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
-import DialogActions from '@mui/material/DialogActions';
 import TextField from '@mui/material/TextField';
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
@@ -42,7 +41,6 @@ import { offerUndo } from '../../lib/undoStore';
 import type { EnergyLevel, MyDB, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext } from '../../types/MyDB';
 import { GCAL_OWNED_ROUTINE_KEYS } from '../../types/MyDB';
 import { AccountPicker } from '../AccountPicker';
-import type { ItemEditorChrome } from '../editItemDialogLogic';
 import { mergeFormGroup } from '../itemEditor/itemEditorLiveMerge';
 import { NotesSection } from '../itemEditor/NotesSection';
 import { ReassignInFlightInline } from '../itemEditor/ReassignInFlightInline';
@@ -51,13 +49,6 @@ import { UnsavedChangesDialog } from '../UnsavedChangesDialog';
 import styles from './RoutineEditorBody.module.css';
 import { RoutineScheduleFields } from './RoutineScheduleFields';
 import { buildFinalRrule, buildRoutineTemplateFromForm, buildTemplate, type FormState, initFormState, resolveCalendarLink } from './routineFormState';
-
-/**
- * Chrome variants the routine editor renders into. Aliased to `ItemEditorChrome` so the two
- * editors' chrome sets stay locked in sync — `NotesSection` consumes the item-editor type and
- * we'd silently break it if the routine editor added a chrome the notes section doesn't handle.
- */
-export type RoutineEditorChrome = ItemEditorChrome;
 
 /**
  * True when the routine form holds edits that only the explicit Save/Create button would persist —
@@ -478,14 +469,15 @@ async function regenerateCalendarItemsForSameTypeEdit(db: IDBPDatabase<MyDB>, up
 }
 
 /**
- * Create branch: persist the new routine and seed its first item(s). Errors are logged, not thrown.
+ * Create branch: persist the new routine and seed its first item(s). A failure seeding the items is
+ * logged, not thrown — the routine itself exists either way and is returned.
  * Delegates to the shared `createRoutineWithFirstItems` so the clarify-to-routine flow and this
  * editor create routines identically.
  *
  * Exported for unit-testing.
  */
-export async function saveCreate(db: IDBPDatabase<MyDB>, userId: string, ctx: SaveContext): Promise<void> {
-    await createRoutineWithFirstItems(db, {
+export async function saveCreate(db: IDBPDatabase<MyDB>, userId: string, ctx: SaveContext): Promise<StoredRoutine> {
+    return await createRoutineWithFirstItems(db, {
         userId,
         routineType: ctx.routineType,
         rrule: ctx.finalRrule,
@@ -497,13 +489,6 @@ export async function saveCreate(db: IDBPDatabase<MyDB>, userId: string, ctx: Sa
         ...(ctx.formStartDate ? { startDate: ctx.formStartDate } : {}),
         ...(ctx.routineType === 'nextAction' ? { recurrenceAnchor: ctx.recurrenceAnchor } : {}),
     });
-}
-
-/** Resolves the body-class for the chrome variant. */
-function bodyClassFor(chrome: RoutineEditorChrome): string {
-    if (chrome === 'expand') return styles.bodyExpand;
-    if (chrome === 'popover') return styles.bodyPopover;
-    return styles.body;
 }
 
 export interface RoutineEditorBodyProps {
@@ -519,19 +504,26 @@ export interface RoutineEditorBodyProps {
     routine?: StoredRoutine | undefined;
     onClose: () => void;
     onSaved: () => Promise<void>;
-    /** Determines which actions container is rendered and visual padding. Dialog wrapper sets 'dialog'. */
-    chrome: RoutineEditorChrome;
+    /**
+     * Focus the title on mount. Defaults to on for a create (a blank form is there to be filled) and
+     * off for an edit page, where focus would pin the cursor at the end of a long title.
+     */
+    autoFocusTitle?: boolean | undefined;
+    /**
+     * Create mode: receives the routine just created, in place of `onClose`, so the create page can
+     * move on to that routine's own page. Omitted, a create closes like an edit.
+     */
+    onCreated?: ((routine: StoredRoutine) => void) | undefined;
 }
 
 /**
- * Unified routine editor body — owns all state, save logic, and the per-type forms. Chrome
- * wrappers (Dialog/Popover/Expand/page) supply only the surrounding container; the body's
- * appearance is tuned via `chrome` to match each variant.
+ * Unified routine editor body — owns all state, save logic, and the per-type forms. Hosts (the
+ * routine pages, the weekly review's routine card) supply only the surrounding container.
  *
- * Wrappers MUST set `key={routine?._id ?? 'new'}` so React remounts the body when the editor
+ * Hosts MUST set `key={routine?._id ?? 'new'}` so React remounts the body when the editor
  * opens on a different routine — otherwise local form state would seed from the wrong routine.
  */
-export function RoutineEditorBody({ db, userId, workContexts, people, routine, onClose, onSaved, chrome }: RoutineEditorBodyProps) {
+export function RoutineEditorBody({ db, userId, workContexts, people, routine, onClose, onSaved, onCreated, autoFocusTitle }: RoutineEditorBodyProps) {
     const isEdit = routine !== undefined;
     const [form, setForm] = useState<FormState>(() => initFormState(routine));
     const [isSaving, startSaving] = useTransition();
@@ -644,9 +636,7 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
     }
     // Refuse to render the form while a cross-account reassign is in flight on this routine —
     // the form would seed `ownerUserId` from the overlayed (target) user and a save would write
-    // IDB under the target. The Dialog wrapper has its own short-circuit (`RoutineDialog.tsx`),
-    // but popover/expand/page mount the body directly and need the same guard. Read here, render
-    // the guard after all hooks below (rules-of-hooks).
+    // IDB under the target. Read here, render the guard after all hooks below (rules-of-hooks).
     const reassignInFlight = routine !== undefined && isPending('routine', routine._id);
     const [ownerUserId, setOwnerUserId] = useState<string>(routine?.userId ?? userId);
     const [reassignError, setReassignError] = useState<string | null>(null);
@@ -684,6 +674,16 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
         onClose();
     }
 
+    /** Post-create exit — same guard bypass as closeEditor: the form was just saved. */
+    function finishCreate(created: StoredRoutine) {
+        if (!onCreated) {
+            closeEditor();
+            return;
+        }
+        guardBypassRef.current = true;
+        onCreated(created);
+    }
+
     function hasStructuralEdits(): boolean {
         if (guardBypassRef.current) {
             return false;
@@ -705,10 +705,10 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
         hasUnsavedChangesOnUnload: () => hasStructuralEdits() || textAutosave.isDirty(),
     });
 
-    // Page chrome only — the other chromes get ESC from MUI Modal. Deliberately the raw `onClose`
-    // (not closeEditor): the resulting router navigation must stay behind the guard above, exactly
-    // like the header's back arrow. Mirrors ItemEditorBody.
-    usePageEscapeToClose({ enabled: chrome === 'page', onEscape: onClose });
+    // Deliberately the raw `onClose` (not closeEditor): on a route host the resulting navigation stays
+    // behind the guard above, exactly like the header's back arrow. Inline hosts (review card, Process
+    // Inbox wizard) close without navigating, so they own the discard decision themselves.
+    usePageEscapeToClose({ enabled: true, onEscape: onClose });
 
     function patch(update: Partial<FormState>) {
         setForm((f) => ({ ...f, ...update }));
@@ -758,7 +758,10 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
                     offerExhaustedTrashUndo(live._id, result.restorable);
                 }
             } else {
-                await saveCreate(db, userId, ctx);
+                const created = await saveCreate(db, userId, ctx);
+                await onSaved();
+                finishCreate(created);
+                return;
             }
             await onSaved();
             closeEditor();
@@ -878,17 +881,15 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
     const saveDisabled = !form.title.trim() || !form.rrule || isSaving;
 
     if (reassignInFlight) {
-        // Dialog wrapper short-circuits to RoutineReassignInFlightDialog before mounting the body,
-        // so this branch only fires under popover/expand/page.
         return (
-            <Box className={bodyClassFor(chrome)}>
+            <Box className={styles.body}>
                 <ReassignInFlightInline onClose={closeEditor} entityLabel="routine" />
             </Box>
         );
     }
 
     return (
-        <Box className={bodyClassFor(chrome)}>
+        <Box className={styles.body}>
             {conflictFields.length > 0 && (
                 <Alert
                     severity="info"
@@ -937,7 +938,7 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
                 }}
                 fullWidth
                 required
-                autoFocus={chrome === 'dialog'}
+                autoFocus={autoFocusTitle ?? !isEdit}
             />
 
             <RoutineScheduleFields
@@ -957,7 +958,6 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
                     patch({ notes });
                     textAutosave.onChange({ title: formRef.current.title, notes });
                 }}
-                chrome={chrome}
             />
 
             {/* Account picker — auto-hides on single-account devices */}
@@ -965,21 +965,12 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
                 <AccountPicker value={ownerUserId} onChange={setOwnerUserId} disabled={isSaving} {...(reassignError ? { error: reassignError } : {})} />
             )}
 
-            {chrome === 'dialog' ? (
-                <DialogActions sx={{ px: 0 }}>
-                    <Button onClick={closeEditor}>Cancel</Button>
-                    <Button variant="contained" disabled={saveDisabled} onClick={() => onSave()} data-testid="routineEditorSaveButton">
-                        {isEdit ? 'Save changes' : 'Create routine'}
-                    </Button>
-                </DialogActions>
-            ) : (
-                <Box className={styles.inlineActions}>
-                    <Button onClick={closeEditor}>Cancel</Button>
-                    <Button variant="contained" disabled={saveDisabled} onClick={() => onSave()} data-testid="routineEditorSaveButton">
-                        {isEdit ? 'Save changes' : 'Create routine'}
-                    </Button>
-                </Box>
-            )}
+            <Box className={styles.inlineActions}>
+                <Button onClick={closeEditor}>Cancel</Button>
+                <Button variant="contained" disabled={saveDisabled} onClick={() => onSave()} data-testid="routineEditorSaveButton">
+                    {isEdit ? 'Save changes' : 'Create routine'}
+                </Button>
+            </Box>
             <UnsavedChangesDialog blocker={navigationBlocker} />
         </Box>
     );

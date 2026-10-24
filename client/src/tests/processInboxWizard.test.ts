@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { batchChromeFor, nextWizardStep } from '../components/ProcessInboxWizard';
+import { nextWizardStep } from '../components/ProcessInboxWizard';
 import type { StoredItem } from '../types/MyDB';
 
 const ITEM_A: StoredItem = {
@@ -33,7 +33,7 @@ describe('nextWizardStep', () => {
         expect(step).toEqual({ kind: 'done' });
     });
 
-    it('returns done on an empty list — defensive: the dialog wizard guards this earlier but the helper should be honest', () => {
+    it('returns done on an empty list — defensive: the route guards this earlier but the helper should be honest', () => {
         const step = nextWizardStep([], 0);
         expect(step).toEqual({ kind: 'done' });
     });
@@ -41,25 +41,5 @@ describe('nextWizardStep', () => {
     it('marks the only item as isLast when there is exactly one', () => {
         const step = nextWizardStep([ITEM_A], 0);
         expect(step).toEqual({ kind: 'item', index: 0, itemId: 'item-A', isLast: true });
-    });
-});
-
-// The batch wizard intentionally only honours dialog/page from the Item-editor setting —
-// popover/expand/instant don't make sense when sequencing through a stack of items, so they
-// collapse to dialog. Locks the routing rule without coupling it to localStorage or the route.
-describe('batchChromeFor', () => {
-    it('returns "page" only for page mode', () => {
-        expect(batchChromeFor('page')).toBe('page');
-    });
-
-    it('collapses every other supported mode to dialog', () => {
-        expect(batchChromeFor('dialog')).toBe('dialog');
-        expect(batchChromeFor('expand')).toBe('dialog');
-        expect(batchChromeFor('popover')).toBe('dialog');
-        expect(batchChromeFor('instant')).toBe('dialog');
-    });
-
-    it('falls back to dialog for an unknown mode (defensive — settings is the source of truth, but never trust raw localStorage)', () => {
-        expect(batchChromeFor('something-else')).toBe('dialog');
     });
 });

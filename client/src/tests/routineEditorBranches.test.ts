@@ -103,6 +103,12 @@ describe('saveCreate', () => {
         const items = await db.getAllFromIndex('items', 'userId', USER_ID);
         expect(items).toHaveLength(0);
     });
+
+    it('returns the stored routine — the create page navigates to its id', async () => {
+        const created = await saveCreate(db, USER_ID, buildCtx({ trimmedTitle: 'Returned routine' }));
+        expect(created.title).toBe('Returned routine');
+        expect(await db.get('routines', created._id)).toEqual(created);
+    });
 });
 
 describe('saveEditWithStartDateChange', () => {

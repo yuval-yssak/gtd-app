@@ -19,12 +19,6 @@ async function seedNextActions(page: Page, count: number, prefix: string): Promi
     await gtd.flush(page);
 }
 
-// The login helper presets clarify mode to 'dialog'; these flows need row clicks to
-// navigate to the /item/:id page (the app's actual default), so switch it back.
-async function usePageClarifyMode(page: Page): Promise<void> {
-    await page.evaluate(() => localStorage.setItem('gtd:inlineClarifyMode', 'page'));
-}
-
 // The app shell grows with its content (min-height), so the *document* is the real
 // scroll surface — matching what resolveScrollSurface() picks in the client hook.
 async function scrollListToMiddle(page: Page): Promise<number> {
@@ -79,7 +73,6 @@ test.describe('List scroll restoration + ghost rows', () => {
             await seedNextActions(page, 35, 'Restore item');
 
             await page.goto('/next-actions');
-            await usePageClarifyMode(page);
             // Windowed rendering (virtua) mounts only rows near the viewport, so an exact
             // 35-row count never holds — a visible first row means the list data is loaded.
             await expect(page.getByTestId('nextActionItemRow').first()).toBeVisible();
@@ -175,7 +168,6 @@ test.describe('List scroll restoration + ghost rows', () => {
             await gtd.flush(page);
 
             await page.goto('/next-actions');
-            await usePageClarifyMode(page);
             await expect(page.getByTestId('nextActionItemRow').first()).toBeVisible();
 
             const savedScrollTop = await scrollListToMiddle(page);
@@ -265,7 +257,6 @@ test.describe('List scroll restoration + ghost rows', () => {
             await seedNextActions(page, 2, 'Filtered item');
 
             await page.goto('/next-actions');
-            await usePageClarifyMode(page);
             await page.getByTestId('nextActionsEnergyFilterChip').filter({ hasText: 'Low energy' }).click();
             await expect(page).toHaveURL(/energy=low/);
 

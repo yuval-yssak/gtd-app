@@ -18,7 +18,7 @@ interface Props {
     calendarOptions?: CalendarOption[];
     /**
      * Show the picker even when there is only one option. Default is false — single-calendar
-     * users get a cleaner form. Used by EditItemDialog's cross-account reassign flow, where
+     * users get a cleaner form. Used by the item editor's cross-account reassign flow, where
      * validateReassign requires an explicit pick even if the target has only one calendar.
      */
     forceShowPicker?: boolean;
@@ -39,7 +39,7 @@ function groupByAccount(calendarOptions: CalendarOption[]): Map<string, Calendar
 }
 
 export function CalendarFields({ value, onChange, calendarOptions, forceShowPicker = false }: Props) {
-    // Default rule: hide the picker until there's an actual choice (2+ options). EditItemDialog's
+    // Default rule: hide the picker until there's an actual choice (2+ options). The item editor's
     // cross-account reassign opts in via forceShowPicker so the user can confirm even a single-option list.
     const minOptions = forceShowPicker ? 1 : 2;
     const showPicker = calendarOptions !== undefined && calendarOptions.length >= minOptions;

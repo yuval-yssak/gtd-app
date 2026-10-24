@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildRoutineEditPatch } from '../components/routines/RoutineDialog';
+import { buildRoutineEditPatch } from '../components/routineEditor/RoutineEditorBody';
 import type { StoredRoutine } from '../types/MyDB';
 
 const BASE_ROUTINE: StoredRoutine = {

@@ -10,11 +10,9 @@ import { mergeCleanStringFields, stringFieldsEqual } from '../../lib/liveMerge';
 import { offerUndo } from '../../lib/undoStore';
 import type { MyDB, StoredPerson } from '../../types/MyDB';
 import { AccountPicker } from '../AccountPicker';
-import { type ItemEditorChrome, shouldAutoFocusTitle } from '../editItemDialogLogic';
 
-/** Person editor supports only dialog + page today; typed off the shared union so a future
- *  chrome rollout extends one type instead of hunting for a second declaration here. */
-export type PersonEditorChrome = Extract<ItemEditorChrome, 'dialog' | 'page'>;
+/** The short "Add/Edit person" dialog, or the full person page. */
+export type PersonEditorChrome = 'dialog' | 'page';
 
 interface PersonEditorBodyProps {
     db: IDBPDatabase<MyDB>;
@@ -193,7 +191,7 @@ export function PersonEditorBody({ db, person, showAccountPicker = false, chrome
                 onChange={(e) => onFieldChange('name', e.target.value)}
                 onBlur={() => void autosave.flush()}
                 fullWidth
-                autoFocus={shouldAutoFocusTitle(chrome, undefined)}
+                autoFocus={chrome === 'dialog'}
                 required
                 error={!form.name.trim()}
                 helperText={form.name.trim() ? undefined : 'Name is required — changes are not saved while empty.'}

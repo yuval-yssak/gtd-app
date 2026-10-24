@@ -530,7 +530,7 @@ From `client/src/db/devTools.ts`, on `window.__gtd`:
 **Key client files if something looks weird:**
 - `client/src/lib/routineSplitUtils.ts` — `routineHasPastItems`, `computeSplitDate`, `addUntilToRrule`.
 - `client/src/db/routineSplit.ts` — `splitRoutine` (what happens when the split fires).
-- `client/src/components/routines/RoutineDialog.tsx` — line 162+ `onSave` orchestrates edit → split-or-in-place.
+- `client/src/components/routineEditor/RoutineEditorBody.tsx` — `onSave` orchestrates edit → split-or-in-place.
 - `client/src/db/routineItemHelpers.ts` — `generateCalendarItemsToHorizon`, `deleteFutureItemsFromDate`.
 - `api-server/src/routes/calendar.ts` — line 780+ `detectAndLinkSplits` (GCal-originated split detection).
 

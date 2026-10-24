@@ -3,13 +3,11 @@ import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
 
-const CLARIFY_MODE_KEY = 'gtd:inlineClarifyMode';
-
-// Page mode (full-screen edit at /item/:id) is read-mostly: it should not auto-focus the title
+// The item page (/item/:id) is read-mostly: it should not auto-focus the title
 // (which would scroll the start of long titles out of view) and should default the notes section
 // to a Markdown preview that switches to an editor on click. These tests pin the user-visible
-// behaviour after the page-mode UX overhaul.
-test.describe('Item editor — page mode UX', () => {
+// behaviour of the item page.
+test.describe('Item editor — item page UX', () => {
     test('does not auto-focus the title input on mount', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `page-no-autofocus-${dayjs().valueOf()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'A very long title that would otherwise be clipped if the input scrolled to the cursor at the end');
@@ -235,14 +233,6 @@ test.describe('Item editor — page mode UX', () => {
 
             await page.goto('/inbox');
             await page.waitForSelector('text=Escape target');
-            await page.evaluate(
-                (args) => {
-                    localStorage.setItem(args.key, 'page');
-                    window.dispatchEvent(new StorageEvent('storage', { key: args.key, newValue: 'page' }));
-                },
-                { key: CLARIFY_MODE_KEY },
-            );
-
             // In-app navigation (row click) so the router has history for ESC's history-back path.
             await page.getByText('Escape target').click();
             await expect(page).toHaveURL(new RegExp(`/item/${item._id}`));
@@ -317,14 +307,6 @@ test.describe('Item editor — page mode UX', () => {
             await page.goto('/inbox');
             await page.waitForSelector('text=Nav target');
 
-            await page.evaluate(
-                (args) => {
-                    localStorage.setItem(args.key, 'page');
-                    window.dispatchEvent(new StorageEvent('storage', { key: args.key, newValue: 'page' }));
-                },
-                { key: CLARIFY_MODE_KEY },
-            );
-
             await page.getByText('Nav target').click();
             await expect(page).toHaveURL(new RegExp(`/item/${item._id}`));
         });
@@ -391,8 +373,8 @@ test.describe('Item editor — page mode UX', () => {
             await expect(preview).toBeVisible();
             await expect(preview).toContainText('Line 200');
 
-            // Read the cap from its single source of truth (index.css) instead of a magic 0.6.
-            const capVh = await page.evaluate(() => Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--gtd-notes-max-height')));
+            // Read the cap from its single source of truth (the design tokens) instead of a magic 0.6.
+            const capVh = await page.evaluate(() => Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--notes-max-height')));
             const viewport = page.viewportSize();
             const previewBox = await preview.boundingBox();
             if (!viewport || !previewBox || Number.isNaN(capVh)) throw new Error('expected a viewport, a preview box and a vh cap');

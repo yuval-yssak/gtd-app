@@ -1,4 +1,4 @@
-- [No DOM unit-test infra](feedback_no_dom_unit_test_infra.md) — vitest is node-env, no jsdom/testing-library, zero render() tests; don't request a component render test — route DOM/router-bound coverage to Playwright e2e.
+- [DOM unit-test infra (superseded)](feedback_no_dom_unit_test_infra.md) — jsdom + testing-library now exist (opt-in per file); hook/DOM render tests are fair asks, router-bound ones still go to e2e.
 - [Click-to-edit accessibility](feedback_click_to_edit_a11y.md) — Markdown previews wrapped in role="button" hide content from AT and trap link descendants; flag and propose splitting gesture from content.
 - [Page-mode editor autofocus competition](feedback_page_mode_autofocus.md) — Page chrome was changed to suppress title autofocus; watch for *other* fields (notes textarea) silently grabbing focus on mount and re-introducing the same complaint.
 - [Inverse-pair predicates](feedback_inverse_pair_predicates.md) — Reviewer-introduced helpers sometimes ship as two near-mirror predicates of one truth; prefer a single canonical predicate and invert at call site.
@@ -60,3 +60,5 @@
 - [Hover-pause latch survives close](feedback_hover_pause_latch_survives_close.md) — toast pause state latched when content unmounts under pointer; also legacy-key fallback rewritten by a bridge pins 'system'.
 - [Base UI render-link gets role=button](project_base_ui_render_link_role_button.md) — nativeButton:false stamps role=button on <a>; DS Button render={<Link>} stops being a link. Base UI roots are generic: drop casts.
 - [Gate selection drops failed retry](feedback_gate_selection_drops_failed_retry.md) — stop-hook e2e 'edited this turn only' never reruns a failed spec once the fix lands in app code; persist the failed set.
+- [Inline host inherits page-only Escape](feedback_inline_host_inherits_page_escape.md) — editor bodies hard-wire Escape→raw onClose 'behind the nav guard'; an inline host's onClose is a state flip, so Escape silently discards.
+- [use() cache retry re-suspends mounted readers](feedback_use_cache_retry_resuspends_mounted.md) — retry/TTL that swaps a pending promise in render hides mounted editors behind fallback; demand stale-while-revalidate.

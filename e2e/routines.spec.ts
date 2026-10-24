@@ -96,7 +96,7 @@ test.describe('routines', () => {
         await withOneLoggedInDevice(browser, `routine-pause-${dayjs().valueOf()}@example.com`, async (page) => {
             // Use today's startDate so materializePendingNextActionRoutines (the boot-tick) seeds the
             // first item with expectedBy=today — __gtd.createRoutine alone doesn't generate items;
-            // that's handled by RoutineDialog.tsx in the UI path. The seeded item must have
+            // that's handled by the routine editor in the UI path. The seeded item must have
             // expectedBy >= today so pauseRoutine's trashFutureItemsFromDate(today) catches it.
             const today = dayjs().format('YYYY-MM-DD');
             const routine = await gtd.createRoutine(page, {

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { shouldHandlePageEscape } from '../components/editItemDialogLogic';
+import { isModalOpen } from '../lib/keyboardRegionDom';
 
 interface PageEscapeToCloseOptions {
     enabled: boolean;
@@ -7,9 +8,8 @@ interface PageEscapeToCloseOptions {
 }
 
 /**
- * Page-chrome ESC-to-leave. Dialog/popover editor chromes get ESC-to-close from MUI Modal; the
- * full-page route has no modal wrapper, so this document-level listener fills the gap. It stands
- * down (via shouldHandlePageEscape) while any MUI popup or inner dialog is open, so ESC always
+ * ESC-to-leave for the editor pages, which have no modal wrapper to give them ESC-to-close. It
+ * stands down (via shouldHandlePageEscape) while any popup or inner dialog is open, so ESC always
  * closes the innermost surface first.
  */
 export function usePageEscapeToClose({ enabled, onEscape }: PageEscapeToCloseOptions) {
@@ -25,9 +25,7 @@ export function usePageEscapeToClose({ enabled, onEscape }: PageEscapeToCloseOpt
             if (event.key !== 'Escape') {
                 return;
             }
-            // :not([aria-hidden]) — keep-mounted modals (AppNav's mobile drawer) sit in the DOM
-            // permanently; MUI marks them aria-hidden while closed, so bare presence ≠ open.
-            if (shouldHandlePageEscape(event, document.querySelector('.MuiModal-root:not([aria-hidden="true"])') !== null)) {
+            if (shouldHandlePageEscape(event, isModalOpen())) {
                 onEscapeRef.current();
             }
         };

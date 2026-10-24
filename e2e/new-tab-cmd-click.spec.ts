@@ -25,9 +25,9 @@ async function expectModifiedClickOpensNewTab(page: Page, { rowTestId, rowText, 
     ]);
     await newTab.waitForURL(expectedNewTabUrl);
 
-    // The originating tab stays on its list and no editor dialog opened there.
+    // The originating tab stays on its list — the editor did not open there.
     expect(page.url()).toBe(originUrl);
-    await expect(page.getByRole('dialog')).toBeHidden();
+    await expect(page.getByTestId('itemPageWrapper')).toHaveCount(0);
     await newTab.close();
 }
 
@@ -92,9 +92,9 @@ test.describe('cmd/ctrl+click opens entity pages in a new tab', () => {
 
             // Clarify via the UI so the "Item updated" undo offer with its View link appears.
             await page.getByRole('button', { name: 'Edit' }).first().click();
-            const dialog = page.getByRole('dialog', { name: 'Edit item' });
-            await dialog.getByRole('button', { name: 'Next Action' }).click();
-            await dialog.getByRole('button', { name: 'Save changes' }).click();
+            const editor = page.getByTestId('itemPageWrapper');
+            await editor.getByRole('button', { name: 'Next Action' }).click();
+            await editor.getByRole('button', { name: 'Save changes' }).click();
 
             const viewButton = page.getByTestId('undoSnackbarViewButton');
             await expect(viewButton).toBeVisible();

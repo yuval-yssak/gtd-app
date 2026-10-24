@@ -64,7 +64,7 @@ export interface BriefSectionProps {
 }
 
 /**
- * The brief under the title. Read-only by default — like the page-mode notes, the pencil is the
+ * The brief under the title. Read-only by default — like the notes, the pencil is the
  * only way into the field, because a typed brief is PINNED (the sweep stops refreshing it) and
  * that should be a deliberate act, never a stray click. While editing, a visible notice says so.
  * Saves on blur/Enter/Escape/Done/Clear through the host's `onCommit`, then returns to the read view.

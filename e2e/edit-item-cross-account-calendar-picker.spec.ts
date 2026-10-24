@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { resetServerForEmails, withTwoAccountsOnOneDevice } from './helpers/context';
 
-// Regression for: opening EditItemDialog on a calendar-linked item, switching the AccountPicker
+// Regression for: opening the item editor on a calendar-linked item, switching the AccountPicker
 // to the secondary account, and finding no calendar selector — only the validation error
 // "Pick a calendar from {email} before saving" with no UI to satisfy it.
 //
@@ -12,7 +12,7 @@ import { resetServerForEmails, withTwoAccountsOnOneDevice } from './helpers/cont
 //      to the source account and is filtered out of visibleCalendarOptions.
 //
 // The fix relaxes the gate to length >= 1 and pre-fills the target's default/sole config when
-// the owner changes. This test drives the dialog UI to confirm both effects.
+// the owner changes. This test drives the editor UI to confirm both effects.
 
 const DEV_SEED_CALENDAR_URL = 'http://localhost:4000/dev/calendar/seed-integration';
 const DEV_SEED_ENTITY_URL = 'http://localhost:4000/dev/reassign/seed-entity';
@@ -67,7 +67,7 @@ async function seedCalendarItemOnServer(userId: string, integrationId: string, c
     return id;
 }
 
-test.describe('EditItemDialog cross-account calendar picker', () => {
+test.describe('Item editor cross-account calendar picker', () => {
     // Each test scopes its /dev/reset to its unique stamped emails so concurrent specs in
     // other workers keep their session/user data.
     test('switching AccountPicker to a target account with one calendar shows the picker pre-filled with that calendar', async ({ browser }) => {
@@ -101,22 +101,22 @@ test.describe('EditItemDialog cross-account calendar picker', () => {
             await page.goto('http://localhost:4173/calendar');
             await expect(page.getByText('Cross-account picker test')).toBeVisible({ timeout: 10_000 });
 
-            // Open the dialog.
+            // Open the editor.
             await page.getByTestId('calendarItemEditButton').first().click();
-            const dialog = page.getByRole('dialog', { name: 'Edit item' });
-            await expect(dialog).toBeVisible();
+            const editor = page.getByTestId('itemPageWrapper');
+            await expect(editor).toBeVisible();
 
             // Verify the picker initially shows the source calendar. CalendarFields renders a raw
             // FormControl/InputLabel/Select without `htmlFor` linking, so the label is not a11y-
             // associated with the combobox — locate the FormControl by its label text and grab the
             // sibling Select trigger directly.
-            const calendarSelect = dialog
+            const calendarSelect = editor
                 .locator('.MuiFormControl-root', { has: page.locator('label', { hasText: /^Calendar$/ }) })
                 .locator('[role="combobox"]');
             await expect(calendarSelect).toBeVisible();
 
             // Switch the AccountPicker to the secondary account.
-            await dialog.getByTestId('accountPicker').click();
+            await editor.getByTestId('accountPicker').click();
             await page.getByRole('option', { name: new RegExp(emailB) }).click();
 
             // The Calendar select must remain visible (the target account has only 1 calendar —
@@ -128,7 +128,7 @@ test.describe('EditItemDialog cross-account calendar picker', () => {
             await expect(calendarSelect).toHaveText(/B Primary/);
 
             // Sanity: changing back restores the original selection (item's own configId).
-            await dialog.getByTestId('accountPicker').click();
+            await editor.getByTestId('accountPicker').click();
             await page.getByRole('option', { name: new RegExp(emailA) }).click();
             await expect(calendarSelect).toHaveText(/A Primary/);
         });

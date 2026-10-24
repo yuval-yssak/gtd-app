@@ -81,14 +81,14 @@ test.describe('Routines list — tabs, grouping and search', () => {
         });
     });
 
-    test('open-page icon navigates to the routine page; ESC returns to the exact list URL with the page kept in history', async ({ browser }) => {
+    test('the Edit button opens the routine page; ESC returns to the exact list URL with the page kept in history', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `routine-open-page-${dayjs().valueOf()}@example.com`, async (page) => {
             const { dailyNa } = await seedGroupedRoutines(page);
 
             await page.goto('/routines?q=water');
             await page.waitForSelector('text=Water plants');
 
-            await page.getByTestId('routineRowOpenPageButton').click();
+            await page.getByTestId('routineRowEditButton').click();
             await expect(page).toHaveURL(new RegExp(`/routine/${dailyNa._id}`));
             await expect(page.getByTestId('routinePageWrapper')).toBeVisible();
 
@@ -161,7 +161,7 @@ test.describe('Routine deep links from items', () => {
             // List → routine page → next-item link: two detail pages deep.
             await page.goto('/routines');
             await page.waitForSelector('text=Workout');
-            await page.getByTestId('routineRowOpenPageButton').click();
+            await page.getByTestId('routineRowEditButton').click();
             await expect(page).toHaveURL(new RegExp(`/routine/${routine._id}`));
             await page.getByTestId('routineNextItemLink').click();
             await expect(page).toHaveURL(new RegExp(`/item/${item._id}`));

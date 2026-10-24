@@ -146,7 +146,7 @@ test.describe('Row shortcut tooltips', () => {
         });
     });
 
-    test('a fading ghost row presses nothing (and opens no quick capture); keys in the editor dialog act on nothing behind it', async ({ browser }) => {
+    test('a fading ghost row presses nothing (and opens no quick capture); row letters in the editor copy nothing', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `tips-ghost-${dayjs().valueOf()}@example.com`, async (page) => {
             await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
             await gtd.collect(page, 'Ghost target');
@@ -168,17 +168,17 @@ test.describe('Row shortcut tooltips', () => {
             await expect(page.getByTestId('quickCaptureDialog')).toHaveCount(0);
             await expect(ghostRow).toHaveCount(0, { timeout: 5_000 });
 
-            // With the editor dialog open and focus on one of its buttons, E and C act on nothing behind it
-            // (focus inside the portaled dialog has no row; the modal guard itself is pinned by the unit tests).
+            // On the item page with focus on a status chip, C and E are the editor's own keys, never a row's:
+            // nothing is copied and the editor stays open.
             await page.getByTestId('inboxItemRow').filter({ hasText: 'Dialog target' }).click();
-            const dialog = page.getByRole('dialog', { name: 'Edit item' });
-            await expect(dialog).toBeVisible();
-            await dialog.getByRole('button', { name: 'Next Action' }).focus();
+            const editor = page.getByTestId('itemPageWrapper');
+            await expect(editor).toBeVisible();
+            await editor.getByRole('button', { name: 'Next Action', exact: true }).focus();
             await page.keyboard.press('c');
             await page.keyboard.press('e');
             await page.waitForTimeout(200);
             expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('untouched');
-            await expect(page.getByRole('dialog')).toHaveCount(1);
+            await expect(editor).toHaveCount(1);
         });
     });
 });

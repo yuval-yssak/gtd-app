@@ -4,12 +4,10 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import IconButton from '@mui/material/IconButton';
-import Tab from '@mui/material/Tab';
-import Tabs from '@mui/material/Tabs';
 import Typography from '@mui/material/Typography';
 import { useEffect, useId, useRef, useState } from 'react';
 import { enterNotesEdit, exitNotesEdit, initialNotesEditMode } from '../../lib/notesEditMode';
-import { type ItemEditorChrome, notesAreEmpty } from '../editItemDialogLogic';
+import { notesAreEmpty } from '../editItemDialogLogic';
 import { MarkdownNotesEditor, NOTES_EDITOR_LABEL, NOTES_PLACEHOLDER } from '../markdown/MarkdownNotesEditor';
 import { MarkdownPreview } from '../markdown/MarkdownPreview';
 import styles from './ItemEditorBody.module.css';
@@ -17,7 +15,6 @@ import styles from './ItemEditorBody.module.css';
 interface NotesSectionProps {
     notes: string;
     onNotesChange: (next: string) => void;
-    chrome: ItemEditorChrome;
     /**
      * Review presentation with a brief on show: the notes start folded behind a "Show notes"
      * disclosure (the brief already says what the item is) and expand in place on demand.
@@ -26,16 +23,12 @@ interface NotesSectionProps {
 }
 
 /**
- * Notes editor section. Two surface variants:
- * - Page mode: defaults to a read-only Markdown preview when notes exist; only the pencil button
- *   switches to a focused CodeMirror editor (edits autosave through `onNotesChange`). The "Done"
- *   button, Escape, or moving focus elsewhere return to the preview while notes are non-empty.
- *   Empty notes start in the editor so the affordance is obvious.
- * - All other chromes (dialog/popover/expand): tabbed Edit/Preview, unchanged from the previous
- *   behaviour. The page-mode redesign was scoped intentionally — the smaller surfaces are short
- *   and edit-oriented and don't need the read-mostly default.
+ * Notes editor section. Defaults to a read-only Markdown preview when notes exist; only the pencil
+ * button switches to a focused CodeMirror editor (edits autosave through `onNotesChange`). The
+ * "Done" button, Escape, or moving focus elsewhere return to the preview while notes are
+ * non-empty. Empty notes start in the editor so the affordance is obvious.
  */
-export function NotesSection({ notes, onNotesChange, chrome, collapsible = false }: NotesSectionProps) {
+export function NotesSection({ notes, onNotesChange, collapsible = false }: NotesSectionProps) {
     // Hook first, then the disclosure guard: the early return below must not change hook order.
     const [isExpanded, setIsExpanded] = useState(false);
     if (collapsible && !isExpanded) {
@@ -47,10 +40,7 @@ export function NotesSection({ notes, onNotesChange, chrome, collapsible = false
             </Box>
         );
     }
-    if (chrome === 'page') {
-        return <PageNotesSection notes={notes} onNotesChange={onNotesChange} />;
-    }
-    return <TabbedNotesSection notes={notes} onNotesChange={onNotesChange} />;
+    return <PageNotesSection notes={notes} onNotesChange={onNotesChange} />;
 }
 
 function PageNotesSection({ notes, onNotesChange }: { notes: string; onNotesChange: (n: string) => void }) {
@@ -143,25 +133,6 @@ function PageNotesSection({ notes, onNotesChange }: { notes: string; onNotesChan
             <Box className={styles.pagePreview} tabIndex={0} role="region" aria-labelledby={labelId} data-testid="pageNotesPreview">
                 <MarkdownPreview markdown={notes} />
             </Box>
-        </Box>
-    );
-}
-
-function TabbedNotesSection({ notes, onNotesChange }: { notes: string; onNotesChange: (n: string) => void }) {
-    const [tab, setTab] = useState<0 | 1>(0);
-    return (
-        <Box>
-            <Tabs value={tab} onChange={(_, v) => setTab(v as 0 | 1)} className={styles.tabs}>
-                <Tab label="Edit" value={0} />
-                <Tab label="Preview" value={1} />
-            </Tabs>
-            {tab === 0 ? (
-                <MarkdownNotesEditor value={notes} onValueChange={onNotesChange} placeholder={NOTES_PLACEHOLDER} />
-            ) : (
-                <Box className={styles.preview}>
-                    {notes.trim() ? <MarkdownPreview markdown={notes} /> : <span className={styles.empty}>Nothing to preview.</span>}
-                </Box>
-            )}
         </Box>
     );
 }

@@ -4,7 +4,6 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
 import EditIcon from '@mui/icons-material/Edit';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import PauseIcon from '@mui/icons-material/Pause';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import ViewListIcon from '@mui/icons-material/ViewList';
@@ -23,7 +22,6 @@ import List from '@mui/material/List';
 import ListItem from '@mui/material/ListItem';
 import ListItemButton from '@mui/material/ListItemButton';
 import ListItemText from '@mui/material/ListItemText';
-import { useTheme } from '@mui/material/styles';
 import Tab from '@mui/material/Tab';
 import Tabs from '@mui/material/Tabs';
 import TextField from '@mui/material/TextField';
@@ -31,7 +29,6 @@ import ToggleButton from '@mui/material/ToggleButton';
 import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
-import useMediaQuery from '@mui/material/useMediaQuery';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import { useCallback, useMemo, useState } from 'react';
@@ -51,7 +48,6 @@ import { useAutoFocus } from '../../hooks/useAutoFocus';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import { useListSearch } from '../../hooks/useListSearch';
-import { useNewTabAwareNavigate } from '../../lib/newTabNavigation';
 import { filterRoutinesByTitle, groupRoutinesByFrequency, splitActivePaused } from '../../lib/routineGrouping';
 import { buildRoutineNextItemIndex, describeNextItemDate } from '../../lib/routineNextItem';
 import { parseRoutinesSearch, type RoutinesTab, type RoutinesView } from '../../lib/routinesUrlParams';
@@ -72,21 +68,10 @@ function RoutinesPage() {
     // Route-scoped so functional `search` updaters receive (and must return) this route's
     // typed search state instead of the all-routes union.
     const navigate = useNavigate({ from: Route.fullPath });
-    const navigateOrNewTab = useNewTabAwareNavigate();
     const searchFieldRef = useAutoFocus();
     useListScrollRestoration();
-    const { account, routines, items, workContexts, people, refreshRoutines, refreshItems, syncAndRefresh, isInitialSyncing, isCalendarSyncing } = useAppData();
-    const theme = useTheme();
-    const isMobile = useMediaQuery(theme.breakpoints.down('md'));
-    const editor = useRoutineEditor({
-        db,
-        userId: account?.id ?? '',
-        people,
-        workContexts,
-        refreshRoutines,
-        refreshItems,
-        isMobile,
-    });
+    const { account, routines, items, refreshRoutines, refreshItems, syncAndRefresh, isInitialSyncing, isCalendarSyncing } = useAppData();
+    const editor = useRoutineEditor();
     const [routineToDelete, setRoutineToDelete] = useState<StoredRoutine | null>(null);
     const [routineToPause, setRoutineToPause] = useState<StoredRoutine | null>(null);
     const [isPausedSectionOpen, setIsPausedSectionOpen] = useState(false);
@@ -162,14 +147,6 @@ function RoutinesPage() {
         await syncAndRefresh();
     }
 
-    function onRowClick(routine: StoredRoutine, e: React.MouseEvent<HTMLElement>) {
-        editor.openEditor({ routine, anchor: e.currentTarget, event: e });
-    }
-
-    function openRoutinePage(routine: StoredRoutine, e: React.MouseEvent) {
-        navigateOrNewTab(e, { to: '/routine/$routineId', params: { routineId: routine._id } });
-    }
-
     /** Schedule + upcoming date on one line, e.g. "Every Thu at 18:00 for 1h · next Thu, Jul 2 18:00". */
     function routineSecondaryLabel(routine: StoredRoutine): string {
         const schedule = formatRoutineSchedule(routine);
@@ -187,11 +164,6 @@ function RoutinesPage() {
                 secondaryAction={
                     <Box sx={{ display: 'flex', gap: 0.5 }}>
                         <CopyIdButton isRowAction id={routine._id} testId="routineRowCopyIdButton" />
-                        <Tooltip title="Open routine page">
-                            <IconButton size="small" onClick={(e) => openRoutinePage(routine, e)} data-testid="routineRowOpenPageButton">
-                                <OpenInNewIcon fontSize="small" />
-                            </IconButton>
-                        </Tooltip>
                         {routine.active ? (
                             <Tooltip title="Pause">
                                 <IconButton size="small" onClick={() => setRoutineToPause(routine)} data-testid="routineRowPauseButton">
@@ -200,8 +172,6 @@ function RoutinesPage() {
                             </Tooltip>
                         ) : (
                             <Tooltip title="Resume — opens editor to set a new start date">
-                                {/* No anchor passed: popover mode is too wide to attach to a 24px icon, so
-                                    icon-button gestures fall through to dialog while row-body clicks still anchor. */}
                                 <IconButton
                                     size="small"
                                     color="success"
@@ -227,7 +197,7 @@ function RoutinesPage() {
                     </Box>
                 }
             >
-                <ListItemButton onClick={(e) => onRowClick(routine, e)} data-testid="routineRow">
+                <ListItemButton onClick={(e) => editor.openEditor({ routine, event: e })} data-testid="routineRow">
                     <ListItemText
                         primary={
                             <Box className={styles.titleRow}>
@@ -289,7 +259,6 @@ function RoutinesPage() {
                         {paused.map((routine, idx) => (
                             <Box key={routine._id} className={styles.pausedRow} data-list-item-id={routine._id}>
                                 {renderRoutineRow(routine)}
-                                {editor.renderExpandFor(routine._id)}
                                 {idx < paused.length - 1 && <Divider />}
                             </Box>
                         ))}
@@ -326,7 +295,6 @@ function RoutinesPage() {
                                     // data-list-item-id: scroll-restoration anchor (see useListScrollRestoration)
                                     <Box key={routine._id} data-list-item-id={routine._id}>
                                         {renderRoutineRow(routine)}
-                                        {editor.renderExpandFor(routine._id)}
                                         {idx < group.routines.length - 1 && <Divider />}
                                     </Box>
                                 )),
@@ -371,7 +339,7 @@ function RoutinesPage() {
                     <AccountSyncChip />
                 </Box>
                 <Tooltip title="Create routine">
-                    <IconButton onClick={() => editor.openEditor({})} data-testid="newRoutineButton">
+                    <IconButton onClick={(e) => editor.openEditor({ event: e })} data-testid="newRoutineButton">
                         <AddIcon />
                     </IconButton>
                 </Tooltip>
@@ -411,7 +379,6 @@ function RoutinesPage() {
                 </Box>
             )}
             {isBootstrapping ? <ListSkeleton /> : activeView === 'week' ? renderWeekView() : renderListView()}
-            {editor.renderGlobal()}
             <Dialog open={routineToDelete !== null} onClose={() => setRoutineToDelete(null)} maxWidth="sm" fullWidth>
                 <DialogTitle>Delete routine?</DialogTitle>
                 <DialogContent>

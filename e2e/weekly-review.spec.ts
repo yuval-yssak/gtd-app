@@ -1069,9 +1069,9 @@ test.describe('weekly review', () => {
             await expect(routineCard.getByTestId('routineCardNotes')).toContainText('Bring a towel');
             // Notes links on the review card open in a new tab (shared MarkdownPreview contract).
             await expect(routineCard.getByTestId('routineCardNotes').getByRole('link', { name: 'pool hours' })).toHaveAttribute('target', '_blank');
-            // Edit opens the routine dialog; Escape closes it without deciding.
+            // Edit opens the routine editor inside the card; Escape closes it without deciding.
             await page.getByTestId('routineCardEdit').click();
-            await expect(page.getByRole('dialog').getByTestId('routineEditorSaveButton')).toBeVisible();
+            await expect(routineCard.getByTestId('routineEditorSaveButton')).toBeVisible();
             await page.keyboard.press('Escape');
             await expect(page.getByTestId('routineEditorSaveButton')).toHaveCount(0);
 

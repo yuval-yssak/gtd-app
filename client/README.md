@@ -59,7 +59,6 @@ src/
 ├── components/                      # 30+ components with .stories.tsx companions
 │   ├── AppNav.tsx                   # Desktop sidebar + mobile bottom nav
 │   ├── ClarifyDialog.tsx            # GTD inbox clarification dialog
-│   ├── EditItemDialog.tsx           # Unified status-aware item editor
 │   ├── StatusBar.tsx                # Sync status indicator
 │   ├── clarify/                     # Clarification form field components
 │   ├── routines/                    # Routine management components
@@ -88,7 +87,6 @@ src/
 ├── lib/
 │   ├── authClient.ts                # Better Auth browser client
 │   ├── rruleUtils.ts                # RFC 5545 RRULE parsing helpers
-│   ├── clarifyMode.ts               # GTD clarification state machine
 │   └── typeUtils.ts                 # hasAtLeastOne, NonEmptyString, etc.
 ├── types/
 │   ├── MyDB.ts                      # IDB schema types (Stored* interfaces)

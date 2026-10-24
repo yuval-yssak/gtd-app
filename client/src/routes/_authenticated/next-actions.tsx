@@ -16,10 +16,8 @@ import ListItemText from '@mui/material/ListItemText';
 import Snackbar from '@mui/material/Snackbar';
 import Stack from '@mui/material/Stack';
 import Switch from '@mui/material/Switch';
-import { useTheme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
-import useMediaQuery from '@mui/material/useMediaQuery';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import { useCallback, useMemo, useRef, useState } from 'react';
@@ -260,11 +258,9 @@ function NextActionsPage() {
     useDocumentTitle('Next Actions');
     const { db } = Route.useRouteContext();
     const { items, workContexts, people, allWorkContexts, allPeople, routines, refreshItems, isInitialSyncing } = useAppData();
-    const theme = useTheme();
-    const isMobile = useMediaQuery(theme.breakpoints.down('md'));
     // The filter bar is one keyboard region: Tab lands on it once, arrows walk the chips and the switch.
     const filterRegion = useRovingRegion({ orientation: 'both', label: 'Filters' });
-    const editor = useItemEditor({ db, people, workContexts, refreshItems, isMobile });
+    const editor = useItemEditor();
     const urlFilters = Route.useSearch();
     const navigate = useNavigate();
     const [showTags, setShowTags] = useState(readShowTags);
@@ -644,7 +640,6 @@ function NextActionsPage() {
                                             />
                                         </ListItemButton>
                                     </ListItem>
-                                    {editor.renderExpandFor(item._id)}
                                     {!row.isLastInSection && <Divider />}
                                 </ListRowShell>
                             );
@@ -654,8 +649,7 @@ function NextActionsPage() {
             )}
             {/* Keyboard hints, the polite announcer for every reorder outcome, the failure toast and the Move to sheet. */}
             <RankedListChrome ranked={ranked} actions={NEXT_ACTIONS_ROW_ACTIONS} sectionNoun="day" liveTestId="nextActionsReorderLive" />
-            {editor.renderGlobal()}
-            <Snackbar open={editor.instantToast.open} autoHideDuration={3000} onClose={editor.closeInstantToast} message={editor.instantToast.message} />
+            <Snackbar open={editor.toast.open} autoHideDuration={3000} onClose={editor.closeToast} message={editor.toast.message} />
         </Box>
     );
 }

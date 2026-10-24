@@ -90,7 +90,6 @@ export function ClarifyStage({ queue, db, onQueueChange, onStageFinished, travel
                         onSaveCommitted={nav.markSaveCommitted}
                         onDirtyLockChange={setIsEditorLocked}
                         onFromGmailReadOnly={() => setToast(FROM_GMAIL_READONLY_MESSAGE)}
-                        chrome="page"
                         presentation="review"
                         renderActions={(api: ItemEditorActionsApi) => (
                             <>

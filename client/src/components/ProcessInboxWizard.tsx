@@ -2,10 +2,6 @@ import AssignmentTurnedInIcon from '@mui/icons-material/AssignmentTurnedIn';
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
-import Dialog from '@mui/material/Dialog';
-import DialogActions from '@mui/material/DialogActions';
-import DialogContent from '@mui/material/DialogContent';
-import DialogTitle from '@mui/material/DialogTitle';
 import Snackbar from '@mui/material/Snackbar';
 import Typography from '@mui/material/Typography';
 import type { IDBPDatabase } from 'idb';
@@ -13,7 +9,7 @@ import { useCallback, useState } from 'react';
 import { usePendingReassign } from '../contexts/PendingReassignProvider';
 import { FROM_GMAIL_READONLY_MESSAGE } from '../db/itemMutations';
 import type { MyDB, StoredItem, StoredPerson, StoredWorkContext } from '../types/MyDB';
-import { type ItemEditorActionsApi, ItemEditorBody, type ItemEditorChrome } from './itemEditor/ItemEditorBody';
+import { type ItemEditorActionsApi, ItemEditorBody } from './itemEditor/ItemEditorBody';
 import styles from './ProcessInboxWizard.module.css';
 
 interface ProcessInboxWizardProps {
@@ -23,8 +19,6 @@ interface ProcessInboxWizardProps {
     workContexts: StoredWorkContext[];
     onClose: () => void;
     onItemProcessed: () => Promise<void>;
-    /** Render chrome — dialog (default) wraps in MUI Dialog; page mounts inline for the /process-inbox route. */
-    chrome?: 'dialog' | 'page';
 }
 
 export type WizardStep = { kind: 'item'; index: number; itemId: string; isLast: boolean } | { kind: 'done' };
@@ -44,18 +38,13 @@ export function nextWizardStep(items: ReadonlyArray<StoredItem>, index: number):
     return { kind: 'item', index, itemId: current._id, isLast: index + 1 >= items.length };
 }
 
-/** Maps a clarify-mode setting to the chrome the batch wizard should render. */
-export function batchChromeFor(mode: string): 'dialog' | 'page' {
-    return mode === 'page' ? 'page' : 'dialog';
-}
-
 /**
  * Sequential wizard over inbox items. Hosts the universal ItemEditorBody for the current item so
  * each item gets the full status-chip / forms / cross-account picker — same UX as single-item
- * editing on every other list page. Wraps the body in a Dialog or inline page container; the
+ * editing on every other list page. Mounted full-page by the /process-inbox route; the
  * "Save & next" / "Skip" actions advance to the next item via a body remount on the index change.
  */
-export function ProcessInboxWizard({ items, db, people, workContexts, onClose, onItemProcessed, chrome = 'dialog' }: ProcessInboxWizardProps) {
+export function ProcessInboxWizard({ items, db, people, workContexts, onClose, onItemProcessed }: ProcessInboxWizardProps) {
     const [index, setIndex] = useState(0);
     const step = nextWizardStep(items, index);
     const { isPending } = usePendingReassign();
@@ -90,7 +79,7 @@ export function ProcessInboxWizard({ items, db, people, workContexts, onClose, o
         // remains visible after the wizard switches off the editor branch.
         return (
             <>
-                {chrome === 'dialog' ? <DoneDialog total={total} onClose={onClose} /> : <DonePage total={total} onClose={onClose} />}
+                <DonePage total={total} onClose={onClose} />
                 {toastSnackbar}
             </>
         );
@@ -111,7 +100,7 @@ export function ProcessInboxWizard({ items, db, people, workContexts, onClose, o
     // which loses all wizard progression.
     const inFlightContent = reassignInFlight ? <ReassignInFlightWizardBody isLast={step.isLast} onSkip={advance} onAbort={onClose} /> : null;
 
-    const editorBody = (bodyChrome: ItemEditorChrome) => (
+    const editorBody = (
         <ItemEditorBody
             key={`${currentItem._id}:${step.index}`}
             item={currentItem}
@@ -122,30 +111,15 @@ export function ProcessInboxWizard({ items, db, people, workContexts, onClose, o
             onSaved={onSavedItem}
             onFromGmailReadOnly={() => setToast({ open: true, message: FROM_GMAIL_READONLY_MESSAGE })}
             renderActions={renderActions}
-            chrome={bodyChrome}
         />
     );
 
-    if (chrome === 'page') {
-        return (
-            <>
-                <Box className={styles.pageRoot}>
-                    <WizardHeader index={step.index} total={items.length} chrome="page" />
-                    <Box className={styles.pageBody}>{inFlightContent ?? editorBody('page')}</Box>
-                </Box>
-                {toastSnackbar}
-            </>
-        );
-    }
-
     return (
         <>
-            <Dialog open onClose={onClose} maxWidth="sm" fullWidth>
-                <DialogTitle className={styles.dialogTitle}>
-                    <WizardHeader index={step.index} total={items.length} chrome="dialog" />
-                </DialogTitle>
-                <DialogContent dividers>{inFlightContent ?? editorBody('dialog')}</DialogContent>
-            </Dialog>
+            <Box className={styles.pageRoot} data-testid="processInboxPage">
+                <WizardHeader index={step.index} total={items.length} />
+                <Box className={styles.pageBody}>{inFlightContent ?? editorBody}</Box>
+            </Box>
             {toastSnackbar}
         </>
     );
@@ -154,18 +128,15 @@ export function ProcessInboxWizard({ items, db, people, workContexts, onClose, o
 interface WizardHeaderProps {
     index: number;
     total: number;
-    chrome: 'dialog' | 'page';
 }
 
-function WizardHeader({ index, total, chrome }: WizardHeaderProps) {
-    const titleVariant = chrome === 'page' ? 'h6' : 'subtitle1';
+function WizardHeader({ index, total }: WizardHeaderProps) {
     return (
         <Box className={styles.headerRow}>
             <Box className={styles.headerTextBlock}>
-                {/* component="span" prevents an h6 nested inside DialogTitle's h2, which is invalid HTML */}
                 <Typography
                     component="span"
-                    variant={titleVariant}
+                    variant="h6"
                     sx={{
                         fontWeight: 600,
                     }}
@@ -235,40 +206,6 @@ function ReassignInFlightWizardBody({ isLast, onSkip, onAbort }: ReassignInFligh
                 </Button>
             </Box>
         </Box>
-    );
-}
-
-function DoneDialog({ total, onClose }: { total: number; onClose: () => void }) {
-    return (
-        <Dialog open onClose={onClose} maxWidth="xs" fullWidth>
-            <DialogContent className={styles.completedContent}>
-                <AssignmentTurnedInIcon className={styles.completedIcon} />
-                <Typography
-                    variant="h6"
-                    sx={{
-                        fontWeight: 600,
-                    }}
-                >
-                    Inbox clear!
-                </Typography>
-                {total > 0 && (
-                    <Typography
-                        variant="body2"
-                        sx={{
-                            color: 'text.secondary',
-                            mt: 1,
-                        }}
-                    >
-                        All {total} item{total !== 1 ? 's' : ''} processed.
-                    </Typography>
-                )}
-            </DialogContent>
-            <DialogActions className={styles.completedActions}>
-                <Button variant="contained" onClick={onClose} data-testid="processInboxDone">
-                    Done
-                </Button>
-            </DialogActions>
-        </Dialog>
     );
 }
 

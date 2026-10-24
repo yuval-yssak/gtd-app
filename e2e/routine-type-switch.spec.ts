@@ -8,14 +8,14 @@ import { gtd } from './helpers/gtd';
 // and fills the calendar horizon; calendar → nextAction trashes only UPCOMING calendar items
 // (past occurrences remain as history) and seeds the first next action.
 
-/** Opens the edit dialog for the routine row containing `title` on /routines (tab-aware). */
+/** Opens the edit editor for the routine row containing `title` on /routines (tab-aware). */
 async function openRoutineEditor(page: Parameters<typeof gtd.listItems>[0], title: string, tab?: 'calendar') {
     await page.goto(tab ? `/routines?tab=${tab}` : '/routines');
     await page.waitForSelector(`text=${title}`);
     await page.getByTestId('routineRow').filter({ hasText: title }).click();
-    const dialog = page.getByRole('dialog', { name: 'Edit routine' });
-    await expect(dialog).toBeVisible();
-    return dialog;
+    const editor = page.getByTestId('routinePageWrapper');
+    await expect(editor).toBeVisible();
+    return editor;
 }
 
 test.describe('Routine type switch (nextAction ↔ calendar)', () => {
@@ -32,10 +32,10 @@ test.describe('Routine type switch (nextAction ↔ calendar)', () => {
             const open = (await gtd.listItems(page)).find((i) => i.routineId === routine._id && i.status === 'nextAction');
             expect(open).toBeTruthy();
 
-            const dialog = await openRoutineEditor(page, 'Water plants');
-            await dialog.getByRole('button', { name: 'Calendar' }).click();
-            await dialog.getByTestId('routineEditorSaveButton').click();
-            await expect(dialog).toBeHidden();
+            const editor = await openRoutineEditor(page, 'Water plants');
+            await editor.getByRole('button', { name: 'Calendar' }).click();
+            await editor.getByTestId('routineEditorSaveButton').click();
+            await expect(editor).toBeHidden();
 
             // Old open next action is trashed — not left orphaned in the Next Actions list.
             await expect.poll(async () => (await gtd.listItems(page)).find((i) => i._id === open?._id)?.status).toBe('trash');
@@ -71,10 +71,10 @@ test.describe('Routine type switch (nextAction ↔ calendar)', () => {
                 timeEnd: `${yesterday}T09:30:00`,
             });
 
-            const dialog = await openRoutineEditor(page, 'Morning swim', 'calendar');
-            await dialog.getByRole('button', { name: 'Next Action' }).click();
-            await dialog.getByTestId('routineEditorSaveButton').click();
-            await expect(dialog).toBeHidden();
+            const editor = await openRoutineEditor(page, 'Morning swim', 'calendar');
+            await editor.getByRole('button', { name: 'Next Action' }).click();
+            await editor.getByTestId('routineEditorSaveButton').click();
+            await expect(editor).toBeHidden();
 
             // Upcoming occurrences are trashed; the past one survives as history.
             await expect

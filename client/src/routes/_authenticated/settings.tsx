@@ -28,7 +28,6 @@ import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { APP_NAME, METHOD_NAME } from '../../lib/appName';
 import { setShowBriefs, useShowBriefs } from '../../lib/briefPreference';
 import { getCalendarHorizonMonths, setCalendarHorizonMonths } from '../../lib/calendarHorizon';
-import { CLARIFY_MODE_KEY, type InlineClarifyMode, parseClarifyMode } from '../../lib/clarifyMode';
 import { type ColorSchemePreference, setColorSchemePreference, useColorSchemePreference } from '../../lib/colorScheme';
 import { LEGAL_DOCUMENTS } from '../../lib/legalDocuments';
 import { getRoutineIndicatorStyle, type RoutineIndicatorStyle, setRoutineIndicatorStyle } from '../../lib/routineIndicatorStyle';
@@ -131,8 +130,6 @@ function SettingsPage() {
             <CalendarHorizonSection />
             {/* Routine indicator style */}
             <RoutineIndicatorSection />
-            {/* Inbox preferences */}
-            <ItemEditorSection />
             {/* Weekly review preferences */}
             <WeeklyReviewSection />
             {/* Notifications section */}
@@ -362,130 +359,6 @@ function CalendarHorizonSection() {
                         </MenuItem>
                     ))}
                 </TextField>
-            </Box>
-        </Paper>
-    );
-}
-
-function ItemEditorSection() {
-    const [clarifyMode, setClarifyMode] = useState<InlineClarifyMode>(() => parseClarifyMode(localStorage.getItem(CLARIFY_MODE_KEY)));
-
-    function onChange(newMode: InlineClarifyMode) {
-        setClarifyMode(newMode);
-        localStorage.setItem(CLARIFY_MODE_KEY, newMode);
-        // storage event only fires in OTHER tabs by default — dispatch manually so the
-        // inbox page updates in real time without requiring a reload.
-        window.dispatchEvent(new StorageEvent('storage', { key: CLARIFY_MODE_KEY, newValue: newMode }));
-    }
-
-    return (
-        <Paper variant="outlined" className={styles.section}>
-            <Box className={styles.sectionContent}>
-                <Typography
-                    variant="subtitle1"
-                    sx={{
-                        fontWeight: 600,
-                        mb: 0.5,
-                    }}
-                >
-                    Item editor
-                </Typography>
-                <Typography
-                    variant="body2"
-                    sx={{
-                        color: 'text.secondary',
-                        mb: 2,
-                    }}
-                >
-                    How you prefer to edit and clarify items — applies to all list pages (inbox, next actions, calendar, waiting for, tickler, someday/maybe).
-                </Typography>
-                <RadioGroup value={clarifyMode} onChange={(e) => onChange(parseClarifyMode(e.target.value))}>
-                    <FormControlLabel
-                        value="dialog"
-                        control={<Radio size="small" />}
-                        label={
-                            <Box>
-                                <Typography variant="body2">Dialog</Typography>
-                                <Typography
-                                    variant="caption"
-                                    sx={{
-                                        color: 'text.secondary',
-                                    }}
-                                >
-                                    A focused dialog window
-                                </Typography>
-                            </Box>
-                        }
-                    />
-                    <FormControlLabel
-                        value="expand"
-                        control={<Radio size="small" />}
-                        label={
-                            <Box>
-                                <Typography variant="body2">Expand inline</Typography>
-                                <Typography
-                                    variant="caption"
-                                    sx={{
-                                        color: 'text.secondary',
-                                    }}
-                                >
-                                    The item row expands in place (mobile falls back to dialog)
-                                </Typography>
-                            </Box>
-                        }
-                    />
-                    <FormControlLabel
-                        value="popover"
-                        control={<Radio size="small" />}
-                        label={
-                            <Box>
-                                <Typography variant="body2">Popover</Typography>
-                                <Typography
-                                    variant="caption"
-                                    sx={{
-                                        color: 'text.secondary',
-                                    }}
-                                >
-                                    A floating panel near the clicked button (mobile falls back to dialog)
-                                </Typography>
-                            </Box>
-                        }
-                    />
-                    <FormControlLabel
-                        value="instant"
-                        control={<Radio size="small" />}
-                        label={
-                            <Box>
-                                <Typography variant="body2">Instant</Typography>
-                                <Typography
-                                    variant="caption"
-                                    sx={{
-                                        color: 'text.secondary',
-                                    }}
-                                >
-                                    Inbox-only: clicking the inbox "Next Action" chip moves immediately with no extra fields. Other lists fall back to Dialog.
-                                </Typography>
-                            </Box>
-                        }
-                    />
-                    <FormControlLabel
-                        value="page"
-                        control={<Radio size="small" />}
-                        label={
-                            <Box>
-                                <Typography variant="body2">Full Page</Typography>
-                                <Typography
-                                    variant="caption"
-                                    sx={{
-                                        color: 'text.secondary',
-                                    }}
-                                >
-                                    Opens a dedicated page for editing the item
-                                </Typography>
-                            </Box>
-                        }
-                    />
-                </RadioGroup>
             </Box>
         </Paper>
     );

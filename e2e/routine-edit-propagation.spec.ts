@@ -13,14 +13,14 @@ async function openItemOf(page: Parameters<typeof gtd.listItems>[0], routineId: 
     return items.find((i) => i.routineId === routineId && i.status === 'nextAction');
 }
 
-/** Opens the edit dialog for the routine row containing `title` on /routines (tab-aware). */
+/** Opens the edit editor for the routine row containing `title` on /routines (tab-aware). */
 async function openRoutineEditor(page: Parameters<typeof gtd.listItems>[0], title: string, tab?: 'calendar') {
     await page.goto(tab ? `/routines?tab=${tab}` : '/routines');
     await page.waitForSelector(`text=${title}`);
     await page.getByTestId('routineRow').filter({ hasText: title }).click();
-    const dialog = page.getByRole('dialog', { name: 'Edit routine' });
-    await expect(dialog).toBeVisible();
-    return dialog;
+    const editor = page.getByTestId('routinePageWrapper');
+    await expect(editor).toBeVisible();
+    return editor;
 }
 
 test.describe('Routine edit → open next action propagation', () => {
@@ -37,10 +37,10 @@ test.describe('Routine edit → open next action propagation', () => {
             await gtd.materializePendingNextActionRoutines(page);
             expect(await openItemOf(page, routine._id)).toBeTruthy();
 
-            const dialog = await openRoutineEditor(page, 'Water plants');
-            await dialog.getByText('Errands').click();
-            await dialog.getByTestId('routineEditorSaveButton').click();
-            await expect(dialog).toBeHidden();
+            const editor = await openRoutineEditor(page, 'Water plants');
+            await editor.getByText('Errands').click();
+            await editor.getByTestId('routineEditorSaveButton').click();
+            await expect(editor).toBeHidden();
 
             await expect.poll(async () => (await openItemOf(page, routine._id))?.workContextIds ?? []).toEqual([workContext._id]);
         });
@@ -62,11 +62,11 @@ test.describe('Routine edit → open next action propagation', () => {
             // Hand-tweak the ITEM's energy — the routine edit below must not clobber it.
             await gtd.updateItem(page, { ...open, energy: 'high' });
 
-            const dialog = await openRoutineEditor(page, 'Stretch');
-            await dialog.getByRole('button', { name: 'Medium' }).click();
-            await dialog.getByText('Home').click();
-            await dialog.getByTestId('routineEditorSaveButton').click();
-            await expect(dialog).toBeHidden();
+            const editor = await openRoutineEditor(page, 'Stretch');
+            await editor.getByRole('button', { name: 'Medium' }).click();
+            await editor.getByText('Home').click();
+            await editor.getByTestId('routineEditorSaveButton').click();
+            await expect(editor).toBeHidden();
 
             await expect.poll(async () => (await openItemOf(page, routine._id))?.workContextIds ?? []).toEqual([workContext._id]);
             const after = await openItemOf(page, routine._id);
@@ -85,14 +85,14 @@ test.describe('Routine edit → open next action propagation', () => {
             });
             await gtd.materializePendingNextActionRoutines(page);
 
-            const dialog = await openRoutineEditor(page, 'Journal');
-            const titleInput = dialog.getByRole('textbox', { name: 'Title' });
+            const editor = await openRoutineEditor(page, 'Journal');
+            const titleInput = editor.getByRole('textbox', { name: 'Title' });
             await titleInput.fill('Journal every morning');
             // Blur flushes the debounced autosave commit — no explicit Save.
             await titleInput.blur();
 
             await expect.poll(async () => (await openItemOf(page, routine._id))?.title).toBe('Journal every morning');
-            await dialog.getByRole('button', { name: 'Cancel' }).click();
+            await editor.getByRole('button', { name: 'Cancel' }).click();
         });
     });
 
@@ -113,10 +113,10 @@ test.describe('Routine edit → open next action propagation', () => {
             await gtd.updateItem(page, { ...open, expectedBy: nextWeek, ignoreBefore: nextWeek });
 
             // Frequency: weekly(all days) → "Every X days" (daily). Canonical rrule changes.
-            const dialog = await openRoutineEditor(page, 'Weekly review');
-            await dialog.getByRole('radio', { name: 'Every X days' }).check();
-            await dialog.getByTestId('routineEditorSaveButton').click();
-            await expect(dialog).toBeHidden();
+            const editor = await openRoutineEditor(page, 'Weekly review');
+            await editor.getByRole('radio', { name: 'Every X days' }).check();
+            await editor.getByTestId('routineEditorSaveButton').click();
+            await expect(editor).toBeHidden();
 
             const today = dayjs().format('YYYY-MM-DD');
             await expect.poll(async () => (await openItemOf(page, routine._id))?.expectedBy).toBe(today);
@@ -144,10 +144,10 @@ test.describe('Routine edit → open next action propagation', () => {
             await gtd.updateItem(page, { ...open, expectedBy: tomorrow, ignoreBefore: tomorrow });
 
             const inFiveDays = dayjs().add(5, 'day').format('YYYY-MM-DD');
-            const dialog = await openRoutineEditor(page, 'Water garden');
-            await dialog.getByLabel('Start date').fill(inFiveDays);
-            await dialog.getByTestId('routineEditorSaveButton').click();
-            await expect(dialog).toBeHidden();
+            const editor = await openRoutineEditor(page, 'Water garden');
+            await editor.getByLabel('Start date').fill(inFiveDays);
+            await editor.getByTestId('routineEditorSaveButton').click();
+            await expect(editor).toBeHidden();
 
             await expect.poll(async () => (await openItemOf(page, routine._id))?.expectedBy).toBe(inFiveDays);
             const items = (await gtd.listItems(page)).filter((i) => i.routineId === routine._id && i.status === 'nextAction');
@@ -171,10 +171,10 @@ test.describe('Routine edit → open next action propagation', () => {
             const before = (await gtd.listItems(page)).filter((i) => i.routineId === routine._id && i.status === 'calendar');
             expect(before.length).toBeGreaterThan(0);
 
-            const dialog = await openRoutineEditor(page, 'Morning swim', 'calendar');
-            await dialog.getByRole('textbox', { name: 'Notes (Markdown)' }).fill('bring goggles');
-            await dialog.getByTestId('routineEditorSaveButton').click();
-            await expect(dialog).toBeHidden();
+            const editor = await openRoutineEditor(page, 'Morning swim', 'calendar');
+            await editor.getByRole('textbox', { name: 'Notes (Markdown)' }).fill('bring goggles');
+            await editor.getByTestId('routineEditorSaveButton').click();
+            await expect(editor).toBeHidden();
 
             const tomorrow = dayjs().add(1, 'day').format('YYYY-MM-DD');
             await expect

@@ -126,7 +126,6 @@ export function RevisitDecisionCard({
                         onClose={onExit}
                         onSaved={refreshItems}
                         onDirtyLockChange={setIsEditorLocked}
-                        chrome="page"
                         // Same density as the live stages: this is the review, and without it a
                         // long-notes item overflows the card here exactly as it did there.
                         presentation="review"

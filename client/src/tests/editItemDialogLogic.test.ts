@@ -22,7 +22,6 @@ import {
     normalizeTitleAndNotes,
     notesAreEmpty,
     pickDefaultConfigForUser,
-    shouldAutoFocusTitle,
     shouldDetachFromRoutine,
     shouldHandlePageEscape,
     stripRoutineId,
@@ -751,29 +750,8 @@ function dayJsHHmm(iso: string): string {
     return dayjs(iso).format('HH:mm');
 }
 
-describe('shouldAutoFocusTitle', () => {
-    it('always focuses on dialog chrome', () => {
-        expect(shouldAutoFocusTitle('dialog', undefined)).toBe(true);
-        expect(shouldAutoFocusTitle('dialog', 'nextAction')).toBe(true);
-    });
-
-    // Page mode is read-mostly. Auto-focus pins the cursor at the end of long titles, scrolling the
-    // start of the title out of view in the input — the user complaint that motivated this rule.
-    it('never focuses on page chrome, regardless of initialStatus', () => {
-        expect(shouldAutoFocusTitle('page', undefined)).toBe(false);
-        expect(shouldAutoFocusTitle('page', 'nextAction')).toBe(false);
-    });
-
-    it('focuses on expand/popover only when initialStatus is supplied (chip click)', () => {
-        expect(shouldAutoFocusTitle('expand', undefined)).toBe(false);
-        expect(shouldAutoFocusTitle('expand', 'nextAction')).toBe(true);
-        expect(shouldAutoFocusTitle('popover', undefined)).toBe(false);
-        expect(shouldAutoFocusTitle('popover', 'calendar')).toBe(true);
-    });
-});
-
 describe('notesAreEmpty', () => {
-    // Page-mode notes read this for both initial state (start in editor when empty) and
+    // The notes section reads this for both initial state (start in editor when empty) and
     // blur/Escape/Done behaviour (stay in editor when empty so the user can keep typing).
     it('treats blank and whitespace-only strings as empty', () => {
         expect(notesAreEmpty('')).toBe(true);

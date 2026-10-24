@@ -20,16 +20,16 @@ test.describe('clarify inbox item to routine', () => {
             await page.waitForSelector('text=Water the plants');
 
             await page.getByRole('button', { name: 'Edit' }).first().click();
-            const dialog = page.getByRole('dialog', { name: 'Edit item' });
-            await expect(dialog).toBeVisible();
+            const editor = page.getByTestId('itemPageWrapper');
+            await expect(editor).toBeVisible();
 
-            await dialog.getByRole('button', { name: 'Routine' }).click();
+            await editor.getByRole('button', { name: 'Routine' }).click();
             // The embedded routine form appears (type toggle + frequency + template sections).
-            await expect(dialog.getByTestId('itemEditorRoutineFields')).toBeVisible();
-            await expect(dialog.getByText('Frequency')).toBeVisible();
+            await expect(editor.getByTestId('itemEditorRoutineFields')).toBeVisible();
+            await expect(editor.getByText('Frequency')).toBeVisible();
 
-            await dialog.getByRole('button', { name: 'Save changes' }).click();
-            await expect(dialog).toBeHidden();
+            await editor.getByRole('button', { name: 'Save changes' }).click();
+            await expect(editor).toBeHidden();
 
             await gtd.flush(page);
             expect(await gtd.queuedOps(page)).toHaveLength(0);
@@ -59,16 +59,16 @@ test.describe('clarify inbox item to routine', () => {
             await page.waitForSelector('text=Morning swim');
 
             await page.getByRole('button', { name: 'Edit' }).first().click();
-            const dialog = page.getByRole('dialog', { name: 'Edit item' });
-            await dialog.getByRole('button', { name: 'Routine' }).click();
+            const editor = page.getByTestId('itemPageWrapper');
+            await editor.getByRole('button', { name: 'Routine' }).click();
 
             // Switch the embedded routine form's type to Calendar and set a start time.
-            const routineFields = dialog.getByTestId('itemEditorRoutineFields');
+            const routineFields = editor.getByTestId('itemEditorRoutineFields');
             await routineFields.getByRole('button', { name: 'Calendar', exact: true }).click();
             await routineFields.getByLabel('Start time').fill('07:30');
 
-            await dialog.getByRole('button', { name: 'Save changes' }).click();
-            await expect(dialog).toBeHidden();
+            await editor.getByRole('button', { name: 'Save changes' }).click();
+            await expect(editor).toBeHidden();
 
             await gtd.flush(page);
             const routines = await gtd.listRoutines(page);
@@ -94,10 +94,10 @@ test.describe('clarify inbox item to routine', () => {
             await page.waitForSelector('text=Weekly review');
 
             await page.getByRole('button', { name: 'Edit' }).first().click();
-            const dialog = page.getByRole('dialog', { name: 'Edit item' });
-            await dialog.getByRole('button', { name: 'Routine' }).click();
-            await dialog.getByRole('button', { name: 'Save changes' }).click();
-            await expect(dialog).toBeHidden();
+            const editor = page.getByTestId('itemPageWrapper');
+            await editor.getByRole('button', { name: 'Routine' }).click();
+            await editor.getByRole('button', { name: 'Save changes' }).click();
+            await expect(editor).toBeHidden();
 
             const snackbar = page.getByTestId('undoSnackbar');
             await expect(snackbar).toContainText('Routine created');
@@ -124,12 +124,12 @@ test.describe('clarify inbox item to routine', () => {
             await page.waitForSelector('text=Already actionable');
 
             await page.getByTestId('nextActionItemRow').filter({ hasText: 'Already actionable' }).click();
-            const dialog = page.getByRole('dialog', { name: 'Edit item' });
-            await expect(dialog).toBeVisible();
+            const editor = page.getByTestId('itemPageWrapper');
+            await expect(editor).toBeVisible();
 
             // The status row offers every real status but no Routine destination.
-            await expect(dialog.getByRole('button', { name: 'Waiting For' })).toBeVisible();
-            await expect(dialog.getByRole('button', { name: 'Routine' })).toHaveCount(0);
+            await expect(editor.getByRole('button', { name: 'Waiting For' })).toBeVisible();
+            await expect(editor.getByRole('button', { name: 'Routine' })).toHaveCount(0);
         });
     });
 });

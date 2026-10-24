@@ -9,10 +9,8 @@ import ListItem from '@mui/material/ListItem';
 import ListItemButton from '@mui/material/ListItemButton';
 import ListItemText from '@mui/material/ListItemText';
 import Snackbar from '@mui/material/Snackbar';
-import { useTheme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
-import useMediaQuery from '@mui/material/useMediaQuery';
 import { createFileRoute } from '@tanstack/react-router';
 import { AccountChip } from '../../components/AccountChip';
 import { AccountSyncChip } from '../../components/AccountSyncChip';
@@ -41,10 +39,8 @@ export const Route = createFileRoute('/_authenticated/tickler')({
 function TicklerPage() {
     useDocumentTitle('Tickler');
     const { db } = Route.useRouteContext();
-    const { items, routines, people, workContexts, refreshItems, isInitialSyncing } = useAppData();
-    const theme = useTheme();
-    const isMobile = useMediaQuery(theme.breakpoints.down('md'));
-    const editor = useItemEditor({ db, people, workContexts, refreshItems, isMobile });
+    const { items, routines, refreshItems, isInitialSyncing } = useAppData();
+    const editor = useItemEditor();
     useListScrollRestoration();
     const { itemsWithGhosts, isGhost, onGhostExited } = useListGhosts(items);
 
@@ -186,15 +182,13 @@ function TicklerPage() {
                                         />
                                     </ListItemButton>
                                 </ListItem>
-                                {editor.renderExpandFor(item._id)}
                                 {idx < groupItems.length - 1 && <Divider />}
                             </ListRowShell>
                         ))}
                     </List>
                 </Box>
             ))}
-            {editor.renderGlobal()}
-            <Snackbar open={editor.instantToast.open} autoHideDuration={3000} onClose={editor.closeInstantToast} message={editor.instantToast.message} />
+            <Snackbar open={editor.toast.open} autoHideDuration={3000} onClose={editor.closeToast} message={editor.toast.message} />
         </Box>
     );
 }

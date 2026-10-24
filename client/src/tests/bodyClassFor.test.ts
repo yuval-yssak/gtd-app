@@ -7,21 +7,12 @@ import styles from '../components/itemEditor/ItemEditorBody.module.css';
 
 describe('bodyClassFor', () => {
     it('adds the review density modifier only for the review presentation', () => {
-        expect(bodyClassFor('page', 'review')).toContain(styles.bodyReview);
-        expect(bodyClassFor('page', 'edit')).not.toContain(styles.bodyReview);
+        expect(bodyClassFor('review')).toContain(styles.bodyReview);
+        expect(bodyClassFor('edit')).not.toContain(styles.bodyReview);
     });
 
-    it('keeps each chrome variant on its own base class', () => {
-        expect(bodyClassFor('page', 'edit')).toBe(styles.body);
-        expect(bodyClassFor('dialog', 'edit')).toBe(styles.body);
-        expect(bodyClassFor('expand', 'edit')).toBe(styles.bodyExpand);
-        expect(bodyClassFor('popover', 'edit')).toBe(styles.bodyPopover);
-    });
-
-    it('composes the modifier onto whichever chrome hosts the review', () => {
-        // The review uses chrome="page" today, but the density must not be silently chrome-bound.
-        const expanded = bodyClassFor('expand', 'review');
-        expect(expanded).toContain(styles.bodyExpand);
-        expect(expanded).toContain(styles.bodyReview);
+    it('keeps the base body class under the review modifier', () => {
+        expect(bodyClassFor('edit')).toBe(styles.body);
+        expect(bodyClassFor('review')).toContain(styles.body);
     });
 });

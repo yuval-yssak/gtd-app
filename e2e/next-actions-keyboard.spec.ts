@@ -1,6 +1,5 @@
 import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
-import { CLARIFY_MODE_KEY } from '../client/src/lib/clarifyMode';
 import { compareNextActions } from '../client/src/lib/compareNextActions';
 import type { StoredItem } from '../client/src/types/MyDB';
 import { withOneLoggedInDevice } from './helpers/context';
@@ -115,10 +114,10 @@ test.describe('Next actions — keyboard (one tab stop, jumps, preview order)', 
 
             await rowOf(page, 'Alpha').focus();
             await page.keyboard.press('e');
-            await expect(page.getByRole('dialog')).toBeVisible();
+            await expect(page.getByTestId('itemPageWrapper')).toBeVisible();
             await expect(page.getByRole('textbox', { name: 'Title' })).toHaveValue('Alpha');
             await page.keyboard.press('Escape');
-            await expect(page.getByRole('dialog')).toHaveCount(0);
+            await expect(page.getByTestId('itemPageWrapper')).toHaveCount(0);
 
             await rowOf(page, 'Alpha').focus();
             await page.keyboard.press('c');
@@ -138,14 +137,15 @@ test.describe('Next actions — keyboard (one tab stop, jumps, preview order)', 
             await page.keyboard.press('Space');
             await expect.poll(() => geometricOrder(page)).toEqual(['Charlie', 'Alpha', 'Bravo']);
             await page.waitForTimeout(300);
-            await expect(page.getByRole('dialog')).toHaveCount(0);
+            await expect(page.getByTestId('itemPageWrapper')).toHaveCount(0);
             // Focus stays on the moved row after the drop.
             expect(await focusedRowTitle(page)).toBe('Alpha');
 
             // Enter still opens the row.
             await page.keyboard.press('Enter');
-            await expect(page.getByRole('dialog')).toBeVisible();
+            await expect(page.getByTestId('itemPageWrapper')).toBeVisible();
             await page.keyboard.press('Escape');
+            await expect(page.getByTestId('itemPageWrapper')).toHaveCount(0);
 
             // D marks the row done: it leaves the list, and focus moves on to the next live row (not the fading ghost).
             await rowOf(page, 'Bravo').focus();
@@ -250,14 +250,12 @@ test.describe('Next actions — keyboard (one tab stop, jumps, preview order)', 
         });
     });
 
-    test("the editor's Position row moves the item (inline editor and dialog); the chord legend opens", async ({ browser }) => {
+    test("the editor's Position row moves the item (opened from the list and by URL); the chord legend opens", async ({ browser }) => {
         await withOneLoggedInDevice(browser, `na-kb-position-${dayjs().valueOf()}@example.com`, async (page) => {
             const [a, _b, _c, d] = await seedUndated(page, ['Alpha', 'Bravo', 'Charlie', 'Delta']); // Delta, Charlie, Bravo, Alpha
             if (!a || !d) throw new Error('seed');
             await page.goto('/next-actions');
             await page.waitForSelector('text=Alpha');
-            await page.evaluate((key) => window.localStorage.setItem(key, 'expand'), CLARIFY_MODE_KEY);
-
             await rowOf(page, 'Alpha').click();
             const position = page.getByTestId('nextActionPositionRow');
             await expect(position).toBeVisible();
@@ -278,7 +276,7 @@ test.describe('Next actions — keyboard (one tab stop, jumps, preview order)', 
             await expect.poll(() => storedOrder(page)).toEqual(['Delta', 'Charlie', 'Alpha', 'Bravo']);
             await expect(position.getByTestId('nextActionPositionText')).toHaveText('3 of 4');
 
-            // The dialog editor on the item page offers the same row.
+            // The item page opened directly by URL offers the same row.
             await page.goto(`/item/${d._id}`);
             await expect(page.getByTestId('nextActionPositionRow')).toBeVisible();
             await page.getByTestId('nextActionPositionBottom').click();
@@ -327,7 +325,7 @@ test.describe('Next actions — keyboard (one tab stop, jumps, preview order)', 
             await expect.poll(() => geometricOrder(page)).toEqual(['Charlie', 'Bravo', 'Alpha', 'Delta']);
             await expect.poll(() => focusedRowTitle(page)).toBe('Delta');
             await page.waitForTimeout(300);
-            await expect(page.getByRole('dialog')).toHaveCount(0);
+            await expect(page.getByTestId('itemPageWrapper')).toHaveCount(0);
         });
     });
 
@@ -450,8 +448,9 @@ test.describe('Next actions — keyboard (one tab stop, jumps, preview order)', 
             await page.keyboard.press('ArrowRight');
             await expect.poll(() => focusedTestId(page)).toBe('nextActionItemEditButton');
             await page.keyboard.press('Space');
-            await expect(page.getByRole('dialog')).toBeVisible();
-            await expect(page.getByTestId('nextActionsReorderLive')).toHaveText('');
+            // Landing on the item page is the proof: a grab would have kept the list on screen.
+            await expect(page.getByTestId('itemPageWrapper')).toBeVisible();
+            await expect(page).toHaveURL(/\/item\//);
         });
     });
 
@@ -508,8 +507,6 @@ test.describe('Next actions — keyboard (one tab stop, jumps, preview order)', 
             await seedUndated(page, ['Alpha', 'Bravo', 'Charlie']); // Charlie, Bravo, Alpha
             await page.goto('/next-actions');
             await page.waitForSelector('text=Alpha');
-            await page.evaluate((key) => window.localStorage.setItem(key, 'expand'), CLARIFY_MODE_KEY);
-
             await rowOf(page, 'Alpha').click();
             const position = page.getByTestId('nextActionPositionRow');
             await expect(position).toBeVisible();
@@ -520,7 +517,8 @@ test.describe('Next actions — keyboard (one tab stop, jumps, preview order)', 
             await expect(position.getByTestId('nextActionPositionText')).toHaveText('2 of 3');
             await expect.poll(() => storedOrder(page)).toEqual(['Charlie', 'Alpha renamed', 'Bravo']);
             await gtd.flush(page);
-            await page.reload();
+            // Back on the list from scratch: the rename and the move both persisted.
+            await page.goto('/next-actions');
             await page.waitForSelector('text=Alpha renamed');
             expect(await storedOrder(page)).toEqual(['Charlie', 'Alpha renamed', 'Bravo']);
 
@@ -574,7 +572,6 @@ test.describe('Next actions — keyboard (one tab stop, jumps, preview order)', 
             await seedUndated(page, ['Alpha', 'Bravo', 'Charlie', 'Delta']); // Delta, Charlie, Bravo, Alpha
             await page.goto('/next-actions');
             await page.waitForSelector('text=Alpha');
-            await page.evaluate((key) => window.localStorage.setItem(key, 'expand'), CLARIFY_MODE_KEY);
             await gtd.setItemsReadDelay(page, 300);
 
             await rowOf(page, 'Alpha').click();
@@ -604,10 +601,10 @@ test.describe('Next actions — keyboard (one tab stop, jumps, preview order)', 
             // The status change happens through the editor on this page (its ghost, with the OLD status,
             // stays in the shared store); no reload afterwards — a reload would wipe the store and hide the bug.
             await page.getByTestId('somedayItemRow').filter({ hasText: 'Parked' }).click();
-            const dialog = page.getByRole('dialog', { name: 'Edit item' });
-            await dialog.getByRole('button', { name: 'Next Action' }).click();
-            await dialog.getByRole('button', { name: 'Save changes' }).click();
-            await expect(dialog).toBeHidden();
+            const editor = page.getByTestId('itemPageWrapper');
+            await editor.getByRole('button', { name: 'Next Action' }).click();
+            await editor.getByRole('button', { name: 'Save changes' }).click();
+            await expect(editor).toBeHidden();
             await page.getByRole('link', { name: 'Next Actions' }).click();
             // Two steps so a failure under load says which one stalled: the navigation or the list render.
             await expect(page).toHaveURL(/\/next-actions/);

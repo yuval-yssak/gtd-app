@@ -98,7 +98,7 @@ async function fetchServerItemForRoutine(userId: string, routineId: string, stat
     return body.doc;
 }
 
-test.describe('RoutineDialog cross-account reassign — atomic edit + move', () => {
+test.describe('Routine editor cross-account reassign — atomic edit + move', () => {
     // Each test scopes its /dev/reset to its unique stamped emails so concurrent specs in
     // other workers keep their session/user data.
     test('routine moves + title/rrule edits ride along; source-side generated items stay under fromUser', async ({ browser }) => {

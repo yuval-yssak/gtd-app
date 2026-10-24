@@ -1,6 +1,5 @@
 import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
-import { CLARIFY_MODE_KEY } from '../client/src/lib/clarifyMode';
 import type { StoredItem } from '../client/src/types/MyDB';
 import { withOneLoggedInDevice, withTwoLoggedInDevices } from './helpers/context';
 import { gtd } from './helpers/gtd';
@@ -169,50 +168,8 @@ test.describe('Next actions — reorder (desktop)', () => {
             await mouseDrag(page, a._id, (await rowCenterY(page, 'Bravo')) - 8);
             await expect.poll(() => rowTitles(page)).toEqual(['Dated today', 'Alpha', 'Bravo']);
             await page.waitForTimeout(400);
-            await expect(page.getByRole('dialog')).toHaveCount(0);
+            await expect(page.getByTestId('itemPageWrapper')).toHaveCount(0);
             await expect(page.getByRole('textbox', { name: 'Title' })).toHaveCount(0);
-        });
-    });
-
-    test("a drag while another row's inline editor is expanded still lands correctly (auto-scroll re-reads the mounted rows)", async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `na-reorder-expanded-${dayjs().valueOf()}@example.com`, async (page) => {
-            const [a, _b, _c] = await seedUndated(page, ['Alpha', 'Bravo', 'Charlie']); // Charlie, Bravo, Alpha
-            if (!a) throw new Error('seed');
-            await page.goto('/next-actions');
-            await page.waitForSelector('text=Alpha');
-            // After navigation: the login helper's init script pins 'dialog' on every page load, and
-            // openEditor reads the mode from localStorage at click time.
-            await page.evaluate((key) => window.localStorage.setItem(key, 'expand'), CLARIFY_MODE_KEY);
-            await page.getByTestId('nextActionItemRow').filter({ hasText: 'Bravo' }).click();
-            await expect(page.getByRole('textbox', { name: 'Title' })).toHaveValue('Bravo');
-
-            // The expanded editor pushes Alpha below the fold, where virtua UNMOUNTS it — scroll it in.
-            await page.mouse.wheel(0, 4000);
-            const handle = handleOf(page, a._id);
-            await expect(handle).toBeVisible();
-            await handle.hover();
-            const box = await handle.boundingBox();
-            if (!box) throw new Error('no handle box');
-            const x = box.x + box.width / 2;
-            await page.mouse.move(x, box.y + box.height / 2);
-            await page.mouse.down();
-            await page.mouse.move(x, box.y + box.height / 2 + 2, { steps: 2 });
-            // Park the pointer at the top edge: the hook auto-scrolls the window until Charlie mounts.
-            await page.mouse.move(x, 8, { steps: 10 });
-            const charlie = page.getByTestId('nextActionItemRow').filter({ hasText: 'Charlie' });
-            // Generous: the auto-scroll runs on requestAnimationFrame, which a loaded parallel run can starve.
-            await expect(charlie).toBeVisible({ timeout: 20_000 });
-            // Let the auto-scroll run out (top of page) before measuring the target — rows keep
-            // sliding under a pointer parked in the edge zone, so an earlier measurement goes stale.
-            await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
-            // Charlie has already shifted down by Alpha's height to open the top slot. The drop index compares the
-            // pointer with Charlie's UNTRANSFORMED midpoint (visual top − height/2), so the release goes into the upper half of the gap.
-            const charlieBox = await charlie.boundingBox();
-            if (!charlieBox) throw new Error('no Charlie box');
-            await page.mouse.move(x, charlieBox.y - charlieBox.height / 2 - 8, { steps: 10 });
-            await page.waitForTimeout(300);
-            await page.mouse.up();
-            await expect.poll(() => geometricOrder(page)).toEqual(['Alpha', 'Charlie', 'Bravo']);
         });
     });
 

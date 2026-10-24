@@ -91,7 +91,7 @@ test.describe('Routines page — week view', () => {
 
             // Clicking an entry opens the routine editor.
             await page.getByTestId('routineWeekGridEntry').first().click();
-            await expect(page.getByRole('dialog', { name: 'Edit routine' })).toBeVisible();
+            await expect(page.getByTestId('routinePageWrapper')).toBeVisible();
             await page.keyboard.press('Escape');
 
             // Deep link restores the view on load.

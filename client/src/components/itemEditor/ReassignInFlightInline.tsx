@@ -9,8 +9,7 @@ interface Props {
 }
 
 /**
- * Inline counterpart to the in-flight reassign Dialog — used by popover/expand/page wrappers
- * where a Dialog inside a non-Dialog parent would be visually wrong. Same intent: opening the
+ * Shown in place of the editor body while a cross-account reassign is in flight: opening the
  * editor on an entity with an in-flight cross-account reassign would seed ownerUserId from the
  * overlayed (target) user and a save would write IDB under the target — the misroute the
  * reassign flow exists to prevent. Refuse the edit until the move resolves.

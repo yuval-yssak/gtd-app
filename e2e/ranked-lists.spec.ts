@@ -1,6 +1,5 @@
 import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
-import { CLARIFY_MODE_KEY } from '../client/src/lib/clarifyMode';
 import { compareByRank } from '../client/src/lib/compareNextActions';
 import type { StoredItem } from '../client/src/types/MyDB';
 import { withOneLoggedInDevice } from './helpers/context';
@@ -295,27 +294,6 @@ test.describe('Item editor shortcuts and the legend everywhere', () => {
         });
     });
 
-    test('an inline editor inside the inbox list: d picks Done in the editor — the row is not marked done, nothing is copied', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `ed-inline-${dayjs().valueOf()}@example.com`, async (page) => {
-            const item = await gtd.collect(page, 'Inline target');
-            await gtd.flush(page);
-            await page.goto('/inbox');
-            await page.waitForSelector('text=Inline target');
-            await page.evaluate((key) => window.localStorage.setItem(key, 'expand'), CLARIFY_MODE_KEY);
-            await rowOf(page, 'inboxItemRow', 'Inline target').click();
-            const chip = page.locator('.MuiChip-root').filter({ hasText: /^Inbox$/ });
-            await expect(chip).toBeVisible();
-            await chip.focus();
-            await page.keyboard.press('d');
-            await expect(page.locator('.MuiChip-root').filter({ hasText: /^Done$/ })).toHaveClass(/MuiChip-filled/);
-            await page.keyboard.press('c');
-            await expect(page.locator('.MuiChip-root').filter({ hasText: /^Calendar$/ })).toHaveClass(/MuiChip-filled/);
-            await expect(page.getByTestId('quickCaptureDialog')).toHaveCount(0);
-            await expect(page.getByTestId('inboxItemCopyIdButtonFeedback')).toHaveCount(0);
-            expect((await gtd.listItems(page)).find((i) => i._id === item._id)?.status).toBe('inbox');
-        });
-    });
-
     test('in the Process Inbox wizard Cmd/Ctrl+Enter does nothing (the wizard owns its save) and no Position row shows', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `ed-wizard-${dayjs().valueOf()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'Wizard target');
@@ -511,8 +489,8 @@ test.describe('Inbox on a phone: long-press drag', () => {
                 await touch(cdp, 'touchStart', [start]);
                 await glide(page, cdp, start, { x: start.x + 150, y: start.y }, 10);
                 await touch(cdp, 'touchEnd', []);
-                // The right swipe opens the editor preset to Next Action.
-                await expect(page.getByRole('button', { name: 'Next Action' })).toHaveClass(/MuiChip-filled/);
+                // The right swipe opens the editor (the item page) preset to Next Action.
+                await expect(page.getByTestId('itemPageWrapper').getByRole('button', { name: 'Next Action', exact: true })).toHaveClass(/MuiChip-filled/);
             },
             PHONE,
         );

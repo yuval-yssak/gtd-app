@@ -85,7 +85,7 @@ function ItemPage() {
     // A blank title falls back to the header's label rather than a bare app name.
     useDocumentTitle(item?.title.trim() || 'Edit item');
 
-    // Page mode doesn't use useItemEditor, so we own a tiny local snackbar slot to surface the
+    // The page doesn't use useItemEditor, so it owns a tiny local snackbar slot to surface the
     // fromGmail-read-only warning when the body's done-transition save fires the callback.
     // Declared before the not-found early return so the hook order stays stable across renders.
     const [toast, setToast] = useState<{ open: boolean; message: string }>({ open: false, message: '' });
@@ -109,7 +109,7 @@ function ItemPage() {
         [],
     );
 
-    // ESC on the not-found branch, where ItemEditorBody (which owns the page-chrome ESC handling)
+    // ESC on the not-found branch, where ItemEditorBody (which owns the editor's ESC handling)
     // never mounts — mirrors its "Go back" button. Enabled only then, so exactly one listener is
     // active at a time. Declared before the early return to keep hook order stable.
     usePageEscapeToClose({ enabled: !item, onEscape: () => window.history.back() });
@@ -177,7 +177,6 @@ function ItemPage() {
                     onClose={goBack}
                     onSaved={refreshItems}
                     onFromGmailReadOnly={onFromGmailReadOnly}
-                    chrome="page"
                     hasHostCopyIdButton
                     {...(initialStatus ? { initialStatus } : {})}
                 />

@@ -1,4 +1,4 @@
-/* Layout for the body in dialog/page modes — chrome wrappers handle their own outer padding */
+/* The body is a bare flex column — hosts handle their own outer padding */
 .body {
     display: flex;
     flex-direction: column;
@@ -19,24 +19,6 @@
     --notes-max-height: 30vh;
 }
 
-/* Expand variant renders below a row, so it needs a top border separator and tighter padding */
-.bodyExpand {
-    padding: 0.5rem 1rem 1rem;
-    border-top: 0.0625rem solid var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-}
-
-/* Popover variant — fixed-ish width so the form has predictable layout when anchored to a chip */
-.bodyPopover {
-    padding: 1rem;
-    width: min(28rem, 92vw);
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-}
-
 .statusLabel {
     text-transform: uppercase;
     letter-spacing: 0.0313rem;
@@ -44,10 +26,6 @@
 
 .statusChips {
     margin-top: 0.5rem;
-}
-
-.tabs {
-    margin-bottom: 0.5rem;
 }
 
 .preview {
@@ -99,12 +77,6 @@
 
 /* Markdown content styling lives in MarkdownPreview.module.css — .preview is just the shell. */
 
-.empty {
-    color: var(--mui-palette-text-secondary, rgba(0, 0, 0, 0.6));
-    font-style: italic;
-}
-
-/* Inline action row used by non-dialog chromes (popover/expand/page) — Dialog uses MUI's DialogActions */
 .inlineActions {
     display: flex;
     flex-wrap: wrap;

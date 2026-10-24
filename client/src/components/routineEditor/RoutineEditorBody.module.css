@@ -1,22 +1,8 @@
-/* Layout for the body in dialog/page modes — chrome wrappers handle their own outer padding */
+/* The body is a bare flex column — hosts handle their own outer padding */
 .body {
     display: flex;
     flex-direction: column;
     gap: 1.5rem;
-}
-
-/* Expand variant renders below a row, so it needs a top border separator and tighter padding */
-.bodyExpand {
-    composes: body;
-    padding: 0.5rem 1rem 1rem;
-    border-top: 0.0625rem solid var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
-}
-
-/* Popover variant — fixed-ish width so the form has predictable layout when anchored to a chip */
-.bodyPopover {
-    composes: body;
-    padding: 1rem;
-    width: min(28rem, 92vw);
 }
 
 .sectionLabel {
@@ -49,7 +35,6 @@
     cursor: default;
 }
 
-/* Inline action row used by non-dialog chromes (popover/expand/page) — Dialog uses MUI's DialogActions */
 .inlineActions {
     display: flex;
     gap: 0.5rem;

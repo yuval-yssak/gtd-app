@@ -3,7 +3,6 @@ import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
 
-const CLARIFY_MODE_KEY = 'gtd:inlineClarifyMode';
 // Mirrors SYNC_FLUSH_LOCK in client/src/db/crossContextLock.ts — the Web Lock every context's
 // flushSyncQueue serializes on. Holding it from the page models a Service Worker / sibling tab mid-flush.
 const SYNC_FLUSH_LOCK = 'gtd-sync-flush';
@@ -111,15 +110,6 @@ test.describe('Calendar list — mark done', () => {
 
             await page.goto('/calendar');
             await page.waitForSelector('text=Page-mode calendar done');
-
-            // Flip to page mode so clicking a row navigates into /item/:id.
-            await page.evaluate(
-                (args) => {
-                    localStorage.setItem(args.key, 'page');
-                    window.dispatchEvent(new StorageEvent('storage', { key: args.key, newValue: 'page' }));
-                },
-                { key: CLARIFY_MODE_KEY },
-            );
 
             await page.getByTestId('calendarItemRow').filter({ hasText: 'Page-mode calendar done' }).click();
             await expect(page).toHaveURL(new RegExp(`/item/${calItem._id}`));

@@ -43,7 +43,6 @@ import { ListSearchButton, ListSearchField } from '../../components/ListSearch';
 import { ListSkeleton } from '../../components/ListSkeleton';
 import { MarkdownNotesEditor, NOTES_PLACEHOLDER } from '../../components/markdown/MarkdownNotesEditor';
 import { MarkdownPreview } from '../../components/markdown/MarkdownPreview';
-import { batchChromeFor, ProcessInboxWizard } from '../../components/ProcessInboxWizard';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { RowActionButton } from '../../components/RowActionButton';
 import { RankedListChrome } from '../../components/rankedList/RankedListChrome';
@@ -62,9 +61,7 @@ import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import { useListSearch } from '../../hooks/useListSearch';
 import { type RankedListApi, useRankedList } from '../../hooks/useRankedList';
 import { useSwipeGesture } from '../../hooks/useSwipeGesture';
-import { CLARIFY_MODE_KEY, parseClarifyMode } from '../../lib/clarifyMode';
-import { compareByRank } from '../../lib/compareNextActions';
-import { filterItemsByQuery } from '../../lib/itemSearch';
+import { inboxItemsInOrder } from '../../lib/inboxOrder';
 import { parseListQuerySearch } from '../../lib/listQueryUrlParams';
 import { flatSection, itemRows } from '../../lib/nextActionSections';
 import { ownerIdsOfStatus } from '../../lib/rankSections';
@@ -299,14 +296,13 @@ function InboxPage() {
     useDocumentTitle('Inbox');
     const { db } = Route.useRouteContext();
     const { q } = Route.useSearch();
-    const { account, items, workContexts, people, routines, refreshItems, isInitialSyncing } = useAppData();
+    const { account, items, routines, refreshItems, isInitialSyncing } = useAppData();
     const navigate = useNavigate();
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
     const captureFieldRef = useAutoFocus();
 
-    // Inbox is the only page where 'instant' fires the no-fields nextAction shortcut.
-    const editor = useItemEditor({ db, people, workContexts, refreshItems, allowInstantNextAction: true, isMobile });
+    const editor = useItemEditor();
 
     const [draft, setDraft] = useState('');
     const [notes, setNotes] = useState('');
@@ -357,14 +353,6 @@ function InboxPage() {
         draftAutosave.onChange({ title: nextTitle, notes: nextNotes });
     }
 
-    // Batch "Process Inbox" wizard — same ItemEditorBody as single-item editing, just sequenced.
-    // Snapshot the items at the moment "Process Inbox" is clicked so saves that move items out
-    // of the inbox don't shrink the array mid-walk and skew the wizard's index. Trade-off: if
-    // another device updates the same item mid-wizard, the wizard edits the stale snapshot row
-    // and a save would clobber the remote update (last-write-wins). Acceptable — the alternative
-    // (live array) drops items from under the index and is strictly worse.
-    const [batchSnapshot, setBatchSnapshot] = useState<StoredItem[] | null>(null);
-
     // Mobile bottom sheet — reachable via the per-row "more" button. Tap on the row body now
     // opens the unified editor instead.
     const [bottomSheetItem, setBottomSheetItem] = useState<StoredItem | null>(null);
@@ -378,16 +366,7 @@ function InboxPage() {
     // Deferred query: typing re-filters in an interruptible background render (see useListSearch).
     const { deferredQuery } = search;
     // The manual order (`rank`; a capture is minted at the top, so untouched it stays newest-first).
-    const inboxItems = useMemo(
-        () =>
-            [
-                ...filterItemsByQuery(
-                    itemsWithGhosts.filter((item) => item.status === 'inbox'),
-                    deferredQuery,
-                ),
-            ].sort(compareByRank),
-        [itemsWithGhosts, deferredQuery],
-    );
+    const inboxItems = useMemo(() => inboxItemsInOrder(itemsWithGhosts, deferredQuery), [itemsWithGhosts, deferredQuery]);
     // One section, no header: the whole inbox is one manual order (see lib/rankSections).
     const inboxSections = useMemo(() => [flatSection('inbox', 'Inbox', inboxItems)], [inboxItems]);
     // Every account of the merged inbox (visible rows or not) shares the keyspace a re-key must see.
@@ -440,23 +419,16 @@ function InboxPage() {
     }
 
     function openWithStatus(item: StoredItem, status: EditableStatus, clickEvent?: React.MouseEvent<HTMLElement>) {
-        editor.openEditor({ item, initialStatus: status, ...(clickEvent ? { anchor: clickEvent.currentTarget, event: clickEvent } : {}) });
+        editor.openEditor({ item, initialStatus: status, event: clickEvent });
     }
 
-    // Deliberate: with an in-page search active, the wizard batches only the matching items
-    // (liveInboxItems derives from the query-filtered list) — "process what I searched for".
+    // Deliberate: with an in-page search active, the wizard batches only the matching items (the
+    // page re-applies the same query) — "process what I searched for".
     function startProcessInbox() {
         if (liveInboxItems.length === 0) {
             return;
         }
-        // page mode is the only chrome that needs route navigation; every other setting flows
-        // into the in-place dialog wizard (popover/expand/instant don't make sense for batch).
-        const chrome = batchChromeFor(parseClarifyMode(localStorage.getItem(CLARIFY_MODE_KEY)));
-        if (chrome === 'page') {
-            void navigate({ to: '/process-inbox' });
-            return;
-        }
-        setBatchSnapshot(liveInboxItems);
+        void navigate({ to: '/process-inbox', search: { q: deferredQuery.trim() || undefined } });
     }
 
     return (
@@ -700,8 +672,6 @@ function InboxPage() {
                                         </ListItem>
                                     )}
 
-                                    {editor.renderExpandFor(item._id)}
-
                                     {!isLastInSection && <Divider />}
                                 </ListRowShell>
                             );
@@ -710,20 +680,8 @@ function InboxPage() {
                 </List>
             )}
 
-            {editor.renderGlobal()}
-            <Snackbar open={editor.instantToast.open} autoHideDuration={3000} onClose={editor.closeInstantToast} message={editor.instantToast.message} />
+            <Snackbar open={editor.toast.open} autoHideDuration={3000} onClose={editor.closeToast} message={editor.toast.message} />
             {hiddenAccountNotice}
-
-            {batchSnapshot && (
-                <ProcessInboxWizard
-                    items={batchSnapshot}
-                    db={db}
-                    people={people}
-                    workContexts={workContexts}
-                    onClose={() => setBatchSnapshot(null)}
-                    onItemProcessed={refreshItems}
-                />
-            )}
 
             {/* Keyboard hints, the reorder announcer, the failure toast and the Move to sheet. */}
             <RankedListChrome ranked={ranked} actions={RANKED_LIST_ROW_ACTIONS} sectionNoun="list" liveTestId="inboxReorderLive" />

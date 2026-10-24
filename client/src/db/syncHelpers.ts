@@ -452,7 +452,7 @@ let sessionGate: Promise<void> = Promise.resolve();
 /**
  * Hard deadline for any single gate task. A stalled fetch (e.g. a session pivot retrying behind
  * a slow Google Calendar API call) used to wedge the gate forever, blocking every queued caller —
- * surfaced as the EditItemDialog hang on cross-account reassign. After this deadline the gate is
+ * surfaced as the item editor hanging on cross-account reassign. After this deadline the gate is
  * released so queued tasks proceed; the original task keeps running and its eventual settlement
  * is logged but does not block the caller chain.
  *

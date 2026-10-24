@@ -641,7 +641,7 @@ export async function hardDeletePastItems(db: IDBPDatabase<MyDB>, items: StoredI
  * materialize the first item. Runs on app boot and after each sync pull.
  *
  * Coverage map:
- *   - In-app routine create (`RoutineDialog` → `createRoutine` + `createFirstRoutineItem`):
+ *   - In-app routine create (the routine editor → `createRoutine` + `createFirstRoutineItem`):
  *     the client already produces an item directly; this tick is a no-op.
  *   - Public-API routine create (`POST /v1/routines`): the server materializes the first item
  *     server-side; this tick is a no-op once that op syncs in.

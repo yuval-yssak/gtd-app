@@ -29,20 +29,20 @@ test.describe('Calendar — event links (meeting link, location, open-in-GCal)',
             await page.waitForSelector('text=Weekly standup');
 
             await page.getByTestId('calendarItemEditButton').first().click();
-            const dialog = page.getByRole('dialog');
-            await expect(dialog).toBeVisible();
+            const editor = page.getByTestId('itemPageWrapper');
+            await expect(editor).toBeVisible();
 
             // Join link is labeled per provider and points at the Meet URL in a new tab.
-            const join = dialog.getByTestId('meetingLinkButton');
+            const join = editor.getByTestId('meetingLinkButton');
             await expect(join).toBeVisible();
             await expect(join).toHaveText('Join Google Meet');
             await expect(join).toHaveAttribute('href', 'https://meet.google.com/abc-defg-hij');
             await expect(join).toHaveAttribute('target', '_blank');
             await expect(join).toHaveAttribute('rel', /noopener/);
 
-            await expect(dialog.getByTestId('eventLocation')).toHaveText('HQ Room 4B');
+            await expect(editor.getByTestId('eventLocation')).toHaveText('HQ Room 4B');
 
-            const openInGcal = dialog.getByTestId('openInGCalLink');
+            const openInGcal = editor.getByTestId('openInGCalLink');
             await expect(openInGcal).toHaveAttribute('href', 'https://calendar.google.com/event?eid=standup');
             await expect(openInGcal).toHaveAttribute('target', '_blank');
         });
@@ -59,12 +59,12 @@ test.describe('Calendar — event links (meeting link, location, open-in-GCal)',
             await page.waitForSelector('text=Solo focus block');
 
             await page.getByTestId('calendarItemEditButton').first().click();
-            const dialog = page.getByRole('dialog');
-            await expect(dialog).toBeVisible();
+            const editor = page.getByTestId('itemPageWrapper');
+            await expect(editor).toBeVisible();
 
-            await expect(dialog.getByTestId('meetingLinkButton')).toHaveCount(0);
-            await expect(dialog.getByTestId('eventLocation')).toHaveCount(0);
-            await expect(dialog.getByTestId('openInGCalLink')).toHaveCount(0);
+            await expect(editor.getByTestId('meetingLinkButton')).toHaveCount(0);
+            await expect(editor.getByTestId('eventLocation')).toHaveCount(0);
+            await expect(editor.getByTestId('openInGCalLink')).toHaveCount(0);
         });
     });
 });

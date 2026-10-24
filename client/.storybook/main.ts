@@ -4,6 +4,9 @@ import type { StorybookConfig } from '@storybook/react-vite';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+// The modules behind package.json's `#api/*` import aliases (each has a `.mock.ts` test seam).
+const API_SEAM_MODULES = ['syncClient', 'syncApi', 'accountApi'];
+
 const config: StorybookConfig = {
     stories: ['../src/**/*.stories.tsx'],
     // @storybook/addon-essentials is bundled into storybook v10 core — no longer a separate addon
@@ -23,16 +26,16 @@ const config: StorybookConfig = {
         });
 
         // Storybook 10 enables Vitest Browser Mode internally, which causes Vite to apply
-        // the "test" package.json condition. That resolves #api/syncClient to the mock
-        // companion (syncClient.mock.ts), which imports `vi` from vitest. Vitest's chai
+        // the "test" package.json condition. That resolves every `#api/*` import to its mock
+        // companion (`*.mock.ts`), which imports `vi` from vitest. Vitest's chai
         // initialisation then crashes because the vitest runner context doesn't exist in
-        // the browser. Force the alias to the real implementation to prevent this.
-        const realSyncClientPath = resolve(__dirname, '../src/api/syncClient.ts');
+        // the browser. Force each alias to the real implementation to prevent this.
+        const realApiAliases = API_SEAM_MODULES.map((name) => ({ find: `#api/${name}`, replacement: resolve(__dirname, `../src/api/${name}.ts`) }));
         config.resolve ??= {};
         if (Array.isArray(config.resolve.alias)) {
-            config.resolve.alias.push({ find: '#api/syncClient', replacement: realSyncClientPath });
+            config.resolve.alias.push(...realApiAliases);
         } else {
-            config.resolve.alias = { ...config.resolve.alias, '#api/syncClient': realSyncClientPath };
+            config.resolve.alias = { ...config.resolve.alias, ...Object.fromEntries(realApiAliases.map(({ find, replacement }) => [find, replacement])) };
         }
 
         return config;

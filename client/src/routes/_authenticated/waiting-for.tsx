@@ -10,12 +10,10 @@ import ListItem from '@mui/material/ListItem';
 import ListItemButton from '@mui/material/ListItemButton';
 import ListItemText from '@mui/material/ListItemText';
 import Snackbar from '@mui/material/Snackbar';
-import { useTheme } from '@mui/material/styles';
 import ToggleButton from '@mui/material/ToggleButton';
 import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
-import useMediaQuery from '@mui/material/useMediaQuery';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import { useMemo } from 'react';
@@ -63,10 +61,8 @@ function WaitingForPage() {
     const { db } = Route.useRouteContext();
     const { sortBy = 'person' } = Route.useSearch();
     const navigate = useNavigate();
-    const { items, people, allPeople, routines, workContexts, refreshItems, isInitialSyncing } = useAppData();
-    const theme = useTheme();
-    const isMobile = useMediaQuery(theme.breakpoints.down('md'));
-    const editor = useItemEditor({ db, people, workContexts, refreshItems, isMobile });
+    const { items, allPeople, routines, refreshItems, isInitialSyncing } = useAppData();
+    const editor = useItemEditor();
     useListScrollRestoration();
     const { itemsWithGhosts, isGhost, onGhostExited } = useListGhosts(items);
     // Shared day clock so the overdue highlight rolls at local midnight without a reload.
@@ -198,7 +194,6 @@ function WaitingForPage() {
                         />
                     </ListItemButton>
                 </ListItem>
-                {editor.renderExpandFor(item._id)}
                 {!isLast && <Divider />}
             </ListRowShell>
         );
@@ -328,8 +323,7 @@ function WaitingForPage() {
                   ))}
             {/* Keyboard hints, the reorder announcer, the failure toast and the Move to sheet ("By date"). */}
             <RankedListChrome ranked={ranked} actions={RANKED_LIST_ROW_ACTIONS} sectionNoun="day" liveTestId="waitingForReorderLive" />
-            {editor.renderGlobal()}
-            <Snackbar open={editor.instantToast.open} autoHideDuration={3000} onClose={editor.closeInstantToast} message={editor.instantToast.message} />
+            <Snackbar open={editor.toast.open} autoHideDuration={3000} onClose={editor.closeToast} message={editor.toast.message} />
         </Box>
     );
 }

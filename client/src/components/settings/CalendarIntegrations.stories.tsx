@@ -1,44 +1,14 @@
 import type { Decorator, Meta, StoryObj } from '@storybook/react';
 import { useEffect, useRef } from 'react';
-import { fn } from 'storybook/test';
 import { SettingsRouterDecorator } from '../../../.storybook/RouterDecorator';
 import type { CalendarIntegration } from '../../api/calendarApi';
-import type { AppData } from '../../contexts/AppDataProvider';
 import { AppDataContext } from '../../contexts/AppDataProvider';
+import { buildMockAppData } from '../../test-utils/storybookAppData';
 import { CalendarIntegrations } from './CalendarIntegrations';
 
 // ── Mock AppData context value ─────────────────────────────────────────────────
 
-const mockAppData: AppData = {
-    account: null,
-    loggedInAccounts: [],
-    loggedInUserIds: [],
-    items: [],
-    workContexts: [],
-    people: [],
-    routines: [],
-    reviewInboxes: [],
-    itemBriefs: [],
-    allItems: [],
-    allWorkContexts: [],
-    allPeople: [],
-    allRoutines: [],
-    allReviewInboxes: [],
-    allItemBriefs: [],
-    refreshItems: fn().mockResolvedValue(undefined),
-    refreshWorkContexts: fn().mockResolvedValue(undefined),
-    refreshPeople: fn().mockResolvedValue(undefined),
-    refreshRoutines: fn().mockResolvedValue(undefined),
-    refreshReviewInboxes: fn().mockResolvedValue(undefined),
-    refreshItemBriefs: fn().mockResolvedValue(undefined),
-    refreshAccounts: fn().mockResolvedValue(undefined),
-    syncAndRefresh: fn().mockResolvedValue(undefined),
-    isInitialSyncing: false,
-    isCalendarSyncing: false,
-    // Identity passthrough in Storybook — no real session to pivot. Runs the wrapped mutation as-is.
-    withActiveAccountSession: (task) => task(),
-    withOwnerSession: (_userId, task) => task(),
-};
+const mockAppData = buildMockAppData();
 
 const MockAppDataDecorator: Decorator = (Story) => (
     <AppDataContext.Provider value={mockAppData}>

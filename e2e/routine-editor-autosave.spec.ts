@@ -15,15 +15,15 @@ test.describe('routine editor — title/notes autosave', () => {
             await page.goto('/routines');
 
             await page.getByTestId('routineRow').filter({ hasText: 'Water the plants' }).click();
-            const dialog = page.getByRole('dialog', { name: 'Edit routine' });
-            await dialog.getByLabel('Title').fill('Water all the plants');
+            const editor = page.getByTestId('routinePageWrapper');
+            await editor.getByLabel('Title').fill('Water all the plants');
 
             await expect(page.getByTestId('undoSnackbar')).toBeVisible();
             await expect.poll(async () => (await gtd.listRoutines(page)).map((r) => r.title)).toContain('Water all the plants');
 
             await page.getByTestId('undoSnackbarButton').click();
             await expect.poll(async () => (await gtd.listRoutines(page)).map((r) => r.title)).toContain('Water the plants');
-            await expect(dialog.getByLabel('Title')).toHaveValue('Water the plants');
+            await expect(editor.getByLabel('Title')).toHaveValue('Water the plants');
         });
     });
 
@@ -33,14 +33,14 @@ test.describe('routine editor — title/notes autosave', () => {
             await page.goto('/routines');
 
             await page.getByTestId('routineRow').filter({ hasText: 'Weekly review' }).click();
-            const dialog = page.getByRole('dialog', { name: 'Edit routine' });
+            const editor = page.getByTestId('routinePageWrapper');
             // Structural change: flip Ends mode. Wait past the autosave debounce, then verify
             // nothing was persisted before closing without Save.
-            await dialog.getByRole('button', { name: 'After N' }).click();
+            await editor.getByRole('button', { name: 'After N' }).click();
             await page.waitForTimeout(1200);
             const beforeClose = (await gtd.listRoutines(page)).find((r) => r._id === routine._id);
             expect(beforeClose?.rrule).toBe('FREQ=DAILY;INTERVAL=1');
-            await dialog.getByRole('button', { name: 'Cancel' }).click();
+            await editor.getByRole('button', { name: 'Cancel' }).click();
 
             const after = (await gtd.listRoutines(page)).find((r) => r._id === routine._id);
             expect(after?.rrule).toBe('FREQ=DAILY;INTERVAL=1');
@@ -58,21 +58,21 @@ test.describe('routine editor — live merge while open', () => {
 
             await page1.goto('/routines');
             await page1.getByTestId('routineRow').filter({ hasText: 'Merge routine' }).click();
-            const dialog = page1.getByRole('dialog', { name: 'Edit routine' });
-            await expect(dialog.getByLabel('Title')).toHaveValue('Merge routine');
+            const editor = page1.getByTestId('routinePageWrapper');
+            await expect(editor.getByLabel('Title')).toHaveValue('Merge routine');
 
             // Clean title → adopted silently.
             const onDevice2 = (await gtd.listRoutines(page2)).find((r) => r._id === routine._id);
             if (!onDevice2) throw new Error('routine did not reach device 2');
             await gtd.updateRoutine(page2, { ...onDevice2, title: 'Merge routine (remote)' });
             await gtd.flush(page2);
-            await expect(dialog.getByLabel('Title')).toHaveValue('Merge routine (remote)', { timeout: 15_000 });
+            await expect(editor.getByLabel('Title')).toHaveValue('Merge routine (remote)', { timeout: 15_000 });
             await expect(page1.getByTestId('routineEditorConflictNotice')).toHaveCount(0);
 
             // Now dirty a STRUCTURAL field locally (Ends mode — not autosaved, pending until Save),
             // then change the same concept remotely → conflict notice. Text fields converge via
             // autosave + adoption, so a durable conflict needs a structural field.
-            await dialog.getByRole('button', { name: 'After N' }).click();
+            await editor.getByRole('button', { name: 'After N' }).click();
             await gtd.pull(page2);
             const latestRemote = (await gtd.listRoutines(page2)).find((r) => r._id === routine._id);
             if (!latestRemote) throw new Error('routine missing on device 2');
@@ -86,7 +86,7 @@ test.describe('routine editor — live merge while open', () => {
             // "Use their version" adopts the remote UNTIL clause → Ends mode becomes "On date".
             await page1.getByTestId('routineEditorUseTheirs').click();
             await expect(notice).toHaveCount(0);
-            await expect(dialog.getByLabel('End date')).toHaveValue('2027-01-01');
+            await expect(editor.getByLabel('End date')).toHaveValue('2027-01-01');
         });
     });
 });

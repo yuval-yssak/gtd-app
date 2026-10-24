@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { buildClarifyToDoneOpts, decideSavePath } from '../components/editItemDialogLogic';
 
-// Locks in the EditItemDialog Save invariants that fix the cross-account corruption bug:
+// Locks in the item editor Save invariants that fix the cross-account corruption bug:
 // - ownerChanged && statusChanged → block (the server's reassign path doesn't run the
 //   clarify-style status-transition pipeline; combining them would silently lose fields).
 // - ownerChanged !statusChanged → reassign-only (and crucially: NEVER saveInPlace, because

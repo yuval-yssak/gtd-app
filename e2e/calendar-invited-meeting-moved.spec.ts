@@ -199,10 +199,10 @@ test.describe('calendar — invited meeting moved by organizer', () => {
             // either way the user perceives "I accepted the meeting".
             await page.waitForSelector('text=Roadmap review');
             await page.getByTestId('calendarItemEditButton').first().click();
-            const dialog = page.getByRole('dialog');
-            await expect(dialog).toBeVisible();
-            await dialog.getByTestId('meetingDetailsSummary').click();
-            await dialog.getByTestId('rsvp-accepted').click();
+            const editor = page.getByTestId('itemPageWrapper');
+            await expect(editor).toBeVisible();
+            await editor.getByTestId('meetingDetailsSummary').click();
+            await editor.getByTestId('rsvp-accepted').click();
             // Wait for the online-attempt → offline-fallback chain to land the optimistic RSVP in
             // IDB (deterministic, unlike a fixed sleep), then close the editor.
             await expect

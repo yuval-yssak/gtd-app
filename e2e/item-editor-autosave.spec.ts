@@ -15,8 +15,8 @@ test.describe('item editor — title/notes autosave', () => {
             await page.waitForSelector('text=Autosave me');
 
             await page.getByRole('button', { name: 'Edit' }).first().click();
-            const dialog = page.getByRole('dialog', { name: 'Edit item' });
-            await dialog.getByLabel('Title').fill('Autosaved title');
+            const editor = page.getByTestId('itemPageWrapper');
+            await editor.getByLabel('Title').fill('Autosaved title');
 
             // No Save click — the debounce commits and offers Undo.
             await expect(page.getByTestId('undoSnackbar')).toBeVisible();
@@ -25,20 +25,20 @@ test.describe('item editor — title/notes autosave', () => {
             await page.getByTestId('undoSnackbarButton').click();
             await expect.poll(async () => (await gtd.listItems(page)).map((i) => i.title)).toContain('Autosave me');
             // The open editor reflects the undo too.
-            await expect(dialog.getByLabel('Title')).toHaveValue('Autosave me');
+            await expect(editor.getByLabel('Title')).toHaveValue('Autosave me');
         });
     });
 
-    test('closing the dialog right after typing persists the tail of the burst (flush-on-unmount)', async ({ browser }) => {
+    test('closing the editor right after typing persists the tail of the burst (flush-on-unmount)', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `item-autosave-flush-${dayjs().valueOf()}@example.com`, async (page) => {
             await gtd.collect(page, 'Quick edit');
             await page.goto('/inbox');
             await page.waitForSelector('text=Quick edit');
 
             await page.getByRole('button', { name: 'Edit' }).first().click();
-            const dialog = page.getByRole('dialog', { name: 'Edit item' });
-            await dialog.getByLabel('Title').fill('Quick edit — typed and closed');
-            await dialog.getByRole('button', { name: 'Cancel' }).click();
+            const editor = page.getByTestId('itemPageWrapper');
+            await editor.getByLabel('Title').fill('Quick edit — typed and closed');
+            await editor.getByRole('button', { name: 'Cancel' }).click();
 
             await expect.poll(async () => (await gtd.listItems(page)).map((i) => i.title)).toContain('Quick edit — typed and closed');
         });
@@ -51,12 +51,12 @@ test.describe('item editor — title/notes autosave', () => {
             await page.waitForSelector('text=Structure stays');
 
             await page.getByRole('button', { name: 'Edit' }).first().click();
-            const dialog = page.getByRole('dialog', { name: 'Edit item' });
-            await dialog.getByLabel('Title').fill('Structure stays — renamed');
+            const editor = page.getByTestId('itemPageWrapper');
+            await editor.getByLabel('Title').fill('Structure stays — renamed');
             // Structural edit: pick a status chip, then Cancel instead of Save.
-            await dialog.getByRole('button', { name: 'Next Action' }).click();
+            await editor.getByRole('button', { name: 'Next Action' }).click();
             await expect(page.getByTestId('undoSnackbar')).toBeVisible(); // title committed
-            await dialog.getByRole('button', { name: 'Cancel' }).click();
+            await editor.getByRole('button', { name: 'Cancel' }).click();
 
             await expect.poll(async () => (await gtd.listItems(page)).map((i) => i.title)).toContain('Structure stays — renamed');
             const item = (await gtd.listItems(page)).find((i) => i.title === 'Structure stays — renamed');
@@ -75,9 +75,9 @@ test.describe('item editor — save undo snackbar', () => {
             // UI-driven clarify: move to Next Action and commit via the explicit Save button,
             // which closes the editor and offers the "Item updated" undo with a View link.
             await page.getByRole('button', { name: 'Edit' }).first().click();
-            const dialog = page.getByRole('dialog', { name: 'Edit item' });
-            await dialog.getByRole('button', { name: 'Next Action' }).click();
-            await dialog.getByRole('button', { name: 'Save changes' }).click();
+            const editor = page.getByTestId('itemPageWrapper');
+            await editor.getByRole('button', { name: 'Next Action' }).click();
+            await editor.getByRole('button', { name: 'Save changes' }).click();
 
             // The save undo offer carries a View link back to the just-clarified item.
             const viewButton = page.getByTestId('undoSnackbarViewButton');
@@ -97,8 +97,8 @@ test.describe('item editor — save undo snackbar', () => {
             await page.waitForSelector('text=Close me');
 
             await page.getByRole('button', { name: 'Edit' }).first().click();
-            const dialog = page.getByRole('dialog', { name: 'Edit item' });
-            await dialog.getByLabel('Title').fill('Close me — renamed');
+            const editor = page.getByTestId('itemPageWrapper');
+            await editor.getByLabel('Title').fill('Close me — renamed');
             await expect(page.getByTestId('undoSnackbar')).toBeVisible();
 
             // Close dismisses immediately (it hides action buttons underneath) but keeps the save.
@@ -118,13 +118,13 @@ test.describe('item editor — save undo snackbar', () => {
             await page.waitForSelector('text=Mid burst');
 
             await page.getByRole('button', { name: 'Edit' }).first().click();
-            const dialog = page.getByRole('dialog', { name: 'Edit item' });
-            await dialog.getByLabel('Title').fill('Mid burst — first');
+            const editor = page.getByTestId('itemPageWrapper');
+            await editor.getByLabel('Title').fill('Mid burst — first');
             await expect(page.getByTestId('undoSnackbar')).toBeVisible();
             await page.getByTestId('undoSnackbarCloseButton').click();
 
             // endBurst() only re-baselines the undo; the debounce for this second edit must still fire.
-            await dialog.getByLabel('Title').fill('Mid burst — second');
+            await editor.getByLabel('Title').fill('Mid burst — second');
             await expect.poll(async () => (await gtd.listItems(page)).map((i) => i.title)).toContain('Mid burst — second');
         });
     });
@@ -138,8 +138,8 @@ test.describe('item editor — creation date', () => {
             await page.waitForSelector('text=Created stamp');
 
             await page.getByRole('button', { name: 'Edit' }).first().click();
-            const dialog = page.getByRole('dialog', { name: 'Edit item' });
-            const created = dialog.getByTestId('itemEditorCreatedAt');
+            const editor = page.getByTestId('itemPageWrapper');
+            const created = editor.getByTestId('itemEditorCreatedAt');
             // Two independent assertions: the regex pins the display format (a self-derived
             // dayjs.format() on both sides could not catch a format regression), and the
             // toContainText proves it renders *this* item's date rather than a constant.
@@ -164,8 +164,8 @@ test.describe('item editor — live merge while open', () => {
             await page1.goto('/inbox');
             await page1.waitForSelector('text=Merge target');
             await page1.getByRole('button', { name: 'Edit' }).first().click();
-            const dialog = page1.getByRole('dialog', { name: 'Edit item' });
-            await expect(dialog.getByLabel('Title')).toHaveValue('Merge target');
+            const editor = page1.getByTestId('itemPageWrapper');
+            await expect(editor.getByLabel('Title')).toHaveValue('Merge target');
             // The rename must arrive live: wait until device 1's channel (re)connected after the navigation,
             // or a broadcast sent while it is still connecting is lost (opening a channel does not pull).
             await expect.poll(async () => (await gtd.sseConnectedUserIds(page1)).length).toBeGreaterThan(0);
@@ -177,7 +177,7 @@ test.describe('item editor — live merge while open', () => {
             await gtd.flush(page2);
 
             // SSE → pull → live merge adopts the clean field. No conflict notice.
-            await expect(dialog.getByLabel('Title')).toHaveValue('Renamed remotely', { timeout: 15_000 });
+            await expect(editor.getByLabel('Title')).toHaveValue('Renamed remotely', { timeout: 15_000 });
             await expect(page1.getByTestId('itemEditorConflictNotice')).toHaveCount(0);
         });
     });
@@ -192,9 +192,9 @@ test.describe('item editor — live merge while open', () => {
             await page1.goto('/inbox');
             await page1.waitForSelector('text=Conflict target');
             await page1.getByRole('button', { name: 'Edit' }).first().click();
-            const dialog = page1.getByRole('dialog', { name: 'Edit item' });
+            const editor = page1.getByTestId('itemPageWrapper');
             // Dirty the status locally (structural — not autosaved, stays pending until Save).
-            await dialog.getByRole('button', { name: 'Waiting For' }).click();
+            await editor.getByRole('button', { name: 'Waiting For' }).click();
 
             // Device 2 moves the same item to Someday/Maybe.
             const onDevice2 = (await gtd.listItems(page2)).find((i) => i._id === item._id);
@@ -209,7 +209,7 @@ test.describe('item editor — live merge while open', () => {
             await page1.getByTestId('itemEditorUseTheirs').click();
             await expect(notice).toHaveCount(0);
             // Someday/Maybe explainer copy proves the adopted status now drives the form.
-            await expect(dialog.getByText('Parked for later review', { exact: false })).toBeVisible();
+            await expect(editor.getByText('Parked for later review', { exact: false })).toBeVisible();
         });
     });
 });

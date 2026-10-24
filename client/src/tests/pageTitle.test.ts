@@ -47,6 +47,7 @@ describe('every page sets the tab title', () => {
         expect(readClientFile('src/routes/_authenticated/person.$personId.tsx')).toContain("|| 'Edit person')");
         expect(readClientFile('src/routes/_authenticated/routine.$routineId.tsx')).toContain("|| 'Edit routine')");
         expect(readClientFile('src/routes/_authenticated/process-inbox.tsx')).toContain("useDocumentTitle('Process Inbox')");
+        expect(readClientFile('src/routes/_authenticated/routine.new.tsx')).toContain("useDocumentTitle('New routine')");
         expect(readClientFile('src/routes/login.tsx')).toContain("useDocumentTitle('Sign in')");
         expect(readClientFile('src/routes/-LegalPage.tsx')).toContain('useDocumentTitle(legalDocument.title)');
         // The landing page is the app's front door — the bare app name is the right title there.

@@ -1,18 +1,16 @@
-import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutlined';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Chip from '@mui/material/Chip';
-import IconButton from '@mui/material/IconButton';
 import Paper from '@mui/material/Paper';
 import Snackbar from '@mui/material/Snackbar';
 import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import { useState, useTransition } from 'react';
-import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { RoutineEditorBody } from '../../components/routineEditor/RoutineEditorBody';
+import { RoutinePageHeader } from '../../components/routineEditor/RoutinePageHeader';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone, FROM_GMAIL_READONLY_MESSAGE } from '../../db/itemMutations';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
@@ -27,26 +25,6 @@ import styles from './-routine.$routineId.module.css';
 export const Route = createFileRoute('/_authenticated/routine/$routineId')({
     component: RoutinePage,
 });
-
-function PageHeader({ title, onBack, idForCopy }: { title: string; onBack: () => void; idForCopy?: string }) {
-    return (
-        <Box className={styles.header}>
-            <IconButton onClick={onBack} size="small" aria-label="Go back">
-                <ArrowBackIcon />
-            </IconButton>
-            <Typography
-                variant="h6"
-                className={styles.headerTitle}
-                sx={{
-                    fontWeight: 600,
-                }}
-            >
-                {title}
-            </Typography>
-            {idForCopy && <CopyIdButton id={idForCopy} />}
-        </Box>
-    );
-}
 
 /**
  * Jump-link to the routine's next generated item, with an inline "Mark done" so the occurrence can
@@ -122,7 +100,7 @@ function RoutinePage() {
     useDocumentTitle(routine?.title.trim() || 'Edit routine');
     const goBack = () => historyBackOr('/routines');
 
-    // ESC on the not-found branch, where RoutineEditorBody (which owns the page-chrome ESC
+    // ESC on the not-found branch, where RoutineEditorBody (which owns the editor's ESC
     // handling) never mounts — mirrors its "Go back" button. Enabled only then, so exactly one
     // listener is active at a time. Declared before the early return to keep hook order stable.
     usePageEscapeToClose({ enabled: !routine || !account, onEscape: goBack });
@@ -130,7 +108,7 @@ function RoutinePage() {
     if (!routine || !account) {
         return (
             <Box className={styles.page} data-testid="routinePageWrapper">
-                <PageHeader title="Edit routine" onBack={goBack} />
+                <RoutinePageHeader title="Edit routine" onBack={goBack} />
                 <Typography
                     sx={{
                         color: 'text.secondary',
@@ -154,7 +132,7 @@ function RoutinePage() {
 
     return (
         <Box className={styles.page} data-testid="routinePageWrapper">
-            <PageHeader title="Edit routine" onBack={goBack} idForCopy={routine._id} />
+            <RoutinePageHeader title="Edit routine" onBack={goBack} idForCopy={routine._id} />
             <NextItemLink routine={routine} items={allItems} />
             <Paper variant="outlined" className={styles.card}>
                 <RoutineEditorBody
@@ -166,7 +144,6 @@ function RoutinePage() {
                     routine={routine}
                     onClose={goBack}
                     onSaved={onSaved}
-                    chrome="page"
                 />
             </Paper>
         </Box>

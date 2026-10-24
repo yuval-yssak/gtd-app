@@ -182,18 +182,19 @@ test.describe('unified view — multi-account calendar picker', () => {
                 calendars: [{ calendarId: 'primary', displayName: 'B Primary', isDefault: true }],
             });
 
-            // Use the Routines page rather than driving Inbox → Clarify → Calendar Select. The
-            // routine dialog reuses the same multi-account picker logic, but it's reachable in
-            // one click (Add routine button) so the test is far less timing-sensitive than the
-            // chained inbox-row → calendar-action → dialog-mount flow.
+            // Use the new-routine page rather than driving Inbox → Clarify → Calendar Select. The
+            // routine editor reuses the same multi-account picker logic, but it's reachable in
+            // one click (Create routine button) so the test is far less timing-sensitive than the
+            // chained inbox-row → calendar-action → editor-mount flow.
             await page.goto(`http://localhost:4173/routines`);
             await expect(page.getByRole('heading', { name: 'Routines' })).toBeVisible();
             await page.getByRole('button', { name: 'Create routine' }).click();
 
-            // Routine dialog mounts with the routineType ToggleButtonGroup defaulting to nextAction.
+            // The routine editor mounts with the routineType ToggleButtonGroup defaulting to nextAction.
             // Switch to Calendar so the CalendarPicker renders below the schedule section.
-            await expect(page.getByRole('dialog')).toBeVisible();
-            await page.getByRole('button', { name: 'Calendar' }).click();
+            const editor = page.getByTestId('newRoutinePage');
+            await expect(editor).toBeVisible();
+            await editor.getByRole('button', { name: 'Calendar', exact: true }).click();
 
             // Open the Calendar Select to materialize its options. MUI exposes the closed-state
             // trigger as role=combobox with the field label as the accessible name.

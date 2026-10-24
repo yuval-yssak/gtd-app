@@ -3,15 +3,15 @@ import dayjs from 'dayjs';
 import { resetServerForEmails, withTwoAccountsOnOneDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
 
-// E2e coverage for the atomic cross-account "edit + move" path. Pre-fix, EditItemDialog wrote a
+// E2e coverage for the atomic cross-account "edit + move" path. Pre-fix, the item editor wrote a
 // source-user copy first via updateItem→/sync/push and THEN called /sync/reassign — but the
 // active session at flush time was usually the *target* user (the cross-account view shows items
 // from every account), so the snapshot landed under the wrong user before reassign could find it.
 // The fix: when ownerChanged, the server is the only writer — one atomic /sync/reassign call
-// with an editPatch that carries the dialog's edits.
+// with an editPatch that carries the editor's edits.
 //
 // These specs hit the /sync/reassign endpoint directly with editPatch (server-side state is the
-// load-bearing assertion). The dialog's UI wiring is covered by the buildEditPatch unit tests
+// load-bearing assertion). The editor's UI wiring is covered by the buildEditPatch unit tests
 // and the calendar-picker spec; here we lock in the round-trip.
 
 const DEV_SEED_CALENDAR_URL = 'http://localhost:4000/dev/calendar/seed-integration';
@@ -82,7 +82,7 @@ async function fetchServerItem(entityId: string): Promise<ServerItem | null> {
     return body.doc;
 }
 
-test.describe('EditItemDialog cross-account reassign — atomic edit + move', () => {
+test.describe('Item editor cross-account reassign — atomic edit + move', () => {
     // Each test scopes its /dev/reset to its unique stamped emails so concurrent specs in
     // other workers keep their session/user data.
     test('calendar item with edits: title + time changes ride along on the move; new GCal event lives on target calendar', async ({ browser }) => {

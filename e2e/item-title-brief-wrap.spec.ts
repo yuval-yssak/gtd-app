@@ -125,8 +125,8 @@ test.describe('Item title and brief wrap instead of clipping to one line', () =>
 
             await page.goto('/routines');
             await page.getByTestId('routineRow').filter({ hasText: LONG_TITLE }).click();
-            const dialog = page.getByRole('dialog', { name: 'Edit routine' });
-            const title = titleInputOf(dialog);
+            const editor = page.getByTestId('routinePageWrapper');
+            const title = titleInputOf(editor);
             await expect(title).toHaveValue(LONG_TITLE);
             await expectWrappedAndFullyVisible(title);
         });

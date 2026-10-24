@@ -645,7 +645,7 @@ describe('calendar routine — clarifyToDone', () => {
     it('late-completion (done with timeStart far in the past) is a no-op on routine state', async () => {
         // Decoupled-disposal contract: done never adds a routineException and never extends the
         // horizon, regardless of how late the completion is. If the user wants to re-populate an
-        // exhausted series they do it via RoutineDialog / rrule-edit, not via disposal.
+        // exhausted series they do it via the routine editor / rrule-edit, not via disposal.
         const routine = await createRoutine(db, {
             userId: USER_ID,
             title: 'Weekly sync',
@@ -712,7 +712,7 @@ describe('calendar routine — clarifyToDone', () => {
 
     it('double-save of the same stale item snapshot does not leak a phantom calendar duplicate (matrix A8, smoke run #4)', async () => {
         // Matches the observed smoke flow: user clicks Done, the UI appears unchanged (React state
-        // not refreshed), so they reopen the dialog and click Done+Save again using the same
+        // not refreshed), so they reopen the editor and click Done+Save again using the same
         // pre-save `StoredItem` snapshot (its status is still 'calendar'). Both clarifyToDone calls
         // must converge on a single 'done' item for the disposed date.
         const routine = await createRoutine(db, {
@@ -736,7 +736,7 @@ describe('calendar routine — clarifyToDone', () => {
 
         await clarifyToDone(db, staleFirstItem);
         // Second save reuses the same pre-save snapshot (its status is still 'calendar') —
-        // this is what EditItemDialog does when it doesn't refresh after the first save.
+        // this is what the item editor did when it didn't refresh after the first save.
         await clarifyToDone(db, staleFirstItem);
 
         const afterItems = (await db.getAllFromIndex('items', 'userId', USER_ID)).filter((i) => i.routineId === routine._id);
