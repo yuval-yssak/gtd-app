@@ -33,6 +33,8 @@ async function storedOrder(page: Page, status: StoredItem['status']): Promise<st
 }
 
 const rowOf = (page: Page, testId: string, title: string) => page.getByTestId(testId).filter({ hasText: title });
+// An item editor status chip by its exact name ("Next Action" must not also match the "Next Actions" nav).
+const statusChip = (page: Page, label: string) => page.getByTestId('itemEditorStatusChip').and(page.getByRole('button', { name: label, exact: true }));
 
 test.describe('Ranked lists: Inbox, Someday / Maybe, Waiting For by date', () => {
     test('inbox: Space grabs a row, ↑ moves it, Space drops; the order persists; Alt+Shift+↓ sends a row to the bottom', async ({ browser }) => {
@@ -207,12 +209,9 @@ test.describe('Item editor shortcuts and the legend everywhere', () => {
             await expect(title).toHaveValue('Decide laters');
 
             // Outside a text field, "s" picks Someday / Maybe.
-            await page
-                .locator('.MuiChip-root')
-                .filter({ hasText: /^Inbox$/ })
-                .focus();
+            await statusChip(page, 'Inbox').focus();
             await page.keyboard.press('s');
-            await expect(page.getByRole('button', { name: 'Someday / Maybe' })).toHaveClass(/MuiChip-filled/);
+            await expect(statusChip(page, 'Someday / Maybe')).toHaveAttribute('aria-pressed', 'true');
 
             // Cmd/Ctrl+Enter from the title field saves the new status.
             await title.click();
@@ -236,7 +235,7 @@ test.describe('Item editor shortcuts and the legend everywhere', () => {
             await page.getByText('Status', { exact: true }).click();
             await expect(title).not.toBeFocused();
             await page.keyboard.press('n');
-            await expect(page.getByRole('button', { name: 'Next Action' })).toHaveClass(/MuiChip-filled/);
+            await expect(statusChip(page, 'Next Action')).toHaveAttribute('aria-pressed', 'true');
         });
     });
 
@@ -254,10 +253,7 @@ test.describe('Item editor shortcuts and the legend everywhere', () => {
             await expect(position).toContainText('Position in Inbox');
             await expect(position.getByTestId('nextActionPositionText')).toHaveText('1 of 3');
             await expect(position.getByTestId('nextActionPositionUp')).toHaveAttribute('title', /Up \((⌥|Alt\+)↑\)/);
-            await page
-                .locator('.MuiChip-root')
-                .filter({ hasText: /^Inbox$/ })
-                .focus();
+            await statusChip(page, 'Inbox').focus();
             await page.keyboard.press('Alt+Shift+ArrowDown');
             await expect(position.getByTestId('nextActionPositionText')).toHaveText('3 of 3');
             await expect.poll(() => storedOrder(page, 'inbox')).toEqual(['Bravo', 'Alpha', 'Charlie']);
@@ -289,8 +285,8 @@ test.describe('Item editor shortcuts and the legend everywhere', () => {
             // "s" would pick Someday / Maybe in the editor; inside the menu it is the menu's type-ahead.
             await page.keyboard.press('s');
             await page.keyboard.press('Escape');
-            await expect(page.locator('.MuiChip-root').filter({ hasText: /^Waiting For$/ })).toHaveClass(/MuiChip-filled/);
-            await expect(page.locator('.MuiChip-root').filter({ hasText: /^Someday \/ Maybe$/ })).not.toHaveClass(/MuiChip-filled/);
+            await expect(statusChip(page, 'Waiting For')).toHaveAttribute('aria-pressed', 'true');
+            await expect(statusChip(page, 'Someday / Maybe')).toHaveAttribute('aria-pressed', 'false');
         });
     });
 
@@ -302,10 +298,7 @@ test.describe('Item editor shortcuts and the legend everywhere', () => {
             const title = page.getByRole('textbox', { name: 'Title' });
             await expect(title).toHaveValue('Wizard target');
             await expect(page.getByTestId('nextActionPositionRow')).toHaveCount(0);
-            await page
-                .locator('.MuiChip-root')
-                .filter({ hasText: /^Someday \/ Maybe$/ })
-                .click();
+            await statusChip(page, 'Someday / Maybe').click();
             await title.click();
             await page.keyboard.press('ControlOrMeta+Enter');
             await page.waitForTimeout(500);
@@ -490,7 +483,7 @@ test.describe('Inbox on a phone: long-press drag', () => {
                 await glide(page, cdp, start, { x: start.x + 150, y: start.y }, 10);
                 await touch(cdp, 'touchEnd', []);
                 // The right swipe opens the editor (the item page) preset to Next Action.
-                await expect(page.getByTestId('itemPageWrapper').getByRole('button', { name: 'Next Action', exact: true })).toHaveClass(/MuiChip-filled/);
+                await expect(statusChip(page, 'Next Action')).toHaveAttribute('aria-pressed', 'true');
             },
             PHONE,
         );

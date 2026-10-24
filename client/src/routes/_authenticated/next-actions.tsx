@@ -153,7 +153,7 @@ function MergedFilterChipRow({ options, rankedOptions, selected, onToggle, activ
             selectedIds={selectedIds}
             keyOf={(option) => option.canonicalId}
             testId={testId}
-            sx={{ mb: 1 }}
+            className={styles.filterChipRow}
             expanderChipProps={itemProps}
             renderChip={(option) => {
                 const isActive = option.canonicalId === selected?.option?.canonicalId;

@@ -58,20 +58,20 @@ const notesHighlightStyle = HighlightStyle.define([
     { tag: tags.strong, fontWeight: '700' },
     { tag: tags.emphasis, fontStyle: 'italic' },
     { tag: tags.strikethrough, textDecoration: 'line-through' },
-    { tag: tags.link, color: 'var(--mui-palette-primary-main, #1976d2)', textDecoration: 'underline' },
-    { tag: tags.url, color: 'var(--mui-palette-primary-main, #1976d2)' },
+    { tag: tags.link, color: 'var(--color-accent)', textDecoration: 'underline' },
+    { tag: tags.url, color: 'var(--color-accent)' },
     { tag: tags.monospace, background: 'var(--color-code-bg)', borderRadius: '0.1875rem' },
-    { tag: tags.quote, color: 'var(--mui-palette-text-secondary, rgba(0, 0, 0, 0.6))', fontStyle: 'italic' },
-    { tag: tags.contentSeparator, color: 'var(--mui-palette-text-secondary, rgba(0, 0, 0, 0.6))' },
+    { tag: tags.quote, color: 'var(--color-text-secondary)', fontStyle: 'italic' },
+    { tag: tags.contentSeparator, color: 'var(--color-text-secondary)' },
     // Structural markers: #, *, >, ``` fences, table pipes — de-emphasised like editor themes do.
-    { tag: [tags.processingInstruction, tags.meta, tags.punctuation], color: 'var(--mui-palette-text-secondary, rgba(0, 0, 0, 0.6))' },
+    { tag: [tags.processingInstruction, tags.meta, tags.punctuation], color: 'var(--color-text-secondary)' },
     // Tags below only apply inside fenced code blocks (via codeLanguages).
-    { tag: tags.keyword, color: 'var(--mui-palette-primary-main, #1976d2)' },
-    { tag: [tags.string, tags.special(tags.string)], color: 'var(--mui-palette-success-main, #2e7d32)' },
-    { tag: tags.comment, color: 'var(--mui-palette-text-disabled, rgba(0, 0, 0, 0.38))', fontStyle: 'italic' },
-    { tag: [tags.number, tags.bool, tags.atom], color: 'var(--mui-palette-warning-dark, #e65100)' },
-    { tag: [tags.function(tags.variableName), tags.definition(tags.variableName)], color: 'var(--mui-palette-secondary-main, #9c27b0)' },
-    { tag: [tags.typeName, tags.propertyName], color: 'var(--mui-palette-info-main, #0288d1)' },
+    { tag: tags.keyword, color: 'var(--color-accent)' },
+    { tag: [tags.string, tags.special(tags.string)], color: 'var(--color-status-success)' },
+    { tag: tags.comment, color: 'var(--color-text-disabled)', fontStyle: 'italic' },
+    { tag: [tags.number, tags.bool, tags.atom], color: 'var(--color-status-warning)' },
+    { tag: [tags.function(tags.variableName), tags.definition(tags.variableName)], color: 'var(--color-accent-secondary)' },
+    { tag: [tags.typeName, tags.propertyName], color: 'var(--color-status-info)' },
 ]);
 
 export function buildNotesEditorExtensions(hooks: NotesEditorHooks, text: NotesEditorText): Extension {

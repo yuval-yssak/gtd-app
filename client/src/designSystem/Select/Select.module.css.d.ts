@@ -1,6 +1,8 @@
 declare const styles: {
     readonly check: string;
     readonly chevron: string;
+    readonly group: string;
+    readonly groupLabel: string;
     readonly icon: string;
     readonly item: string;
     readonly itemIndicator: string;

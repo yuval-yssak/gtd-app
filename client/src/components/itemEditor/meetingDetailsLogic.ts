@@ -92,6 +92,25 @@ export function filterPeopleForAutocomplete(people: StoredPerson[], query: strin
     });
 }
 
+/** A suggestion in the attendee picker: a known person, or the typed text as a brand-new email. */
+export type AttendeeOption = { kind: 'person'; person: StoredPerson } | { kind: 'newEmail'; newEmail: string };
+
+/**
+ * The attendee picker's suggestions for the typed text: matching people, plus a "type new email" row
+ * when the text parses as an email no matched person already carries. Nothing until the user types —
+ * the picker stays a compact field when no one is being added.
+ */
+export function attendeeSuggestions(people: StoredPerson[], input: string): AttendeeOption[] {
+    const trimmed = input.trim();
+    if (!trimmed) {
+        return [];
+    }
+    const matchedPeople = filterPeopleForAutocomplete(people, trimmed);
+    const matched = matchedPeople.map<AttendeeOption>((person) => ({ kind: 'person', person }));
+    const isKnownEmail = matchedPeople.some((person) => (person.email ?? '').toLowerCase() === trimmed.toLowerCase());
+    return isPlausibleEmail(trimmed) && !isKnownEmail ? [...matched, { kind: 'newEmail', newEmail: trimmed }] : matched;
+}
+
 /**
  * RFC-5322-lite email shape check. Used only to decide whether free-text input may be committed
  * as an attendee; the source of truth for validity is the server.

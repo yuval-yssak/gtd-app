@@ -38,7 +38,8 @@ test.describe('Item editor — item page UX', () => {
             // Preview rendered as Markdown — the bold word survives, the asterisks do not.
             const preview = page.getByTestId('pageNotesPreview');
             await expect(preview).toBeVisible();
-            await expect(preview).toHaveAttribute('role', 'region');
+            // A labelled region (a <section>), so assistive tech can jump to the notes.
+            await expect(page.getByRole('region', { name: 'Notes (Markdown)' })).toBeVisible();
             await expect(preview).toHaveAttribute('tabindex', '0');
             await expect(preview.locator('strong')).toHaveText('world');
 

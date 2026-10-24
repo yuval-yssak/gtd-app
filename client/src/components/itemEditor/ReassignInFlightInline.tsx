@@ -1,11 +1,10 @@
-import Alert from '@mui/material/Alert';
-import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
+import { Button, Callout } from '../../designSystem';
+import styles from './ReassignInFlightInline.module.css';
 
 interface Props {
     onClose: () => void;
     /** Defaults to 'item' so existing call sites in the item editor stay valid without changes. */
-    entityLabel?: 'item' | 'routine';
+    entityLabel?: 'item' | 'routine' | undefined;
 }
 
 /**
@@ -16,13 +15,13 @@ interface Props {
  */
 export function ReassignInFlightInline({ onClose, entityLabel = 'item' }: Props) {
     return (
-        <Box>
-            <Alert severity="info" variant="outlined">
+        <div>
+            <Callout tone="info" variant="outline">
                 This {entityLabel} is being moved to another account. You can edit it once the move completes.
-            </Alert>
-            <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 1.5 }}>
+            </Callout>
+            <div className={styles.actions}>
                 <Button onClick={onClose}>Close</Button>
-            </Box>
-        </Box>
+            </div>
+        </div>
     );
 }

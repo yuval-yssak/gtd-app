@@ -6,7 +6,7 @@
 
 .markdownBody :global(ul),
 .markdownBody :global(ol) {
-    padding-left: 1.5em;
+    padding-inline-start: 1.5em;
     margin: 0 0 0.5em;
 }
 
@@ -14,7 +14,9 @@
     background: var(--color-code-bg);
     border-radius: 0.1875rem;
     padding: 0.1em 0.3em;
-    font-size: 0.9em;
+
+    /* Inline code runs a touch smaller than the prose around it, whatever that prose size is. */
+    font-size: calc(1em * 0.9);
 }
 
 .markdownBody :global(pre) {
@@ -32,14 +34,15 @@
 
 .markdownBody :global(blockquote) {
     margin: 0 0 0.5em;
-    padding: 0.125em 0 0.125em 0.75em;
-    border-left: 0.1875rem solid var(--mui-palette-divider, rgba(0, 0, 0, 0.23));
-    color: var(--mui-palette-text-secondary, rgba(0, 0, 0, 0.6));
+    padding-block: 0.125em;
+    padding-inline: 0.75em 0;
+    border-inline-start: 0.1875rem solid var(--color-border-strong);
+    color: var(--color-text-secondary);
 }
 
 .markdownBody :global(hr) {
     border: 0;
-    border-top: 0.0625rem solid var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
+    border-block-start: 1px solid var(--color-divider);
     margin: 0.75em 0;
 }
 
@@ -48,15 +51,15 @@
     border-collapse: collapse;
     margin: 0 0 0.5em;
     display: block;
-    max-width: 100%;
+    max-inline-size: 100%;
     overflow-x: auto;
 }
 
 .markdownBody :global(th),
 .markdownBody :global(td) {
-    border: 0.0625rem solid var(--mui-palette-divider, rgba(0, 0, 0, 0.23));
+    border: 1px solid var(--color-border-strong);
     padding: 0.25em 0.6em;
-    text-align: left;
+    text-align: start;
 }
 
 .markdownBody :global(th) {
@@ -66,10 +69,10 @@
 /* GFM task lists — hide the list bullet next to the checkbox. */
 .markdownBody :global(li:has(> input[type="checkbox"])) {
     list-style: none;
-    margin-left: -1.25em;
+    margin-inline-start: -1.25em;
 }
 
 .markdownBody :global(input[type="checkbox"]) {
-    margin-right: 0.4em;
+    margin-inline-end: 0.4em;
     vertical-align: middle;
 }

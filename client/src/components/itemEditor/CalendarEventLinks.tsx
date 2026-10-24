@@ -1,10 +1,5 @@
-import EventIcon from '@mui/icons-material/Event';
-import OpenInNewIcon from '@mui/icons-material/OpenInNew';
-import PlaceIcon from '@mui/icons-material/Place';
-import VideocamIcon from '@mui/icons-material/Videocam';
-import Box from '@mui/material/Box';
-import Link from '@mui/material/Link';
-import Typography from '@mui/material/Typography';
+import { CalendarDays, ExternalLink, MapPin, Video } from 'lucide-react';
+import { Text } from '../../designSystem';
 import type { CalendarOption } from '../../hooks/useCalendarOptions';
 import type { StoredItem } from '../../types/MyDB';
 import styles from './CalendarEventLinks.module.css';
@@ -65,48 +60,48 @@ export function CalendarEventLinks({ item, calendarOptions }: CalendarEventLinks
     }
 
     return (
-        <Box className={styles.container} data-testid="calendarEventLinks">
+        <div className={styles.container} data-testid="calendarEventLinks">
             {calendarName && (
-                <Box className={styles.field}>
-                    <Typography variant="caption" color="text.secondary">
+                <div className={styles.field}>
+                    <Text as="span" variant="caption" tone="secondary">
                         Calendar
-                    </Typography>
-                    <Typography variant="body2" data-testid="calendarName">
+                    </Text>
+                    <Text variant="bodySm" data-testid="calendarName">
                         {calendarName}
-                    </Typography>
-                </Box>
+                    </Text>
+                </div>
             )}
             {meetingLink && (
-                <Box className={styles.linkRow}>
-                    <VideocamIcon className={styles.icon} color="action" />
-                    <Link href={meetingLink} target="_blank" rel="noopener noreferrer" variant="body2" data-testid="meetingLinkButton">
+                <div className={styles.linkRow}>
+                    <Video className={styles.icon} aria-hidden="true" />
+                    <a href={meetingLink} target="_blank" rel="noopener noreferrer" className={styles.link} data-testid="meetingLinkButton">
                         {meetingLinkLabel(meetingLink)}
-                    </Link>
-                </Box>
+                    </a>
+                </div>
             )}
             {location && (
-                <Box className={styles.locationRow}>
-                    <PlaceIcon className={styles.icon} color="action" />
+                <div className={styles.locationRow}>
+                    <MapPin className={styles.icon} aria-hidden="true" />
                     {isUrl(location) ? (
-                        <Link href={location} target="_blank" rel="noopener noreferrer" variant="body2" data-testid="eventLocation">
+                        <a href={location} target="_blank" rel="noopener noreferrer" className={styles.link} data-testid="eventLocation">
                             {location}
-                        </Link>
+                        </a>
                     ) : (
-                        <Typography variant="body2" data-testid="eventLocation">
+                        <Text variant="bodySm" data-testid="eventLocation">
                             {location}
-                        </Typography>
+                        </Text>
                     )}
-                </Box>
+                </div>
             )}
             {htmlLink && (
-                <Box className={styles.linkRow}>
-                    <EventIcon className={styles.icon} color="action" />
-                    <Link href={htmlLink} target="_blank" rel="noopener noreferrer" variant="body2" data-testid="openInGCalLink">
+                <div className={styles.linkRow}>
+                    <CalendarDays className={styles.icon} aria-hidden="true" />
+                    <a href={htmlLink} target="_blank" rel="noopener noreferrer" className={styles.link} data-testid="openInGCalLink">
                         Open in Google Calendar
-                        <OpenInNewIcon className={styles.icon} color="action" />
-                    </Link>
-                </Box>
+                        <ExternalLink className={styles.icon} aria-hidden="true" />
+                    </a>
+                </div>
             )}
-        </Box>
+        </div>
     );
 }

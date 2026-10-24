@@ -11,10 +11,15 @@ export type ToggleOption<V extends string> = {
     'data-testid'?: string | undefined;
 };
 
-type ToggleGroupProps<V extends string> = {
-    value: V;
-    /** Exclusive: exactly one option is always pressed (MUI `exclusive` with the null guard every site had). */
-    onValueChange: (value: V) => void;
+/**
+ * Exclusive by default: exactly one option is always pressed (MUI `exclusive` with the null guard
+ * every site had). `allowDeselect` lets the active segment be pressed off, leaving the value empty.
+ */
+type ToggleSelection<V extends string> =
+    | { allowDeselect?: false | undefined; value: V; onValueChange: (value: V) => void }
+    | { allowDeselect: true; value: V | ''; onValueChange: (value: V | '') => void };
+
+type ToggleGroupProps<V extends string> = ToggleSelection<V> & {
     options: readonly ToggleOption<V>[];
     size?: 'sm' | 'md' | undefined;
     disabled?: boolean | undefined;
@@ -24,14 +29,22 @@ type ToggleGroupProps<V extends string> = {
 };
 
 /** Segmented control (MUI ToggleButtonGroup exclusive). Each segment is a pressed/unpressed button. */
-export function ToggleGroup<V extends string>({ value, onValueChange, options, size = 'sm', disabled, className, ...rest }: ToggleGroupProps<V>) {
+export function ToggleGroup<V extends string>({ options, size = 'sm', disabled, className, ...props }: ToggleGroupProps<V>) {
+    const { allowDeselect: _allowDeselect, value, onValueChange, ...rest } = props;
     return (
         <BaseToggleGroup<V>
-            value={[value]}
+            value={value === '' ? [] : [value]}
             onValueChange={(next) => {
-                // Pressing the active segment would empty the group; keep the current choice instead.
                 const [picked] = next;
-                if (picked !== undefined) onValueChange(picked);
+                if (picked !== undefined) {
+                    onValueChange(picked);
+                    return;
+                }
+                // Pressing the active segment empties the group: clear when allowed, else keep the choice.
+                // Checking `props.allowDeselect` narrows `props` to the deselectable shape, whose callback accepts `''`.
+                if (props.allowDeselect) {
+                    props.onValueChange('');
+                }
             }}
             disabled={disabled ?? false}
             data-size={size}

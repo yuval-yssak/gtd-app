@@ -278,7 +278,7 @@ function EndsFields({ form, onPatch, disabled }: { form: FormState; onPatch: (pa
                 <ToggleButton value="afterN">After N</ToggleButton>
             </ToggleButtonGroup>
             {form.endsMode === 'onDate' && (
-                <DateField label="End date" value={form.endsDate} onChange={(endsDate) => onPatch({ endsDate })} sx={{ mt: 1, display: 'block' }} />
+                <DateField label="End date" value={form.endsDate} onChange={(endsDate) => onPatch({ endsDate })} className={styles.endDate} />
             )}
             {form.endsMode === 'afterN' && (
                 <div className={styles.ticklerRow}>
@@ -353,7 +353,7 @@ function TemplateFields({ form, workContexts, people, usage, onPatch, onToggleWo
                         selectedIds={selectedContextIds}
                         keyOf={(ctx) => ctx._id}
                         testId="routineTemplateWorkContextChip"
-                        sx={{ mt: 0.5 }}
+                        className={styles.chipGroup}
                         renderChip={(ctx) => (
                             <Chip
                                 label={ctx.name}
@@ -385,7 +385,7 @@ function TemplateFields({ form, workContexts, people, usage, onPatch, onToggleWo
                         selectedIds={selectedPeopleIds}
                         keyOf={(p) => p._id}
                         testId="routineTemplatePersonChip"
-                        sx={{ mt: 0.5 }}
+                        className={styles.chipGroup}
                         renderChip={(p) => (
                             <Chip
                                 label={p.name}

@@ -1,5 +1,5 @@
-import Skeleton from '@mui/material/Skeleton';
 import { Component, lazy, type ReactNode, Suspense } from 'react';
+import { Skeleton } from '../../designSystem';
 import styles from './MarkdownNotesEditor.module.css';
 import type { MarkdownNotesEditorProps } from './MarkdownNotesEditorView';
 
@@ -25,7 +25,7 @@ export function MarkdownNotesEditor({ ariaLabel = NOTES_EDITOR_LABEL, ...props }
     const editorProps = { ...props, ariaLabel };
     return (
         <EditorChunkBoundary fallback={<PlainTextareaFallback {...editorProps} />}>
-            <Suspense fallback={<Skeleton variant="rounded" className={styles.loadingFallback} data-testid="markdownNotesEditorLoading" />}>
+            <Suspense fallback={<Skeleton shape="rect" className={styles.loadingFallback} data-testid="markdownNotesEditorLoading" />}>
                 <MarkdownNotesEditorView {...editorProps} />
             </Suspense>
         </EditorChunkBoundary>

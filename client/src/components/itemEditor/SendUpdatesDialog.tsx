@@ -1,9 +1,4 @@
-import Button from '@mui/material/Button';
-import Dialog from '@mui/material/Dialog';
-import DialogActions from '@mui/material/DialogActions';
-import DialogContent from '@mui/material/DialogContent';
-import DialogContentText from '@mui/material/DialogContentText';
-import DialogTitle from '@mui/material/DialogTitle';
+import { AlertDialog, Button, DialogActions, DialogDescription, DialogTitle } from '../../designSystem';
 
 interface SendUpdatesDialogProps {
     open: boolean;
@@ -20,13 +15,11 @@ interface SendUpdatesDialogProps {
  */
 export function SendUpdatesDialog({ open, attendeeCount, onConfirm, onCancel }: SendUpdatesDialogProps) {
     return (
-        <Dialog open={open} onClose={onCancel} data-testid="sendUpdatesDialog" maxWidth="xs" fullWidth>
+        <AlertDialog open={open} onClose={onCancel} data-testid="sendUpdatesDialog" size="xs">
             <DialogTitle>Send update emails?</DialogTitle>
-            <DialogContent>
-                <DialogContentText>
-                    This event has {attendeeCount} {attendeeCount === 1 ? 'attendee' : 'attendees'}. Send them an update?
-                </DialogContentText>
-            </DialogContent>
+            <DialogDescription>
+                This event has {attendeeCount} {attendeeCount === 1 ? 'attendee' : 'attendees'}. Send them an update?
+            </DialogDescription>
             <DialogActions>
                 <Button onClick={onCancel} data-testid="sendUpdatesCancel">
                     Cancel
@@ -34,10 +27,10 @@ export function SendUpdatesDialog({ open, attendeeCount, onConfirm, onCancel }: 
                 <Button onClick={() => onConfirm('none')} data-testid="sendUpdatesNone">
                     Don't send
                 </Button>
-                <Button onClick={() => onConfirm('all')} variant="contained" data-testid="sendUpdatesAll">
+                <Button onClick={() => onConfirm('all')} variant="solid" data-testid="sendUpdatesAll">
                     Send updates
                 </Button>
             </DialogActions>
-        </Dialog>
+        </AlertDialog>
     );
 }

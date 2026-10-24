@@ -1,23 +1,7 @@
-import CalendarTodayIcon from '@mui/icons-material/CalendarToday';
-import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutlineOutlined';
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
-import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
-import LightbulbOutlinedIcon from '@mui/icons-material/LightbulbOutlined';
-import LoopIcon from '@mui/icons-material/Loop';
-import MoveToInboxIcon from '@mui/icons-material/MoveToInbox';
-import PlayArrowIcon from '@mui/icons-material/PlayArrow';
-import Alert from '@mui/material/Alert';
-import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-import Chip from '@mui/material/Chip';
-import Divider from '@mui/material/Divider';
-import Stack from '@mui/material/Stack';
-import TextField from '@mui/material/TextField';
-import Tooltip from '@mui/material/Tooltip';
-import Typography from '@mui/material/Typography';
-import classNames from 'classnames';
+import { clsx } from 'clsx';
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
+import { CalendarDays, CircleCheck, Hourglass, Inbox, Lightbulb, Play, Repeat, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { createPortal } from 'react-dom';
 import { type RsvpPushStatus, rsvpOnline } from '../../api/calendarApi';
@@ -42,6 +26,7 @@ import {
 } from '../../db/itemMutations';
 import { offlineReassignMessage } from '../../db/reassignMutations';
 import { clarifyToRoutine, undoClarifyToRoutine } from '../../db/routineClarifyMutations';
+import { Button, Callout, Chip, type ChipTone, Separator, Text, TextField, Tooltip } from '../../designSystem';
 import { useAutosave } from '../../hooks/useAutosave';
 import { useCalendarOptions } from '../../hooks/useCalendarOptions';
 import { EDITOR_KEY_SCOPE_ATTR, useEditorShortcuts } from '../../hooks/useEditorShortcuts';
@@ -126,19 +111,20 @@ interface StatusChipConfig {
     value: ClarifyDestination;
     label: string;
     icon: React.ReactElement;
-    color?: 'default' | 'primary' | 'success' | 'error';
+    /** The chip's fill while selected; accent when omitted. */
+    tone?: ChipTone;
 }
 
 const STATUS_CHIPS: StatusChipConfig[] = [
-    { value: 'inbox', label: 'Inbox', icon: <MoveToInboxIcon fontSize="small" /> },
-    { value: 'nextAction', label: 'Next Action', icon: <PlayArrowIcon fontSize="small" /> },
-    { value: 'calendar', label: 'Calendar', icon: <CalendarTodayIcon fontSize="small" /> },
-    { value: 'waitingFor', label: 'Waiting For', icon: <HourglassEmptyIcon fontSize="small" /> },
-    { value: 'somedayMaybe', label: 'Someday / Maybe', icon: <LightbulbOutlinedIcon fontSize="small" /> },
+    { value: 'inbox', label: 'Inbox', icon: <Inbox /> },
+    { value: 'nextAction', label: 'Next Action', icon: <Play /> },
+    { value: 'calendar', label: 'Calendar', icon: <CalendarDays /> },
+    { value: 'waitingFor', label: 'Waiting For', icon: <Hourglass /> },
+    { value: 'somedayMaybe', label: 'Someday / Maybe', icon: <Lightbulb /> },
     // Clarify-only destination: converts the inbox item into a recurring routine (see canClarifyToRoutine).
-    { value: 'routine', label: 'Routine', icon: <LoopIcon fontSize="small" /> },
-    { value: 'done', label: 'Done', icon: <CheckCircleOutlineIcon fontSize="small" />, color: 'success' },
-    { value: 'trash', label: 'Trash', icon: <DeleteOutlineIcon fontSize="small" />, color: 'error' },
+    { value: 'routine', label: 'Routine', icon: <Repeat /> },
+    { value: 'done', label: 'Done', icon: <CircleCheck />, tone: 'success' },
+    { value: 'trash', label: 'Trash', icon: <Trash2 />, tone: 'error' },
 ];
 
 /** A status chip's tooltip: its label, plus its letter when it has one. */
@@ -253,7 +239,7 @@ function mergeKeyOf(itemTs: string, briefTs: string | undefined): string {
 /** Resolves the body class. The review presentation adds a density modifier on top of the bare
  *  flex column (tighter section gap, no notes-preview height floor). */
 export function bodyClassFor(presentation: EditorPresentation): string {
-    return classNames(styles.body, { [styles.bodyReview]: presentation === 'review' });
+    return clsx(styles.body, { [styles.bodyReview]: presentation === 'review' });
 }
 
 /**
@@ -1042,9 +1028,9 @@ export function ItemEditorBody({
 
     if (reassignInFlight) {
         return (
-            <Box className={bodyClassFor(presentation)}>
+            <div className={bodyClassFor(presentation)}>
                 <ReassignInFlightInline onClose={closeEditor} />
-            </Box>
+            </div>
         );
     }
 
@@ -1056,10 +1042,10 @@ export function ItemEditorBody({
     ) : (
         <>
             <Button onClick={closeEditor}>Cancel</Button>
-            <Tooltip title={`Save changes (${chordLabel(['mod', 'enter'], isApple)})`} describeChild>
-                {/* The span keeps the tooltip working while the button is disabled (MUI needs an enabled child). */}
-                <span>
-                    <Button variant="contained" disabled={saveDisabled} onClick={() => onSave()} aria-keyshortcuts={isApple ? 'Meta+Enter' : 'Control+Enter'}>
+            <Tooltip title={`Save changes (${chordLabel(['mod', 'enter'], isApple)})`}>
+                {/* A disabled button gets no pointer events — the span keeps the tooltip; the button keeps its own name. */}
+                <span className={styles.tooltipAnchor}>
+                    <Button variant="solid" disabled={saveDisabled} onClick={() => onSave()} aria-keyshortcuts={isApple ? 'Meta+Enter' : 'Control+Enter'}>
                         Save changes
                     </Button>
                 </span>
@@ -1068,27 +1054,26 @@ export function ItemEditorBody({
     );
     const actionsPlacement = resolveActionsPlacement(actionsContainer);
     // Portaled rows stretch across the host bar's content slot — see .stretchedActions.
-    const actionsRow = (
-        <Box className={classNames(styles.inlineActions, { [styles.stretchedActions]: actionsPlacement.kind === 'portal' })}>{actionButtons}</Box>
-    );
+    const actionsRow = <div className={clsx(styles.inlineActions, { [styles.stretchedActions]: actionsPlacement.kind === 'portal' })}>{actionButtons}</div>;
 
     return (
         // tabIndex -1: a click on the editor's empty space focuses the editor itself (not the page body), so its
         // letter and Alt+arrow shortcuts keep working; it is never a Tab stop.
-        <Box className={classNames(bodyClassFor(presentation), styles.keyScope)} tabIndex={-1} {...{ [EDITOR_KEY_SCOPE_ATTR]: '' }} onKeyDown={onEditorKeyDown}>
+        // biome-ignore lint/a11y/noStaticElementInteractions: a key-delegation scope, not a control — it hears the shortcuts its children's keys bubble up, and must stay a React handler so a child's stopPropagation (the brief field's Escape) is honoured
+        <div className={clsx(bodyClassFor(presentation), styles.keyScope)} tabIndex={-1} {...{ [EDITOR_KEY_SCOPE_ATTR]: '' }} onKeyDown={onEditorKeyDown}>
             {conflictFields.length > 0 && (
-                <Alert
-                    severity="info"
+                <Callout
+                    tone="info"
                     onClose={() => setConflictFields([])}
                     action={
-                        <Button color="inherit" size="small" onClick={adoptTheirVersion} data-testid="itemEditorUseTheirs">
+                        <Button tone="neutral" size="sm" onClick={adoptTheirVersion} data-testid="itemEditorUseTheirs">
                             Use their version
                         </Button>
                     }
                     data-testid="itemEditorConflictNotice"
                 >
                     This item changed on another device ({conflictFields.join(', ')}). Your edits are kept and will overwrite on save.
-                </Alert>
+                </Callout>
             )}
             <TextField
                 label="Title"
@@ -1133,40 +1118,29 @@ export function ItemEditorBody({
 
             <NotesSection notes={notes} onNotesChange={onNotesChange} collapsible={isBriefLeading} />
 
-            <Divider />
+            <Separator />
 
-            <Box>
-                <Typography
-                    variant="caption"
-                    className={styles.statusLabel}
-                    sx={{
-                        color: 'text.secondary',
-                        fontWeight: 600,
-                    }}
-                >
+            <fieldset>
+                <Text as="legend" variant="caption" tone="secondary" weight="semibold" className={styles.statusLabel}>
                     Status
-                </Typography>
-                <Stack
-                    direction="row"
-                    className={styles.statusChips}
-                    sx={{
-                        flexWrap: 'wrap',
-                        gap: 1,
-                    }}
-                >
+                </Text>
+                <div className={styles.statusChips}>
                     {STATUS_CHIPS.filter((cfg) => cfg.value !== 'routine' || canClarifyToRoutine(liveItem)).map((cfg) => (
                         // The tooltip teaches the chip's letter (it works with focus outside a text field).
                         <Tooltip key={cfg.value} title={chipTitle(cfg)}>
                             <Chip
                                 icon={cfg.icon}
                                 label={cfg.label}
-                                variant={status === cfg.value ? 'filled' : 'outlined'}
-                                color={status === cfg.value ? (cfg.color ?? 'primary') : 'default'}
+                                size="md"
+                                variant="outline"
+                                // Only the selected chip takes its status tone; unselected, Done and Trash stay neutral like the rest.
+                                tone={status === cfg.value ? cfg.tone : undefined}
+                                // Announced as pressed and mirrored as data-selected (the DS Chip contract).
+                                selected={status === cfg.value}
                                 // The Tooltip would name the chip by its title ("Done (d)"); the name stays the label,
                                 // the key is announced from aria-keyshortcuts.
                                 aria-label={cfg.label}
-                                // A toggle group of statuses: the selected one is announced as pressed (the DS Chip contract).
-                                aria-pressed={status === cfg.value}
+                                data-testid="itemEditorStatusChip"
                                 aria-keyshortcuts={statusKeyOf(cfg.value)?.toUpperCase()}
                                 onClick={() => {
                                     setRoutineSaveError(null);
@@ -1175,17 +1149,17 @@ export function ItemEditorBody({
                             />
                         </Tooltip>
                     ))}
-                </Stack>
-            </Box>
+                </div>
+            </fieldset>
 
             {liveItem.routineId && (
-                <Box data-testid="itemEditorRoutineLink">
+                <div data-testid="itemEditorRoutineLink">
                     <RoutineIndicator routineId={liveItem.routineId} routineTitle={allRoutines.find((r) => r._id === liveItem.routineId)?.title} forceChip />
-                </Box>
+                </div>
             )}
 
             {loggedInAccounts.length > 1 && (
-                <Box>
+                <div>
                     <AccountPicker
                         value={ownerUserId}
                         onChange={(uid) => {
@@ -1201,23 +1175,16 @@ export function ItemEditorBody({
                         {...(reassignError ? { error: reassignError } : {})}
                     />
                     {isRoutineGenerated && (
-                        <Typography
-                            variant="caption"
-                            sx={{
-                                color: 'text.secondary',
-                                mt: 0.5,
-                                display: 'block',
-                            }}
-                        >
+                        <Text as="span" variant="caption" tone="secondary" className={styles.accountHint}>
                             To move this, edit the routine itself.
-                        </Typography>
+                        </Text>
                     )}
-                </Box>
+                </div>
             )}
 
             {status === 'nextAction' && (
                 <>
-                    <Divider />
+                    <Separator />
                     <NextActionFields
                         value={naForm}
                         onChange={(patch) => writeFormField('na', { ...formRefs.current.na, ...patch }, setNaForm)}
@@ -1248,7 +1215,7 @@ export function ItemEditorBody({
 
             {status === 'waitingFor' && (
                 <>
-                    <Divider />
+                    <Separator />
                     <WaitingForFields
                         value={wfForm}
                         onChange={(patch) => writeFormField('wf', { ...formRefs.current.wf, ...patch }, setWfForm)}
@@ -1259,46 +1226,27 @@ export function ItemEditorBody({
 
             {status === 'somedayMaybe' && (
                 <>
-                    <Divider />
-                    <Stack
-                        sx={{
-                            gap: 2,
-                        }}
-                    >
-                        <Typography
-                            variant="body2"
-                            sx={{
-                                color: 'text.secondary',
-                            }}
-                        >
+                    <Separator />
+                    <div className={styles.statusFields}>
+                        <Text variant="bodySm" tone="secondary">
                             Parked for later review. Optionally set a deadline or hide it from review until a date.
-                        </Typography>
+                        </Text>
                         <TicklerDateFields value={smForm} onChange={(patch) => writeFormField('sm', { ...formRefs.current.sm, ...patch }, setSmForm)} />
-                    </Stack>
+                    </div>
                 </>
             )}
 
             {status === 'routine' && (
                 <>
-                    <Divider />
-                    <Stack
-                        sx={{
-                            gap: 2,
-                        }}
-                        data-testid="itemEditorRoutineFields"
-                    >
-                        <Typography
-                            variant="body2"
-                            sx={{
-                                color: 'text.secondary',
-                            }}
-                        >
+                    <Separator />
+                    <div className={styles.statusFields} data-testid="itemEditorRoutineFields">
+                        <Text variant="bodySm" tone="secondary">
                             Turns this item into a repeating routine. The item itself is consumed — the routine takes its title and notes.
-                        </Typography>
+                        </Text>
                         {routineSaveError && (
-                            <Alert severity="error" data-testid="itemEditorRoutineSaveError">
+                            <Callout tone="error" data-testid="itemEditorRoutineSaveError">
                                 {routineSaveError}
-                            </Alert>
+                            </Callout>
                         )}
                         <RoutineScheduleFields
                             form={routineForm}
@@ -1309,7 +1257,7 @@ export function ItemEditorBody({
                             usage={entityUsage}
                             frequencyKey={item._id}
                         />
-                    </Stack>
+                    </div>
                 </>
             )}
 
@@ -1321,32 +1269,19 @@ export function ItemEditorBody({
                 <NextActionPositionRow db={db} item={liveItem} onBeforeMove={() => flushItemTextLocallyRef.current()} />
             )}
 
-            <Divider />
+            <Separator />
 
-            <Box className={styles.metaRow}>
-                <Typography
-                    variant="caption"
-                    data-testid="itemEditorCreatedAt"
-                    sx={{
-                        color: 'text.secondary',
-                    }}
-                >
+            <div className={styles.metaRow}>
+                <Text as="span" variant="caption" tone="secondary" data-testid="itemEditorCreatedAt">
                     Created {dayjs(liveItem.createdTs).format('MMM D, YYYY h:mm A')}
-                </Typography>
-                <Typography
-                    variant="caption"
-                    className={styles.itemId}
-                    data-testid="itemEditorId"
-                    sx={{
-                        color: 'text.secondary',
-                    }}
-                >
+                </Text>
+                <Text as="span" variant="caption" tone="secondary" className={styles.itemId} data-testid="itemEditorId">
                     ID {item._id}
-                </Typography>
+                </Text>
                 {/* The shared hardened button (tooltip + failure snackbar). Hosts with their own
                     header CopyIdButton suppress this one so exactly one shows per screen. */}
                 {!hasHostCopyIdButton && <CopyIdButton id={item._id} />}
-            </Box>
+            </div>
 
             {actionsPlacement.kind === 'inline' && actionsRow}
             {actionsPlacement.kind === 'portal' && createPortal(actionsRow, actionsPlacement.container)}
@@ -1364,6 +1299,6 @@ export function ItemEditorBody({
                 }}
                 onCancel={() => setPendingSave(null)}
             />
-        </Box>
+        </div>
     );
 }

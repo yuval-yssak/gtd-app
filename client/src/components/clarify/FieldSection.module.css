@@ -1,0 +1,7 @@
+.label {
+    display: block;
+}
+
+.controls {
+    margin-block-start: var(--space-1);
+}

@@ -1,0 +1,16 @@
+.fields {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+}
+
+.timeRow {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-4);
+}
+
+.calendarSelect {
+    align-self: flex-start;
+    min-inline-size: 12.5rem;
+}

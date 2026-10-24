@@ -1,18 +1,37 @@
-.energyToggle {
-    /* mt: 0.5 — small gap between FormLabel and the toggle group */
-    margin-top: 0.25rem;
+.fields {
     display: flex;
-}
-
-.timeField {
-    width: 11.25rem;
+    flex-direction: column;
+    gap: var(--space-4);
 }
 
 /* Dense (weekly review) layout: the small controls — tickler date, energy toggle, time estimate,
- * urgent/focus checkboxes, expected-by date — are all far narrower than the card, so the grid in
- * NextActionFields pairs them into two columns, reclaiming vertical space without shrinking any
- * control. The chip clouds opt out here: they genuinely use the full width, and a wider row wraps
- * less. Applied only in the dense layout — there is no grid to span in the single-column one. */
+ * urgent checkbox, expected-by date — are all far narrower than the card, so they pair into two
+ * columns, reclaiming vertical space without shrinking any control. Below the sm breakpoint the
+ * column stands — two columns would squeeze the date inputs. */
+@media (width >= 600px) {
+    .fields[data-dense] {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        column-gap: var(--space-6);
+        align-items: start;
+    }
+}
+
+/* The chip clouds opt out of the dense grid: they genuinely use the full width, and a wider row
+ * wraps less. Applied only in the dense layout — there is no grid to span in the single column. */
 .fullSpan {
     grid-column: 1 / -1;
+}
+
+.caption {
+    display: block;
+}
+
+.explainer {
+    display: block;
+    margin-block-end: var(--space-1);
+}
+
+.timeField {
+    inline-size: 11.25rem;
 }

@@ -1,33 +1,32 @@
-import CheckIcon from '@mui/icons-material/Check';
-import CloseIcon from '@mui/icons-material/Close';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import HelpOutlineIcon from '@mui/icons-material/HelpOutlined';
-import Accordion from '@mui/material/Accordion';
-import AccordionDetails from '@mui/material/AccordionDetails';
-import AccordionSummary from '@mui/material/AccordionSummary';
-import Autocomplete from '@mui/material/Autocomplete';
-import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-import Chip from '@mui/material/Chip';
-import Dialog from '@mui/material/Dialog';
-import DialogActions from '@mui/material/DialogActions';
-import DialogContent from '@mui/material/DialogContent';
-import DialogContentText from '@mui/material/DialogContentText';
-import DialogTitle from '@mui/material/DialogTitle';
-import TextField from '@mui/material/TextField';
-import Tooltip from '@mui/material/Tooltip';
-import Typography from '@mui/material/Typography';
 import type { IDBPDatabase } from 'idb';
-import { useState, useTransition } from 'react';
+import { Check, ChevronDown, CircleHelp } from 'lucide-react';
+import { useId, useMemo, useState, useTransition } from 'react';
 import { API_SERVER } from '../../constants/globals';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { updatePerson } from '../../db/personMutations';
+import {
+    AlertDialog,
+    Autocomplete,
+    Button,
+    type ButtonTone,
+    Chip,
+    type ChipTone,
+    Collapsible,
+    DialogActions,
+    DialogDescription,
+    DialogTitle,
+    Text,
+    TextField,
+    Tooltip,
+} from '../../designSystem';
 import type { GCalAttendee, GCalResponseStatus, MyDB, StoredItem, StoredPerson } from '../../types/MyDB';
 import { PersonEditDialog } from '../people/PersonEditDialog';
 import { QuickCreatePersonDialog } from '../people/QuickCreatePersonDialog';
 import styles from './MeetingDetails.module.css';
 import {
+    type AttendeeOption,
     addAttendeeByEmail,
+    attendeeSuggestions,
     findPersonByEmail,
     findSelfAttendee,
     formatResponseSummary,
@@ -69,25 +68,21 @@ interface MeetingDetailsProps {
     onReconsentClosed?: () => void;
 }
 
-// Discriminated union the Autocomplete operates on. Two arms: a known person from the local
-// roster, or a brand-new email typed inline by the user.
-type AttendeeOption = { kind: 'person'; person: StoredPerson } | { kind: 'newEmail'; newEmail: string };
-
-const RSVP_BUTTONS: Array<{ status: RsvpStatus; label: string; color: 'success' | 'error' | 'warning' }> = [
-    { status: 'accepted', label: 'Accept', color: 'success' },
-    { status: 'declined', label: 'Decline', color: 'error' },
-    { status: 'tentative', label: 'Tentative', color: 'warning' },
+const RSVP_BUTTONS: Array<{ status: RsvpStatus; label: string; tone: ButtonTone }> = [
+    { status: 'accepted', label: 'Accept', tone: 'success' },
+    { status: 'declined', label: 'Decline', tone: 'danger' },
+    { status: 'tentative', label: 'Tentative', tone: 'warning' },
 ];
 
 /**
- * Maps a GCal response status to the MUI Chip color name. Default + `outlined` styling for
- * `needsAction` keeps it visually distinct from a deliberate decision.
+ * An attendee chip's look for a GCal response status: tinted in the decision's tone, or a neutral
+ * outline for `needsAction` so "no answer yet" stays visually distinct from a deliberate decision.
  */
-function chipColorFor(status: GCalResponseStatus): 'success' | 'error' | 'warning' | 'default' {
-    if (status === 'accepted') return 'success';
-    if (status === 'declined') return 'error';
-    if (status === 'tentative') return 'warning';
-    return 'default';
+export function chipAppearanceFor(status: GCalResponseStatus): { tone: ChipTone; variant: 'soft' | 'outline' } {
+    if (status === 'accepted') return { tone: 'success', variant: 'soft' };
+    if (status === 'declined') return { tone: 'error', variant: 'soft' };
+    if (status === 'tentative') return { tone: 'warning', variant: 'soft' };
+    return { tone: 'neutral', variant: 'outline' };
 }
 
 /**
@@ -106,6 +101,8 @@ export function MeetingDetails({
     readOnly = false,
 }: MeetingDetailsProps) {
     const { people } = useAppData();
+    const [isOpen, setIsOpen] = useState(false);
+    const bodyId = useId();
     const attendees = item.attendees ?? [];
     const organizer = item.organizer;
     const creator = item.creator;
@@ -119,33 +116,42 @@ export function MeetingDetails({
     const summary = formatResponseSummary(attendees);
 
     return (
-        <Accordion className={styles.accordion} data-testid="meetingDetails" disableGutters>
-            <AccordionSummary expandIcon={<ExpandMoreIcon />} data-testid="meetingDetailsSummary">
-                <Box className={styles.summaryHeader}>
-                    <Typography variant="body2" className={styles.summaryTitle}>
+        <section className={styles.panel} data-testid="meetingDetails">
+            {/* A disclosure, like MUI's Accordion: the header is the toggle, the body collapses. */}
+            <button
+                type="button"
+                className={styles.summary}
+                aria-expanded={isOpen}
+                aria-controls={bodyId}
+                onClick={() => setIsOpen((open) => !open)}
+                data-testid="meetingDetailsSummary"
+            >
+                <span className={styles.summaryHeader}>
+                    <Text as="span" variant="bodySm" weight="semibold">
                         {organizer ? `Organizer: ${organizer.displayName ?? organizer.email}` : 'Meeting details'}
-                    </Typography>
+                    </Text>
                     {summary && (
-                        <Typography variant="caption" color="text.secondary">
+                        <Text as="span" variant="caption" tone="secondary">
                             {summary}
-                        </Typography>
+                        </Text>
                     )}
-                </Box>
-            </AccordionSummary>
-            <AccordionDetails>
-                <Box className={styles.body}>
+                </span>
+                <ChevronDown className={styles.summaryIcon} data-open={isOpen || undefined} aria-hidden="true" />
+            </button>
+            <Collapsible open={isOpen}>
+                <div id={bodyId} className={styles.body}>
                     {organizer && (
-                        <Box>
-                            <Typography variant="caption" color="text.secondary">
+                        <div className={styles.field}>
+                            <Text as="span" variant="caption" tone="secondary">
                                 Organizer
-                            </Typography>
-                            <Typography variant="body2">{organizer.displayName ?? organizer.email}</Typography>
+                            </Text>
+                            <Text variant="bodySm">{organizer.displayName ?? organizer.email}</Text>
                             {showCreator && creator && (
-                                <Typography variant="caption" color="text.secondary" data-testid="meetingCreator">
+                                <Text as="span" variant="caption" tone="secondary" data-testid="meetingCreator">
                                     Created by {creator.displayName ?? creator.email}
-                                </Typography>
+                                </Text>
                             )}
-                        </Box>
+                        </div>
                     )}
                     {readOnly ? (
                         <AttendeesReadOnlyList attendees={attendees} people={people} selfEmail={self?.email} />
@@ -168,9 +174,9 @@ export function MeetingDetails({
                             {...(onReconsentClosed ? { onReconsentClosed } : {})}
                         />
                     )}
-                </Box>
-            </AccordionDetails>
-        </Accordion>
+                </div>
+            </Collapsible>
+        </section>
     );
 }
 
@@ -258,11 +264,11 @@ function AttendeesEditor({ db, attendees, people, selfEmail, ownerUserIdForNewPe
     }
 
     return (
-        <Box>
-            <Typography variant="caption" color="text.secondary">
+        <div className={styles.field}>
+            <Text as="span" variant="caption" tone="secondary">
                 Attendees
-            </Typography>
-            <Box className={styles.attendeesList} data-testid="attendeesList">
+            </Text>
+            <div className={styles.attendeesList} data-testid="attendeesList">
                 {attendees.map((attendee) => (
                     <AttendeeChip
                         key={attendee.email}
@@ -274,7 +280,7 @@ function AttendeesEditor({ db, attendees, people, selfEmail, ownerUserIdForNewPe
                         onEditPerson={(p) => setPersonEditTarget(p)}
                     />
                 ))}
-            </Box>
+            </div>
             <AttendeePicker
                 people={people}
                 onPickPerson={(person) => {
@@ -287,28 +293,30 @@ function AttendeesEditor({ db, attendees, people, selfEmail, ownerUserIdForNewPe
                 onPickEmail={(email) => void commitAttendee(email)}
             />
             {pendingPersonEmail && (
-                <Box className={styles.inlineInputRow} data-testid="addEmailToPersonRow">
-                    <Typography variant="caption">Add email for {pendingPersonEmail.person.name}:</Typography>
+                <div className={styles.inlineInputRow} data-testid="addEmailToPersonRow">
+                    <Text as="span" variant="caption">
+                        Add email for {pendingPersonEmail.person.name}:
+                    </Text>
                     <TextField
-                        size="small"
                         type="email"
+                        aria-label={`Email for ${pendingPersonEmail.person.name}`}
                         value={pendingPersonEmail.email}
                         onChange={(e) => setPendingPersonEmail({ person: pendingPersonEmail.person, email: e.target.value })}
                         className={styles.inlineInput}
                         data-testid="addEmailInput"
                     />
                     <Button
-                        size="small"
+                        size="sm"
                         onClick={() => void onCommitPersonWithEmail()}
                         disabled={!isPlausibleEmail(pendingPersonEmail.email)}
                         data-testid="addEmailCommit"
                     >
                         Add
                     </Button>
-                    <Button size="small" onClick={() => setPendingPersonEmail(null)}>
+                    <Button size="sm" tone="neutral" onClick={() => setPendingPersonEmail(null)}>
                         Cancel
                     </Button>
-                </Box>
+                </div>
             )}
             {/* Mount conditionally so the dialog's useState(prefilledEmail) re-initializes each open;
                 keeping it mounted with a toggled `open` would freeze the email field at its first value (''). */}
@@ -322,24 +330,22 @@ function AttendeesEditor({ db, attendees, people, selfEmail, ownerUserIdForNewPe
                 />
             )}
             {personEditTarget && <PersonEditDialog db={db} person={personEditTarget} onClose={() => setPersonEditTarget(null)} />}
-            <Dialog open={pendingMutation !== null} onClose={() => setPendingMutation(null)} maxWidth="xs" fullWidth>
+            <AlertDialog open={pendingMutation !== null} onClose={() => setPendingMutation(null)} size="xs">
                 <DialogTitle>Detach this occurrence?</DialogTitle>
-                <DialogContent>
-                    <DialogContentText data-testid="detachWarningText">
-                        Changing attendees here forks just this date from the recurring event. Future attendee changes on the routine series won't apply to this
-                        occurrence.
-                    </DialogContentText>
-                </DialogContent>
+                <DialogDescription data-testid="detachWarningText">
+                    Changing attendees here forks just this date from the recurring event. Future attendee changes on the routine series won't apply to this
+                    occurrence.
+                </DialogDescription>
                 <DialogActions>
                     <Button onClick={() => setPendingMutation(null)} data-testid="detachWarningCancel">
                         Cancel
                     </Button>
-                    <Button variant="contained" onClick={() => void onConfirmDetach()} data-testid="detachWarningConfirm">
+                    <Button variant="solid" onClick={() => void onConfirmDetach()} data-testid="detachWarningConfirm">
                         Detach
                     </Button>
                 </DialogActions>
-            </Dialog>
-        </Box>
+            </AlertDialog>
+        </div>
     );
 }
 
@@ -355,11 +361,11 @@ interface AttendeesReadOnlyListProps {
  */
 function AttendeesReadOnlyList({ attendees, people, selfEmail }: AttendeesReadOnlyListProps) {
     return (
-        <Box>
-            <Typography variant="caption" color="text.secondary">
+        <div className={styles.field}>
+            <Text as="span" variant="caption" tone="secondary">
                 Attendees
-            </Typography>
-            <Box className={styles.attendeesList} data-testid="attendeesReadOnlyList">
+            </Text>
+            <div className={styles.attendeesList} data-testid="attendeesReadOnlyList">
                 {attendees.map((attendee) => {
                     const person = findPersonByEmail(people, attendee.email);
                     const label = attendee.displayName ?? attendee.email;
@@ -368,19 +374,18 @@ function AttendeesReadOnlyList({ attendees, people, selfEmail }: AttendeesReadOn
                         <Tooltip key={attendee.email} title={attendee.email} placement="top">
                             <span>
                                 <Chip
-                                    label={person ? `${label} \u2713` : label}
-                                    color={chipColorFor(attendee.responseStatus)}
-                                    variant={attendee.responseStatus === 'needsAction' ? 'outlined' : 'filled'}
-                                    size="small"
-                                    {...(isSelf ? { sx: { fontWeight: 600 } } : {})}
+                                    label={person ? `${label} ✓` : label}
+                                    {...chipAppearanceFor(attendee.responseStatus)}
+                                    className={styles.attendeeChip}
+                                    data-self={isSelf || undefined}
                                     data-testid={`attendeeReadOnlyChip-${attendee.email}`}
                                 />
                             </span>
                         </Tooltip>
                     );
                 })}
-            </Box>
-        </Box>
+            </div>
+        </div>
     );
 }
 
@@ -395,26 +400,31 @@ interface AttendeeChipProps {
 
 function AttendeeChip({ attendee, person, isSelf, onRemove, onSaveAsPerson, onEditPerson }: AttendeeChipProps) {
     const label = attendee.displayName ?? attendee.email;
-    const color = chipColorFor(attendee.responseStatus);
-    // Chip variant convention: needsAction renders outlined (the "no answer" visual), every other
-    // state renders filled in the relevant color.
-    const variant = attendee.responseStatus === 'needsAction' ? 'outlined' : 'filled';
+    const text = person ? `${label} ✓` : label;
     // Click behavior:
     //  - self chip → not interactive.
     //  - unlinked attendee → opens QuickCreatePersonDialog (existing onSaveAsPerson behavior).
     //  - linked attendee → opens PersonEditDialog for that person (symmetric edit affordance).
+    // The chip carries a remove button, so the click target is a button inside its label — a chip
+    // that is itself a button cannot hold a second one.
     const clickHandler = isSelf ? undefined : person ? () => onEditPerson(person) : onSaveAsPerson;
     return (
         <Tooltip title={attendee.email} placement="top">
             <span>
                 <Chip
-                    label={person ? `${label} ✓` : label}
-                    color={color}
-                    variant={variant}
-                    size="small"
-                    onDelete={isSelf ? undefined : onRemove}
-                    {...(isSelf ? {} : { deleteIcon: <CloseIcon /> })}
-                    {...(clickHandler ? { onClick: clickHandler, clickable: true } : {})}
+                    label={
+                        clickHandler ? (
+                            <button type="button" className={styles.chipLabelButton} onClick={clickHandler} title={person ? 'Edit person' : 'Save as person'}>
+                                {text}
+                            </button>
+                        ) : (
+                            text
+                        )
+                    }
+                    {...chipAppearanceFor(attendee.responseStatus)}
+                    {...(isSelf ? {} : { onDelete: onRemove, deleteLabel: `Remove ${label}` })}
+                    className={styles.attendeeChip}
+                    data-self={isSelf || undefined}
                     data-testid={`attendeeChip-${attendee.email}`}
                 />
             </span>
@@ -430,84 +440,71 @@ interface AttendeePickerProps {
 
 function AttendeePicker({ people, onPickPerson, onPickEmail }: AttendeePickerProps) {
     const [input, setInput] = useState('');
+    // A stable list between keystrokes, so Base UI does not re-sync its items on every render.
+    const suggestions = useMemo(() => attendeeSuggestions(people, input), [people, input]);
 
-    function onSelected(value: AttendeeOption | string | null) {
-        if (!value) return;
-        if (typeof value === 'string') {
-            // The Autocomplete `freeSolo` path hands back a raw string on Enter / blur — treat it
-            // as a typed email if it looks like one, otherwise discard.
-            if (isPlausibleEmail(value)) onPickEmail(value.trim());
-            setInput('');
-            return;
-        }
-        if (value.kind === 'person') {
-            onPickPerson(value.person);
+    function onPicked(option: AttendeeOption) {
+        if (option.kind === 'person') {
+            onPickPerson(option.person);
         } else {
-            onPickEmail(value.newEmail);
+            onPickEmail(option.newEmail);
         }
         setInput('');
     }
 
+    // Enter on typed text with no suggestion highlighted: commit it if it looks like an email, else ignore.
+    function onTextSubmitted(text: string) {
+        if (isPlausibleEmail(text)) {
+            onPickEmail(text.trim());
+            setInput('');
+        }
+    }
+
     return (
-        <Autocomplete<AttendeeOption, false, false, true>
-            freeSolo
-            size="small"
-            options={people.map<AttendeeOption>((person) => ({ kind: 'person', person }))}
-            // Hide-when-empty: the Autocomplete pops only after the user starts typing, keeping
-            // the form compact when no one is being added.
+        <Autocomplete<AttendeeOption>
+            aria-label="Add attendee"
+            placeholder="Add attendee…"
             inputValue={input}
-            onInputChange={(_, next) => setInput(next)}
-            onChange={(_, value) => onSelected(value)}
-            getOptionLabel={(option) => {
-                if (typeof option === 'string') return option;
-                if (option.kind === 'newEmail') return option.newEmail;
-                return option.person.email ? `${option.person.name} (${option.person.email})` : option.person.name;
-            }}
-            renderOption={(props, option) => {
-                if (typeof option === 'string' || option.kind === 'newEmail') return null;
-                const { person } = option;
-                return (
-                    <li {...props} key={person._id} data-testid={`attendeePickerOption-${person._id}`}>
-                        <Box>
-                            <Typography variant="body2">{person.name}</Typography>
-                            {person.email ? (
-                                <Typography variant="caption" color="text.secondary">
-                                    {person.email}
-                                </Typography>
-                            ) : (
-                                <Typography variant="caption" color="primary">
-                                    add email →
-                                </Typography>
-                            )}
-                        </Box>
-                    </li>
-                );
-            }}
-            filterOptions={(options, state) => {
-                const trimmed = state.inputValue.trim().toLowerCase();
-                const matchedPeople = trimmed
-                    ? options.filter((o) => {
-                          if (o.kind !== 'person') return false;
-                          return o.person.name.toLowerCase().includes(trimmed) || (o.person.email ?? '').toLowerCase().includes(trimmed);
-                      })
-                    : options;
-                // Surface a synthetic "type new email" row whenever the input parses as an email
-                // and isn't already represented by a matched person.
-                if (isPlausibleEmail(state.inputValue) && !matchedPeople.some((o) => o.kind === 'person' && (o.person.email ?? '').toLowerCase() === trimmed)) {
-                    return [...matchedPeople, { kind: 'newEmail', newEmail: state.inputValue.trim() }];
-                }
-                return matchedPeople;
-            }}
-            renderInput={(params) => <TextField {...params} placeholder="Add attendee…" data-testid="attendeePickerInput" />}
+            onInputValueChange={setInput}
+            items={suggestions}
+            itemKey={(option) => (option.kind === 'person' ? option.person._id : `new:${option.newEmail}`)}
+            itemTestId={(option) => (option.kind === 'person' ? `attendeePickerOption-${option.person._id}` : 'attendeePickerNewEmail')}
+            renderItem={(option) => <AttendeeSuggestion option={option} />}
+            onItemPicked={onPicked}
+            onSubmitText={onTextSubmitted}
+            data-testid="attendeePickerInput"
         />
+    );
+}
+
+function AttendeeSuggestion({ option }: { option: AttendeeOption }) {
+    if (option.kind === 'newEmail') {
+        return <Text variant="bodySm">Add {option.newEmail}</Text>;
+    }
+    const { person } = option;
+    return (
+        <span className={styles.suggestion}>
+            <Text as="span" variant="bodySm">
+                {person.name}
+            </Text>
+            {person.email ? (
+                <Text as="span" variant="caption" tone="secondary">
+                    {person.email}
+                </Text>
+            ) : (
+                <Text as="span" variant="caption" tone="accent">
+                    add email →
+                </Text>
+            )}
+        </span>
     );
 }
 
 interface RsvpButtonsProps {
     currentStatus: GCalResponseStatus;
     onRsvp: (status: RsvpStatus) => Promise<void>;
-    scopeMissingReconsentUrl?: string;
-    onReconsentClosed?: () => void;
+    scopeMissingReconsentUrl?: string | undefined;
+    onReconsentClosed?: (() => void) | undefined;
 }
 
 function RsvpButtons({ currentStatus, onRsvp, scopeMissingReconsentUrl, onReconsentClosed }: RsvpButtonsProps) {
@@ -515,33 +512,29 @@ function RsvpButtons({ currentStatus, onRsvp, scopeMissingReconsentUrl, onRecons
 
     if (scopeMissingReconsentUrl) {
         return (
-            <Box className={styles.rsvpButtons} data-testid="rsvpReconsent">
+            <div className={styles.rsvpButtons} data-testid="rsvpReconsent">
                 <Tooltip title="Google needs additional permissions before RSVPs can be sent.">
-                    <Button
-                        variant="contained"
-                        color="primary"
-                        onClick={() => openReconsentPopup(scopeMissingReconsentUrl, onReconsentClosed)}
-                        data-testid="rsvpReconsentButton"
-                    >
+                    <Button variant="solid" onClick={() => openReconsentPopup(scopeMissingReconsentUrl, onReconsentClosed)} data-testid="rsvpReconsentButton">
                         RSVP — authorize
                     </Button>
                 </Tooltip>
-            </Box>
+            </div>
         );
     }
 
     return (
-        <Box className={styles.rsvpButtons} data-testid="rsvpButtons">
+        <div className={styles.rsvpButtons} data-testid="rsvpButtons">
             {RSVP_BUTTONS.map((cfg) => {
                 const isSelected = currentStatus === cfg.status;
                 return (
                     <Button
                         key={cfg.status}
-                        size="small"
-                        variant={isSelected ? 'contained' : 'outlined'}
-                        color={cfg.color}
+                        size="sm"
+                        variant={isSelected ? 'solid' : 'outline'}
+                        tone={cfg.tone}
                         disabled={isPending}
-                        startIcon={isSelected ? <CheckIcon /> : <HelpOutlineIcon />}
+                        startIcon={isSelected ? <Check /> : <CircleHelp />}
+                        aria-pressed={isSelected}
                         onClick={() => startRsvp(async () => await onRsvp(cfg.status))}
                         data-testid={`rsvp-${cfg.status}`}
                     >
@@ -549,7 +542,7 @@ function RsvpButtons({ currentStatus, onRsvp, scopeMissingReconsentUrl, onRecons
                     </Button>
                 );
             })}
-        </Box>
+        </div>
     );
 }
 

@@ -49,7 +49,7 @@ test.describe('collapsible usage-ranked pickers', () => {
             await page.getByTestId('editorWorkContextChip').filter({ hasText: 'Ctx K' }).click();
             await page.getByTestId('editorWorkContextChipShowFewer').click();
             await expect(page.getByTestId('editorWorkContextChip')).toHaveCount(9);
-            await expect(page.getByTestId('editorWorkContextChip').filter({ hasText: 'Ctx K' })).toHaveClass(/MuiChip-filled/);
+            await expect(page.getByTestId('editorWorkContextChip').filter({ hasText: 'Ctx K' })).toHaveAttribute('aria-pressed', 'true');
         });
     });
 

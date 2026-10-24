@@ -1,13 +1,16 @@
 .row {
-    gap: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
 }
 
 .label {
-    font-size: 0.875rem;
+    display: block;
 }
 
 .controls {
-    align-items: center;
-    gap: 0.75rem;
+    display: flex;
     flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3);
 }

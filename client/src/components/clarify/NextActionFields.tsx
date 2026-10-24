@@ -1,19 +1,11 @@
-import Box from '@mui/material/Box';
-import Checkbox from '@mui/material/Checkbox';
-import Chip from '@mui/material/Chip';
-import FormControlLabel from '@mui/material/FormControlLabel';
-import FormLabel from '@mui/material/FormLabel';
-import Stack from '@mui/material/Stack';
-import TextField from '@mui/material/TextField';
-import ToggleButton from '@mui/material/ToggleButton';
-import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
-import Typography from '@mui/material/Typography';
 import { useMemo } from 'react';
+import { Checkbox, Chip, Text, TextField, ToggleGroup } from '../../designSystem';
 import { EMPTY_USAGE_INDEX, rankByUsage, type UsageIndex } from '../../lib/entityUsage';
 import { sortByName } from '../../lib/sortByName';
 import type { EnergyLevel, StoredPerson, StoredWorkContext } from '../../types/MyDB';
 import { CollapsibleChipGroup } from '../pickers/CollapsibleChipGroup';
 import { DateField } from '../pickers/DateField';
+import { FieldSection } from './FieldSection';
 import styles from './NextActionFields.module.css';
 import type { NextActionFormState } from './types';
 
@@ -23,10 +15,16 @@ interface Props {
     workContexts: StoredWorkContext[];
     people: StoredPerson[];
     /** Ranks the chip clouds most-used-first and drives their collapse; omit for alphabetical-only (stories/tests). */
-    usage?: UsageIndex;
+    usage?: UsageIndex | undefined;
     /** Weekly review: pair the narrow controls into two columns so the whole item fits without scrolling. */
-    dense?: boolean;
+    dense?: boolean | undefined;
 }
+
+const ENERGY_OPTIONS: { value: EnergyLevel; label: string }[] = [
+    { value: 'low', label: 'Low' },
+    { value: 'medium', label: 'Medium' },
+    { value: 'high', label: 'High' },
+];
 
 export function NextActionFields({ value, onChange, workContexts, people, usage = EMPTY_USAGE_INDEX, dense = false }: Props) {
     function toggleWorkContext(id: string) {
@@ -46,154 +44,78 @@ export function NextActionFields({ value, onChange, workContexts, people, usage 
     const alphabeticalPeople = useMemo(() => sortByName(people), [people]);
     const selectedContextIds = useMemo(() => new Set(value.workContextIds), [value.workContextIds]);
     const selectedPeopleIds = useMemo(() => new Set(value.peopleIds), [value.peopleIds]);
+    const fullSpan = dense ? styles.fullSpan : undefined;
 
     return (
-        <Stack
-            sx={
-                // Dense grid via sx, not a CSS-module class: Stack's own `gap` is an emotion style
-                // that would out-specify a plain module class's column-gap.
-                dense
-                    ? // Below `sm` the Stack's own `display: flex` column stands — two columns would squeeze the date inputs.
-                      { gap: 2, display: { sm: 'grid' }, gridTemplateColumns: { sm: '1fr 1fr' }, columnGap: { sm: 3 }, alignItems: { sm: 'start' } }
-                    : { gap: 2 }
-            }
-        >
+        <div className={styles.fields} data-dense={dense || undefined}>
             {/* Tickler field shown first — "ignoreBefore" hides the item until that date.
                 Placing it at the top makes the snooze intent explicit before filling other fields. */}
-            <Box>
-                <FormLabel>
-                    <Typography
-                        variant="caption"
-                        sx={{
-                            color: 'text.secondary',
-                        }}
-                    >
-                        Tickler — hide until
-                    </Typography>
-                </FormLabel>
+            <div>
+                <Text as="span" variant="caption" tone="secondary" className={styles.caption}>
+                    Tickler — hide until
+                </Text>
                 {/* The explainer costs a full line; in the review the label alone carries it. */}
                 {!dense && (
-                    <Typography
-                        variant="caption"
-                        sx={{
-                            color: 'text.secondary',
-                            display: 'block',
-                            mb: 0.5,
-                        }}
-                    >
+                    <Text as="span" variant="caption" tone="secondary" className={styles.explainer}>
                         Item stays hidden from Next Actions until this date
-                    </Typography>
+                    </Text>
                 )}
                 <DateField accessibleName="Tickler date" value={value.ignoreBefore} onChange={(ignoreBefore) => onChange({ ignoreBefore })} />
-            </Box>
+            </div>
             {workContexts.length > 0 && (
-                <Box className={dense ? styles.fullSpan : undefined}>
-                    <FormLabel>
-                        <Typography
-                            variant="caption"
-                            sx={{
-                                color: 'text.secondary',
-                            }}
-                        >
-                            Work contexts
-                        </Typography>
-                    </FormLabel>
+                <FieldSection label="Work contexts" className={fullSpan}>
                     <CollapsibleChipGroup
                         ranked={rankedContexts}
                         alphabetical={alphabeticalContexts}
                         selectedIds={selectedContextIds}
                         keyOf={(ctx) => ctx._id}
                         testId="editorWorkContextChip"
-                        sx={{ mt: 0.5 }}
                         renderChip={(ctx) => (
                             <Chip
                                 label={ctx.name}
                                 data-testid="editorWorkContextChip"
-                                size="small"
-                                variant={value.workContextIds.includes(ctx._id) ? 'filled' : 'outlined'}
-                                color={value.workContextIds.includes(ctx._id) ? 'primary' : 'default'}
+                                variant="outline"
+                                selected={value.workContextIds.includes(ctx._id)}
                                 onClick={() => toggleWorkContext(ctx._id)}
                             />
                         )}
                     />
-                </Box>
+                </FieldSection>
             )}
             {people.length > 0 && (
-                <Box className={dense ? styles.fullSpan : undefined}>
-                    <FormLabel>
-                        <Typography
-                            variant="caption"
-                            sx={{
-                                color: 'text.secondary',
-                            }}
-                        >
-                            People
-                        </Typography>
-                    </FormLabel>
+                <FieldSection label="People" className={fullSpan}>
                     <CollapsibleChipGroup
                         ranked={rankedPeople}
                         alphabetical={alphabeticalPeople}
                         selectedIds={selectedPeopleIds}
                         keyOf={(p) => p._id}
                         testId="editorPersonChip"
-                        sx={{ mt: 0.5 }}
                         renderChip={(p) => (
                             <Chip
                                 label={p.name}
                                 data-testid="editorPersonChip"
-                                size="small"
-                                variant={value.peopleIds.includes(p._id) ? 'filled' : 'outlined'}
-                                color={value.peopleIds.includes(p._id) ? 'primary' : 'default'}
+                                variant="outline"
+                                selected={value.peopleIds.includes(p._id)}
                                 onClick={() => togglePerson(p._id)}
                             />
                         )}
                     />
-                </Box>
+                </FieldSection>
             )}
-            <Box>
-                <FormLabel>
-                    <Typography
-                        variant="caption"
-                        sx={{
-                            color: 'text.secondary',
-                        }}
-                    >
-                        Energy
-                    </Typography>
-                </FormLabel>
-                <ToggleButtonGroup
-                    exclusive
-                    size="small"
-                    value={value.energy || null}
-                    onChange={(_e, val: EnergyLevel | null) => onChange({ energy: val ?? '' })}
-                    className={styles.energyToggle}
-                >
-                    <ToggleButton value="low">Low</ToggleButton>
-                    <ToggleButton value="medium">Medium</ToggleButton>
-                    <ToggleButton value="high">High</ToggleButton>
-                </ToggleButtonGroup>
-            </Box>
+            <FieldSection label="Energy">
+                {/* No energy is a valid choice: pressing the active level clears it. */}
+                <ToggleGroup allowDeselect value={value.energy} onValueChange={(energy) => onChange({ energy })} options={ENERGY_OPTIONS} />
+            </FieldSection>
             <TextField
                 label="Time estimate (min)"
                 value={value.time}
                 onChange={(e) => onChange({ time: e.target.value })}
                 type="number"
-                size="small"
                 className={styles.timeField}
-                slotProps={{ htmlInput: { min: 1 } }}
+                inputProps={{ min: 1 }}
             />
-            <Stack
-                direction="row"
-                sx={{
-                    gap: 2,
-                }}
-            >
-                <FormControlLabel
-                    control={<Checkbox size="small" checked={value.urgent} onChange={(e) => onChange({ urgent: e.target.checked })} />}
-                    label={<Typography variant="body2">Urgent</Typography>}
-                />
-            </Stack>
+            <Checkbox checked={value.urgent} onCheckedChange={(urgent) => onChange({ urgent })} label="Urgent" />
             <DateField label="Expected by" value={value.expectedBy} onChange={(expectedBy) => onChange({ expectedBy })} />
-        </Stack>
+        </div>
     );
 }

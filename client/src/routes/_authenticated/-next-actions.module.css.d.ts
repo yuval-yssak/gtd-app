@@ -3,6 +3,7 @@ declare const styles: {
     readonly archivedTag: string;
     readonly countChip: string;
     readonly dueText: string;
+    readonly filterChipRow: string;
     readonly item: string;
     readonly list: string;
     readonly listItemText: string;

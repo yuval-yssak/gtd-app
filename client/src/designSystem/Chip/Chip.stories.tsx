@@ -26,6 +26,16 @@ export const Tones: Story = {
         </div>
     ),
 };
+/** Toggled on: accent for neutral/accent, solid in the status tone otherwise (the editor's Done / Trash chips). */
+export const SelectedTones: Story = {
+    render: () => (
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+            {(['neutral', 'accent', 'success', 'warning', 'error', 'info'] as const).map((tone) => (
+                <Chip key={tone} tone={tone} variant="outline" label={tone} selected onClick={fn()} />
+            ))}
+        </div>
+    ),
+};
 export const WithIcon: Story = { args: { label: 'Routine', icon: <Repeat />, variant: 'outline' } };
 export const Clickable: Story = { args: { variant: 'outline', onClick: fn() } };
 export const ToggledOn: Story = { args: { onClick: fn(), selected: true } };

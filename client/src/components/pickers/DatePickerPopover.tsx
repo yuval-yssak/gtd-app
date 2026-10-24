@@ -1,11 +1,6 @@
-import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
-import ChevronRightIcon from '@mui/icons-material/ChevronRight';
-import Chip from '@mui/material/Chip';
-import IconButton from '@mui/material/IconButton';
-import Popover from '@mui/material/Popover';
-import Typography from '@mui/material/Typography';
-import classNames from 'classnames';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useState } from 'react';
+import { Chip, IconButton, Popover, Text } from '../../designSystem';
 import {
     dayCellLabel,
     dayOfMonth,
@@ -25,7 +20,7 @@ interface PanelProps {
     value: string;
     onPick: (dateIso: string) => void;
     /** Injectable for deterministic tests; defaults to the app day clock. */
-    todayIso?: string;
+    todayIso?: string | undefined;
 }
 
 /**
@@ -38,25 +33,18 @@ export function DatePickerPanel({ value, onPick, todayIso = getTodayIso() }: Pan
         <div className={styles.panel} data-testid="datePickerPanel">
             <div className={styles.quickPicks}>
                 {quickDatePicks(todayIso).map((pick) => (
-                    <Chip
-                        key={pick.label}
-                        label={pick.label}
-                        size="small"
-                        variant={pick.date === value ? 'filled' : 'outlined'}
-                        color={pick.date === value ? 'primary' : 'default'}
-                        onClick={() => onPick(pick.date)}
-                    />
+                    <Chip key={pick.label} label={pick.label} size="sm" variant="outline" selected={pick.date === value} onClick={() => onPick(pick.date)} />
                 ))}
             </div>
             <div className={styles.monthHeader}>
-                <IconButton aria-label="Previous month" size="small" onClick={() => setMonthIso(shiftMonth(monthIso, -1))}>
-                    <ChevronLeftIcon fontSize="small" />
+                <IconButton aria-label="Previous month" size="sm" onClick={() => setMonthIso(shiftMonth(monthIso, -1))}>
+                    <ChevronLeft />
                 </IconButton>
-                <Typography variant="subtitle2" component="span" data-testid="datePickerMonth">
+                <Text as="span" variant="subtitleSm" data-testid="datePickerMonth">
                     {monthHeading(monthIso)}
-                </Typography>
-                <IconButton aria-label="Next month" size="small" onClick={() => setMonthIso(shiftMonth(monthIso, 1))}>
-                    <ChevronRightIcon fontSize="small" />
+                </Text>
+                <IconButton aria-label="Next month" size="sm" onClick={() => setMonthIso(shiftMonth(monthIso, 1))}>
+                    <ChevronRight />
                 </IconButton>
             </div>
             <MonthGrid monthIso={monthIso} value={value} todayIso={todayIso} onPick={onPick} />
@@ -85,11 +73,10 @@ function MonthGrid({ monthIso, value, todayIso, onPick }: MonthGridProps) {
                     <button
                         key={dayIso}
                         type="button"
-                        className={classNames(styles.day, {
-                            [styles.outside]: !isInMonth(dayIso, monthIso),
-                            [styles.today]: dayIso === todayIso,
-                            [styles.selected]: dayIso === value,
-                        })}
+                        className={styles.day}
+                        data-outside={!isInMonth(dayIso, monthIso) || undefined}
+                        data-today={dayIso === todayIso || undefined}
+                        data-selected={dayIso === value || undefined}
                         aria-label={dayCellLabel(dayIso)}
                         aria-pressed={dayIso === value}
                         onClick={() => onPick(dayIso)}
@@ -111,13 +98,7 @@ interface PopoverProps {
 /** Anchored picker for DateField — the panel unmounts on close, which is what resets its month. */
 export function DatePickerPopover({ anchorEl, value, onPick, onClose }: PopoverProps) {
     return (
-        <Popover
-            open={anchorEl !== null}
-            anchorEl={anchorEl}
-            onClose={onClose}
-            anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-            transformOrigin={{ vertical: 'top', horizontal: 'right' }}
-        >
+        <Popover open={anchorEl !== null} anchor={anchorEl} onClose={onClose} align="end" aria-label="Pick a date">
             <DatePickerPanel value={value} onPick={onPick} />
         </Popover>
     );

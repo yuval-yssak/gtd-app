@@ -40,3 +40,14 @@
     gap: 0.5rem;
     justify-content: flex-end;
 }
+
+/* The end date sits on its own row under the "Ends on" choice. */
+.endDate {
+    display: flex;
+    inline-size: fit-content;
+    margin-block-start: var(--space-2);
+}
+
+.chipGroup {
+    margin-block-start: var(--space-1);
+}

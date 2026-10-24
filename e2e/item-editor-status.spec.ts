@@ -19,6 +19,12 @@ test.describe('Item editor — unified status editor', () => {
             const editor = page.getByTestId('itemPageWrapper');
             await expect(editor).toBeVisible();
 
+            // Only the selected status chip takes a colour: an inbox item's Done and Trash stay neutral.
+            const statusChip = (label: string) => editor.getByTestId('itemEditorStatusChip').and(page.getByRole('button', { name: label, exact: true }));
+            await expect(statusChip('Inbox')).toHaveAttribute('aria-pressed', 'true');
+            await expect(statusChip('Done')).toHaveAttribute('data-tone', 'neutral');
+            await expect(statusChip('Trash')).toHaveAttribute('data-tone', 'neutral');
+
             await editor.getByLabel('Title').fill('Revised inbox title');
             await editor.getByLabel('Notes (Markdown)').fill('**bold** note body');
             await editor.getByRole('button', { name: 'Save changes' }).click();

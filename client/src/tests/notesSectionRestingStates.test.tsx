@@ -19,7 +19,8 @@ function buttonTag(html: string, label: string) {
 describe('NotesSection resting states', () => {
     it('non-empty notes rest in a read-only preview with the pencil as the only edit affordance', () => {
         const html = renderPageNotes('Hello **world**');
-        expect(html).toMatch(/<div[^>]*role="region"[^>]*data-testid="pageNotesPreview"/);
+        // A labelled <section> is a region landmark: focusable, so keyboard users can scroll long notes.
+        expect(html).toMatch(/<section[^>]*aria-labelledby="[^"]+"[^>]*data-testid="pageNotesPreview"/);
         expect(html).toContain('<strong>world</strong>');
         expect(buttonTag(html, 'Edit notes')).toBeDefined();
         expect(buttonTag(html, 'Done editing notes')).toBeUndefined();

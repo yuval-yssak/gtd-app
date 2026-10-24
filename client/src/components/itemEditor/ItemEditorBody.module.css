@@ -2,14 +2,15 @@
 .body {
     display: flex;
     flex-direction: column;
-    gap: 1rem;
+    gap: var(--space-4);
 }
 
 /* Weekly review: ~10 stacked sections turn the 1rem gap into ~160px of pure whitespace inside a
  * card whose visible height is only about 100dvh - 13.6rem. Halving it is the single biggest
  * vertical saving available without touching any content. */
 .bodyReview {
-    gap: 0.5rem;
+    gap: var(--space-2);
+
     /* The global 60vh ceiling is sized for the item PAGE, where notes own the viewport. In the
      * review the card is already capped at ~100dvh - 13.6rem and the title, brief, status chips
      * and metadata must fit beside the notes: at 929px tall, 60vh of notes (557px) leaves only
@@ -20,88 +21,107 @@
 }
 
 .statusLabel {
+    display: block;
     text-transform: uppercase;
     letter-spacing: 0.0313rem;
 }
 
 .statusChips {
-    margin-top: 0.5rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin-block-start: var(--space-2);
 }
 
-.preview {
-    min-height: 7.5rem;
-    padding: 0.75rem 0.875rem;
-    border: 0.0625rem solid var(--mui-palette-divider, rgba(0, 0, 0, 0.23));
-    border-radius: 0.25rem;
-    font-size: 0.875rem;
+/* The per-status forms under a status (someday/maybe, routine): an explainer line, then fields. */
+.statusFields {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+}
+
+.accountHint {
+    display: block;
+    margin-block-start: var(--space-1);
+}
+
+/* Read-only notes preview; editing goes through the pencil button only, so it has no click/hover
+ * affordance of its own. Same cap as the CodeMirror editor's .cm-scroller: very long notes scroll
+ * inside the preview instead of pushing the action buttons below the fold of the whole page. */
+.pagePreview {
+    min-block-size: 7.5rem;
+    max-block-size: var(--notes-max-height);
+    padding-block: var(--space-3);
+
+    /* Matches CodeMirror's line padding (.cm-line in MarkdownNotesEditor.module.css), so the text holds
+     * still when the notes switch between preview and editor. */
+    padding-inline: 0.875rem;
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-sm);
+    font-size: var(--type-sm-size);
     line-height: 1.6;
     overflow-y: auto;
-}
-
-/* Read-only preview region in page mode — same shell as .preview; editing goes through the
- * pencil button only, so it has no click/hover affordance of its own. */
-.pagePreview {
-    composes: preview;
-    /* Same cap as the CodeMirror editor's .cm-scroller: very long notes scroll inside the
-     * preview instead of pushing the action buttons below the fold of the whole page. */
-    max-height: var(--notes-max-height);
 }
 
 /* Review: the 7.5rem floor is a comfortable editing target but pure waste when scanning — a
  * 3-line note should occupy 3 lines. The review's 30vh scroll cap (set on .bodyReview) still
  * applies above. */
 .bodyReview .pagePreview {
-    min-height: 0;
+    min-block-size: 0;
 }
 
 .pagePreview:focus-visible {
-    outline: 0.125rem solid var(--mui-palette-primary-main, #1976d2);
-    outline-offset: 0.0625rem;
+    outline: var(--focus-ring-width) solid var(--focus-ring-color);
+    outline-offset: 1px;
 }
 
-/* Page-mode section header — same uppercase-caption style as the Status section, but kept under
- * its own class so renaming "STATUS" → "Notes" doesn't visually couple unrelated sections. */
-.sectionLabel {
+/* Same uppercase-caption style as the Status section, but kept under its own class so renaming
+ * "STATUS" → "Notes" doesn't visually couple unrelated sections. */
+.notesLabel {
+    display: block;
     text-transform: uppercase;
     letter-spacing: 0.0313rem;
-    display: block;
-    margin-bottom: 0.5rem;
 }
 
-/* Header row for the page-mode notes section — aligns label with an inline Edit affordance. */
+/* Header row for the notes section — aligns the label with an inline Edit affordance. */
 .notesHeader {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--space-2);
 }
 
-/* Markdown content styling lives in MarkdownPreview.module.css — .preview is just the shell. */
+/* Markdown content styling lives in MarkdownPreview.module.css — .pagePreview is just the shell. */
 
 .inlineActions {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.5rem;
+    gap: var(--space-2);
     justify-content: flex-end;
 }
 
-/* Portaled variant: fills the host bar's content slot so `margin-right: auto` children (the
- * weekly review's nav arrows) anchor to the slot's left edge while the buttons keep right. */
+/* Portaled variant: fills the host bar's content slot so `margin-inline-end: auto` children (the
+ * weekly review's nav arrows) anchor to the slot's start edge while the buttons keep to the end. */
 .stretchedActions {
     flex: 1;
-    min-width: 0;
+    min-inline-size: 0;
 }
 
-/* Bottom meta row: created timestamp on the left, the copiable item id pushed right. */
+/* The disabled Save button's tooltip anchor — inline so it sizes to the button. */
+.tooltipAnchor {
+    display: inline-flex;
+}
+
+/* Bottom meta row: created timestamp at the start, the copiable item id pushed to the end. */
 .metaRow {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
-    gap: 0.25rem;
+    gap: var(--space-1);
 }
 
 .itemId {
-    margin-left: auto;
-    font-family: monospace;
+    margin-inline-start: auto;
+    font-family: var(--font-mono);
     overflow-wrap: anywhere;
 }
 
@@ -109,8 +129,44 @@
  * its far end. Padded to the icon buttons' height so a one-line brief centres beside them. */
 .briefText {
     flex-grow: 1;
-    padding: 0.3125rem 0;
+    padding-block: 0.3125rem;
     overflow-wrap: anywhere;
+}
+
+/* Brief row — content, pencil, generate — aligned to the first line of a wrapping brief. */
+.briefRow {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-1);
+}
+
+/* The open brief field plus its Done button. */
+.briefEditor {
+    display: flex;
+    flex-grow: 1;
+    align-items: flex-start;
+    gap: var(--space-1);
+}
+
+.briefField {
+    flex-grow: 1;
+}
+
+.briefNotice {
+    margin-block-start: var(--space-2);
+}
+
+.briefCaption {
+    display: block;
+    margin-block-start: var(--space-1);
+}
+
+/* The inline "Replace your brief?" confirm under the brief. */
+.replaceConfirm {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-block-start: var(--space-1);
 }
 
 /* The editor root takes focus on a click into its empty space (keyboard shortcuts) — no ring for that. */

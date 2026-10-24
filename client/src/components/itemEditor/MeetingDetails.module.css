@@ -1,49 +1,115 @@
-.accordion {
-    box-shadow: none;
-    border: 0.0625rem solid var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
+.panel {
+    border: 1px solid var(--color-divider);
+    border-radius: var(--radius-md);
+}
+
+/* The disclosure header: organizer + response tally, with the chevron at the end. */
+.summary {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    inline-size: 100%;
+    padding: var(--space-3) var(--space-4);
+    border: none;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: start;
+    cursor: pointer;
+}
+
+.summary:hover {
+    background-color: var(--color-state-hover);
+}
+
+.summary:focus-visible {
+    outline: var(--focus-ring-width) solid var(--focus-ring-color);
+    outline-offset: calc(var(--focus-ring-width) * -1);
 }
 
 .summaryHeader {
     display: flex;
+    flex: 1;
     flex-direction: column;
-    gap: 0.125rem;
-    width: 100%;
+    gap: var(--space-0-5);
 }
 
-.summaryTitle {
-    font-weight: 600;
+.summaryIcon {
+    flex-shrink: 0;
+    inline-size: var(--icon-size-md);
+    block-size: var(--icon-size-md);
+    color: var(--color-text-secondary);
+    transition: transform var(--duration-normal) var(--ease-standard);
+}
+
+.summaryIcon[data-open] {
+    transform: rotate(180deg);
 }
 
 .body {
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
+    gap: var(--space-3);
+    padding: 0 var(--space-4) var(--space-4);
+}
+
+.field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-0-5);
 }
 
 .attendeesList {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.375rem;
+    gap: var(--space-1-5);
+    margin-block-start: var(--space-1);
+}
+
+/* The current user's own chip reads bolder — it is the one the RSVP buttons change. */
+.attendeeChip[data-self] {
+    font-weight: var(--weight-semibold);
+}
+
+/* The chip's label as its click target (save as person / edit person); the remove button sits beside it. */
+.chipLabelButton {
+    padding: 0;
+    border: none;
+    background: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+}
+
+.chipLabelButton:focus-visible {
+    outline: var(--focus-ring-width) solid var(--focus-ring-color);
+    outline-offset: var(--focus-ring-offset);
+}
+
+.suggestion {
+    display: flex;
+    flex-direction: column;
 }
 
 .rsvpButtons {
     display: flex;
-    gap: 0.5rem;
-    margin-top: 0.5rem;
-    align-items: center;
     flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    margin-block-start: var(--space-2);
 }
 
 /* A subtle inline-form for "add email" / "save as person" affordances that pop next to the
  * attendee chip — keeps them visually grouped without yanking layout. */
 .inlineInputRow {
     display: flex;
-    gap: 0.5rem;
-    align-items: center;
-    margin-top: 0.5rem;
     flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    margin-block-start: var(--space-2);
 }
 
 .inlineInput {
-    min-width: 12rem;
+    min-inline-size: 12rem;
 }

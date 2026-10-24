@@ -30,3 +30,24 @@ export const Open: Story = {
         await within(document.body).findByRole('listbox');
     },
 };
+
+const ACCOUNT_CALENDARS = [
+    { value: '', label: 'Default' },
+    { value: 'a-work', label: 'Work', group: 'dana@example.com' },
+    { value: 'a-home', label: 'Home', group: 'dana@example.com' },
+    { value: 'b-team', label: 'Team', group: 'dana@work.example.com' },
+];
+
+function GroupedSelect() {
+    const [value, setValue] = useState('');
+    return <Select label="Calendar" value={value} onValueChange={setValue} options={ACCOUNT_CALENDARS} />;
+}
+
+/** Options grouped under per-account headers, open — the calendar picker on multi-account devices. */
+export const GroupedOpen: Story = {
+    render: () => <GroupedSelect />,
+    play: async ({ canvasElement }) => {
+        await userEvent.click(within(canvasElement).getByRole('combobox', { name: 'Calendar' }));
+        await within(document.body).findByText('dana@work.example.com');
+    },
+};

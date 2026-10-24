@@ -31,10 +31,10 @@ const TICKLER_EXPLAINER = 'Item stays hidden from Next Actions until this date';
 
 describe('NextActionFields dense layout', () => {
     it('pairs the narrow controls into two columns above the sm breakpoint when dense', () => {
-        // The grid IS the fix — without it every narrow control (date, number, toggle, checkbox
-        // pair) keeps a full-width row, which is what forced scrolling in the weekly review.
-        expect(markup(true)).toContain('grid-template-columns:1fr 1fr');
-        expect(markup(false)).not.toContain('grid-template-columns');
+        // The attribute switches on the two-column grid that keeps the review card from scrolling; the
+        // grid's geometry itself is pinned by e2e/weekly-review-dense-fields.spec.ts.
+        expect(markup(true)).toContain('data-dense');
+        expect(markup(false)).not.toContain('data-dense');
     });
 
     it('spans the chip clouds across both grid columns when dense', () => {

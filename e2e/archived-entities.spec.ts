@@ -40,7 +40,7 @@ test.describe('archived work contexts and people', () => {
             await expect(page.getByTestId('itemPageWrapper')).toBeVisible();
             // …but this item carries the tag, so the chip stays visible and selected (removable).
             await expect(page.getByTestId('editorWorkContextChip')).toHaveText(['Errands', 'Phone']);
-            await expect(page.getByTestId('editorWorkContextChip').filter({ hasText: 'Errands' })).toHaveClass(/MuiChip-filled/);
+            await expect(page.getByTestId('editorWorkContextChip').filter({ hasText: 'Errands' })).toHaveAttribute('aria-pressed', 'true');
 
             // Unarchive restores the filter chip. Park the mouse first — the earlier archive click
             // left the pointer where the rows have since reordered, so another row's archive-button

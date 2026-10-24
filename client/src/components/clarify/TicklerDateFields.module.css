@@ -1,0 +1,12 @@
+/* Stacked on phones, side by side from the sm breakpoint (600px) up. */
+.dates {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+}
+
+@media (width >= 600px) {
+    .dates {
+        flex-direction: row;
+    }
+}

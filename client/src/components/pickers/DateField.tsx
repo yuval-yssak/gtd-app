@@ -1,15 +1,13 @@
-import CalendarTodayIcon from '@mui/icons-material/CalendarToday';
-import IconButton from '@mui/material/IconButton';
-import InputAdornment from '@mui/material/InputAdornment';
-import type { SxProps, Theme } from '@mui/material/styles';
-import TextField from '@mui/material/TextField';
+import { clsx } from 'clsx';
+import { CalendarDays } from 'lucide-react';
 import { type MouseEvent, useState } from 'react';
+import { IconButton, TextField } from '../../designSystem';
 import { ClearFieldButton } from './ClearFieldButton';
 import styles from './DateField.module.css';
 import { DatePickerPopover } from './DatePickerPopover';
 import { useClearAndRefocus } from './useClearAndRefocus';
 
-/** Every field needs a name: either the floating label, or an accessible name when the caller
+/** Every field needs a name: either the visible label, or an accessible name when the caller
  *  renders its own caption (NextActionFields' "Tickler — hide until"). */
 type DateFieldNaming = { label: string; accessibleName?: never } | { label?: never; accessibleName: string };
 
@@ -17,14 +15,13 @@ export type DateFieldProps = DateFieldNaming & {
     /** `YYYY-MM-DD` or empty. */
     value: string;
     onChange: (next: string) => void;
-    size?: 'small' | 'medium';
-    required?: boolean;
-    disabled?: boolean;
-    helperText?: string;
-    className?: string;
-    sx?: SxProps<Theme>;
+    size?: 'sm' | 'md' | undefined;
+    required?: boolean | undefined;
+    disabled?: boolean | undefined;
+    helperText?: string | undefined;
+    className?: string | undefined;
     /** `data-testid` for the native input. */
-    inputTestId?: string;
+    inputTestId?: string | undefined;
 };
 
 function fieldNameOf(naming: DateFieldNaming): string {
@@ -38,7 +35,7 @@ function fieldNameOf(naming: DateFieldNaming): string {
  *   - a calendar button opening DatePickerPopover (quick picks + month grid), because typing
  *     segment-by-segment on a laptop is slow and desktop Safari has no picker at all.
  */
-export function DateField({ value, onChange, size = 'small', required, disabled, helperText, className, sx, inputTestId, ...naming }: DateFieldProps) {
+export function DateField({ value, onChange, size, required, disabled, helperText, className, inputTestId, ...naming }: DateFieldProps) {
     const [pickerAnchor, setPickerAnchor] = useState<HTMLElement | null>(null);
     const { inputRef, onCleared } = useClearAndRefocus(onChange);
     const fieldName = fieldNameOf(naming);
@@ -60,27 +57,20 @@ export function DateField({ value, onChange, size = 'small', required, disabled,
                 required={required}
                 disabled={disabled}
                 helperText={helperText}
-                className={className}
-                sx={sx}
-                slotProps={{
-                    inputLabel: { shrink: true },
-                    htmlInput: {
-                        className: styles.nativeInput,
-                        ...(naming.label === undefined ? { 'aria-label': naming.accessibleName } : {}),
-                        ...(inputTestId ? { 'data-testid': inputTestId } : {}),
-                    },
-                    input: {
-                        endAdornment: (
-                            <DateFieldAdornment
-                                fieldName={fieldName}
-                                hasValue={value !== ''}
-                                disabled={disabled ?? false}
-                                onClear={onCleared}
-                                onOpenPicker={setPickerAnchor}
-                            />
-                        ),
-                    },
+                className={clsx(styles.field, className)}
+                inputProps={{
+                    ...(naming.label === undefined ? { 'aria-label': naming.accessibleName } : {}),
+                    ...(inputTestId ? { 'data-testid': inputTestId } : {}),
                 }}
+                endAdornment={
+                    <DateFieldAdornment
+                        fieldName={fieldName}
+                        hasValue={value !== ''}
+                        disabled={disabled ?? false}
+                        onClear={onCleared}
+                        onOpenPicker={setPickerAnchor}
+                    />
+                }
             />
             <DatePickerPopover anchorEl={pickerAnchor} value={value} onPick={onDatePicked} onClose={() => setPickerAnchor(null)} />
         </>
@@ -98,18 +88,18 @@ interface AdornmentProps {
 /** Clear (only while there is a value) + Pick. Pick is named via `title` for the reason on ClearFieldButton. */
 function DateFieldAdornment({ fieldName, hasValue, disabled, onClear, onOpenPicker }: AdornmentProps) {
     return (
-        <InputAdornment position="end">
+        <span className={styles.adornment}>
             {hasValue && !disabled && <ClearFieldButton fieldName={fieldName} onClear={onClear} testId="dateFieldClear" />}
             <IconButton
                 title={`Pick ${fieldName}`}
-                size="small"
+                size="sm"
                 edge="end"
                 disabled={disabled}
                 onClick={(e) => onOpenPicker(e.currentTarget)}
                 data-testid="dateFieldPick"
             >
-                <CalendarTodayIcon fontSize="small" />
+                <CalendarDays />
             </IconButton>
-        </InputAdornment>
+        </span>
     );
 }

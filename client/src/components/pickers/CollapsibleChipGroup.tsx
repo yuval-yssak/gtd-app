@@ -1,8 +1,8 @@
-import Chip, { type ChipProps } from '@mui/material/Chip';
-import Stack from '@mui/material/Stack';
-import type { SxProps, Theme } from '@mui/material/styles';
-import { Fragment, useState } from 'react';
+import { clsx } from 'clsx';
+import { Fragment, type ReactNode, useState } from 'react';
+import { Chip } from '../../designSystem';
 import { collapsePickerOptions, isPickerCollapsible } from '../../lib/collapsedPickerOptions';
+import styles from './CollapsibleChipGroup.module.css';
 
 interface CollapsibleChipGroupProps<T> {
     /** Usage-ranked order (most used first) — the collapsed view. */
@@ -12,12 +12,12 @@ interface CollapsibleChipGroupProps<T> {
     /** Selected/assigned ids — kept visible even when ranked below the fold. */
     selectedIds: ReadonlySet<string>;
     keyOf: (option: T) => string;
-    renderChip: (option: T) => React.ReactNode;
+    renderChip: (option: T) => ReactNode;
     /** Test id for the expander chips (`<testId>ShowMore` / `<testId>ShowFewer`). */
     testId: string;
-    sx?: SxProps<Theme>;
+    className?: string | undefined;
     /** Extra props for the "+N more" / "Show fewer" chips — a keyboard region takes them out of the tab order. */
-    expanderChipProps?: Partial<ChipProps> & Record<`data-${string}`, string>;
+    expanderChipProps?: ({ tabIndex?: number } & Record<`data-${string}`, string>) | undefined;
 }
 
 /**
@@ -26,19 +26,28 @@ interface CollapsibleChipGroupProps<T> {
  * "Show fewer" chip. Chip appearance stays with the caller (each row has its own colors/icons) —
  * only the collapse behavior is centralized here.
  */
-export function CollapsibleChipGroup<T>({ ranked, alphabetical, selectedIds, keyOf, renderChip, testId, sx, expanderChipProps }: CollapsibleChipGroupProps<T>) {
+export function CollapsibleChipGroup<T>({
+    ranked,
+    alphabetical,
+    selectedIds,
+    keyOf,
+    renderChip,
+    testId,
+    className,
+    expanderChipProps,
+}: CollapsibleChipGroupProps<T>) {
     const [expanded, setExpanded] = useState(false);
     const { visible, hiddenCount } = collapsePickerOptions({ ranked, alphabetical, selectedIds, keyOf, expanded });
     return (
-        <Stack direction="row" sx={{ flexWrap: 'wrap', gap: 0.75, ...sx }}>
+        <div className={clsx(styles.group, className)}>
             {visible.map((option) => (
                 <Fragment key={keyOf(option)}>{renderChip(option)}</Fragment>
             ))}
             {hiddenCount > 0 && (
                 <Chip
                     label={`+${hiddenCount} more`}
-                    size="small"
-                    variant="outlined"
+                    size="sm"
+                    variant="outline"
                     onClick={() => setExpanded(true)}
                     data-testid={`${testId}ShowMore`}
                     {...expanderChipProps}
@@ -49,13 +58,13 @@ export function CollapsibleChipGroup<T>({ ranked, alphabetical, selectedIds, key
             {expanded && isPickerCollapsible(ranked.length) && (
                 <Chip
                     label="Show fewer"
-                    size="small"
-                    variant="outlined"
+                    size="sm"
+                    variant="outline"
                     onClick={() => setExpanded(false)}
                     data-testid={`${testId}ShowFewer`}
                     {...expanderChipProps}
                 />
             )}
-        </Stack>
+        </div>
     );
 }

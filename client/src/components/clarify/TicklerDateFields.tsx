@@ -1,5 +1,5 @@
-import Stack from '@mui/material/Stack';
 import { DateField } from '../pickers/DateField';
+import styles from './TicklerDateFields.module.css';
 
 /** The two deferral dates shared by waitingFor and somedayMaybe forms. */
 export interface TicklerDates {
@@ -18,14 +18,9 @@ interface Props {
  */
 export function TicklerDateFields({ value, onChange }: Props) {
     return (
-        <Stack
-            direction={{ xs: 'column', sm: 'row' }}
-            sx={{
-                gap: 2,
-            }}
-        >
+        <div className={styles.dates}>
             <DateField label="Expected by" value={value.expectedBy} onChange={(expectedBy) => onChange({ expectedBy })} />
             <DateField label="Ignore before" value={value.ignoreBefore} onChange={(ignoreBefore) => onChange({ ignoreBefore })} />
-        </Stack>
+        </div>
     );
 }

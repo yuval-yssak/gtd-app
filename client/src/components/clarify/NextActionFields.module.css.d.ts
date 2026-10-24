@@ -1,5 +1,7 @@
 declare const styles: {
-    readonly energyToggle: string;
+    readonly caption: string;
+    readonly explainer: string;
+    readonly fields: string;
     readonly fullSpan: string;
     readonly timeField: string;
 };

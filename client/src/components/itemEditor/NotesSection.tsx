@@ -1,11 +1,6 @@
-import CheckIcon from '@mui/icons-material/Check';
-import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-import IconButton from '@mui/material/IconButton';
-import Typography from '@mui/material/Typography';
+import { Check, ChevronDown, Pencil } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
+import { Button, IconButton, Text } from '../../designSystem';
 import { enterNotesEdit, exitNotesEdit, initialNotesEditMode } from '../../lib/notesEditMode';
 import { notesAreEmpty } from '../editItemDialogLogic';
 import { MarkdownNotesEditor, NOTES_EDITOR_LABEL, NOTES_PLACEHOLDER } from '../markdown/MarkdownNotesEditor';
@@ -19,7 +14,7 @@ interface NotesSectionProps {
      * Review presentation with a brief on show: the notes start folded behind a "Show notes"
      * disclosure (the brief already says what the item is) and expand in place on demand.
      */
-    collapsible?: boolean;
+    collapsible?: boolean | undefined;
 }
 
 /**
@@ -33,11 +28,11 @@ export function NotesSection({ notes, onNotesChange, collapsible = false }: Note
     const [isExpanded, setIsExpanded] = useState(false);
     if (collapsible && !isExpanded) {
         return (
-            <Box>
-                <Button size="small" color="inherit" startIcon={<ExpandMoreIcon />} onClick={() => setIsExpanded(true)} data-testid="showNotesButton">
+            <div>
+                <Button size="sm" tone="neutral" startIcon={<ChevronDown />} onClick={() => setIsExpanded(true)} data-testid="showNotesButton">
                     Show notes
                 </Button>
-            </Box>
+            </div>
         );
     }
     return <PageNotesSection notes={notes} onNotesChange={onNotesChange} />;
@@ -82,26 +77,25 @@ function PageNotesSection({ notes, onNotesChange }: { notes: string; onNotesChan
 
     if (editing) {
         return (
-            <Box>
-                <Box className={styles.notesHeader}>
-                    <Typography variant="caption" id={labelId} className={styles.sectionLabel} sx={{ color: 'text.secondary', fontWeight: 600, mb: 0 }}>
+            <div>
+                <div className={styles.notesHeader}>
+                    <Text as="span" variant="caption" tone="secondary" weight="semibold" id={labelId} className={styles.notesLabel}>
                         {NOTES_EDITOR_LABEL}
-                    </Typography>
+                    </Text>
                     {/* Always rendered (disabled while empty) so the header doesn't jump when the
                         first character is typed. */}
                     <IconButton
-                        size="small"
+                        size="sm"
                         aria-label="Done editing notes"
-                        title="Done editing notes"
                         disabled={notesAreEmpty(notes)}
                         // Keep focus in the editor on press: otherwise its blur flips to preview
                         // first and the click would land on nothing (or re-enter edit).
                         onMouseDown={(e) => e.preventDefault()}
                         onClick={exitEditExplicitly}
                     >
-                        <CheckIcon fontSize="small" />
+                        <Check />
                     </IconButton>
-                </Box>
+                </div>
                 <MarkdownNotesEditor
                     value={notes}
                     onValueChange={onNotesChange}
@@ -113,7 +107,7 @@ function PageNotesSection({ notes, onNotesChange }: { notes: string; onNotesChan
                     // back. With empty notes the editor is the resting state — ESC falls through.
                     onEscape={exitEditExplicitly}
                 />
-            </Box>
+            </div>
         );
     }
 
@@ -121,18 +115,19 @@ function PageNotesSection({ notes, onNotesChange }: { notes: string; onNotesChan
     // editor — the pencil is the only way in. It stays focusable so keyboard users can scroll
     // long notes inside the capped-height region.
     return (
-        <Box>
-            <Box className={styles.notesHeader}>
-                <Typography variant="caption" id={labelId} className={styles.sectionLabel} sx={{ color: 'text.secondary', fontWeight: 600, mb: 0 }}>
+        <div>
+            <div className={styles.notesHeader}>
+                <Text as="span" variant="caption" tone="secondary" weight="semibold" id={labelId} className={styles.notesLabel}>
                     {NOTES_EDITOR_LABEL}
-                </Typography>
-                <IconButton ref={editButtonRef} size="small" aria-label="Edit notes" title="Edit notes" onClick={enterEdit}>
-                    <EditOutlinedIcon fontSize="small" />
+                </Text>
+                <IconButton ref={editButtonRef} size="sm" aria-label="Edit notes" onClick={enterEdit}>
+                    <Pencil />
                 </IconButton>
-            </Box>
-            <Box className={styles.pagePreview} tabIndex={0} role="region" aria-labelledby={labelId} data-testid="pageNotesPreview">
+            </div>
+            {/* biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must be focusable so keyboard users can scroll long notes (WCAG scrollable-region-focusable) */}
+            <section className={styles.pagePreview} tabIndex={0} aria-labelledby={labelId} data-testid="pageNotesPreview">
                 <MarkdownPreview markdown={notes} />
-            </Box>
-        </Box>
+            </section>
+        </div>
     );
 }

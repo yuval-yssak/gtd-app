@@ -17,7 +17,7 @@ Import from the barrel: `import { Button, Dialog, Text } from '../designSystem'`
     `.dbUpgradeBlockedNotice`. Element selectors are allowed only there.
   - `gtd.components` — basic components: Text, Button, IconButton, Chip, TextField, Select, Switch,
     Checkbox, RadioGroup, ChoiceLabel, Tooltip, Separator, Tabs, ToggleGroup, Spinner, ProgressBar,
-    Skeleton, Badge, Callout, Collapsible.
+    Skeleton, Badge, Callout, Collapsible, Autocomplete.
   - `gtd.composites` — composites that restyle a nested basic: Dialog, Drawer, Menu, Popover,
     Toast, Card, ButtonGroup, StepIndicator. The extra layer means a composite always wins over the
     basic's own rules with no specificity games.
@@ -60,7 +60,7 @@ Import from the barrel: `import { Button, Dialog, Text } from '../designSystem'`
   opens after 100ms on hover or focus; the popup is `role="tooltip"` showing exactly the title
   (`withShortcutHint` text, e.g. `Edit (e)`). Tooltips never open on touch. A disabled button needs
   a `<span>` wrapper. `IconButton` adds a native `title` fallback except inside a Tooltip.
-- **IconButton** requires `aria-label` and passes every other prop (`data-row-action`,
+- **IconButton** requires `aria-label` — or `title` alone where an aria-label would collide with a field label (ClearFieldButton; never wrap such a button in a Tooltip, which copies its title into `aria-label`) — and passes every other prop (`data-row-action`,
   `aria-keyshortcuts`, `tabIndex`) to the `<button>`.
 - **Buttons are native.** Space clicks on key-up, Enter on key-down — the Next Actions grab-mode
   guards rely on suppressing exactly those. Navigation that should look like a button is a
@@ -78,7 +78,15 @@ Import from the barrel: `import { Button, Dialog, Text } from '../designSystem'`
 - **Text** keeps MUI's default element per variant (`title` → `h5`, `subtitleSm` → `h6`, `body` → `p`…)
   so the page outline and every `getByRole('heading')` survive. `as` overrides it.
 - **Chip**: a clickable chip *is* the `<button>`; a toggle chip exposes `aria-pressed` and
-  `data-selected`.
+  `data-selected`. Selected, it fills accent — or its status tone (`success`/`warning`/`error`/`info`).
+  It cannot be both clickable and removable (a button cannot hold a button): put the click target
+  inside a static chip's `label` and keep `onDelete` (MeetingDetails' attendee chips).
+- **Select** options may carry a `group` label; consecutive options sharing one render under it.
+- **ToggleGroup** is exclusive (one segment always pressed) unless `allowDeselect`, where pressing
+  the active segment reports `''`.
+- **Autocomplete** is free text with suggestions (MUI `freeSolo`): the caller filters `items`,
+  `onItemPicked` fires on a pointer pick or Enter on the highlighted suggestion, and `onSubmitText`
+  on Enter with nothing highlighted. No suggestions, no popup.
 - **Dialog** is a centred card on every size (no full-screen variant, by decision). `AlertDialog`
   is `role="alertdialog"`, never closes on a backdrop press, and opens with focus on the dialog
   itself rather than its first (often destructive) button.

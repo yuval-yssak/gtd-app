@@ -1,17 +1,25 @@
 declare const styles: {
+    readonly accountHint: string;
     readonly body: string;
     readonly bodyReview: string;
+    readonly briefCaption: string;
+    readonly briefEditor: string;
+    readonly briefField: string;
+    readonly briefNotice: string;
+    readonly briefRow: string;
     readonly briefText: string;
     readonly inlineActions: string;
     readonly itemId: string;
     readonly keyScope: string;
     readonly metaRow: string;
     readonly notesHeader: string;
+    readonly notesLabel: string;
     readonly pagePreview: string;
-    readonly preview: string;
-    readonly sectionLabel: string;
+    readonly replaceConfirm: string;
     readonly statusChips: string;
+    readonly statusFields: string;
     readonly statusLabel: string;
     readonly stretchedActions: string;
+    readonly tooltipAnchor: string;
 };
 export = styles;

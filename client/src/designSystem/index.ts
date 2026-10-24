@@ -1,3 +1,4 @@
+export { Autocomplete } from './Autocomplete/Autocomplete';
 export { Badge } from './Badge/Badge';
 export { Button, type ButtonAppearance, type ButtonProps, type ButtonSize, type ButtonTone, type ButtonVariant } from './Button/Button';
 export { ButtonLink } from './Button/ButtonLink';

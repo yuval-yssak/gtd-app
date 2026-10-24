@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/react';
 import { useState } from 'react';
 import { fn } from 'storybook/test';
+import { RouterDecorator } from '../../../.storybook/RouterDecorator';
 import { emptyWaitingForState, filledWaitingForState, samplePeople } from '../../test-utils/storybookMocks';
 import type { WaitingForFormState } from './types';
 import { WaitingForFields } from './WaitingForFields';
@@ -10,6 +11,8 @@ const meta = {
     component: WaitingForFields,
     parameters: { layout: 'centered' },
     tags: ['autodocs'],
+    // The empty-roster hint links to /people.
+    decorators: [RouterDecorator],
     // Required by StoryObj type even when `render` overrides the component entirely.
     args: { value: emptyWaitingForState, onChange: fn(), people: [] },
 } satisfies Meta<typeof WaitingForFields>;

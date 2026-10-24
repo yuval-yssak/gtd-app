@@ -1,12 +1,5 @@
-import Button from '@mui/material/Button';
-import Drawer from '@mui/material/Drawer';
-import List from '@mui/material/List';
-import ListItemButton from '@mui/material/ListItemButton';
-import ListItemText from '@mui/material/ListItemText';
-import Stack from '@mui/material/Stack';
-import TextField from '@mui/material/TextField';
-import Typography from '@mui/material/Typography';
-import { useId, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
+import { Button, Drawer, Text, TextField } from '../../designSystem';
 import type { NeighbourIds } from '../../lib/dragReorder';
 import { hasAtLeastOne } from '../../lib/typeUtils';
 import type { StoredItem } from '../../types/MyDB';
@@ -48,7 +41,6 @@ export function edgeNeighbours(others: readonly { _id: string }[], edge: 'top' |
 export function MoveToSheet({ item, sectionItems, sectionLabel, onClose, onMove }: MoveToSheetProps) {
     const [placement, setPlacement] = useState<Placement | null>(null);
     const [query, setQuery] = useState('');
-    const titleId = useId();
     const others = useMemo(() => sectionItems.filter((row) => row._id !== item?._id), [sectionItems, item]);
     const matches = useMemo(() => {
         const needle = query.trim().toLowerCase();
@@ -69,60 +61,65 @@ export function MoveToSheet({ item, sectionItems, sectionLabel, onClose, onMove 
 
     return (
         <Drawer
-            anchor="bottom"
+            side="bottom"
             open={item !== null}
             onClose={close}
-            slotProps={{ paper: { className: styles.sheet, 'aria-labelledby': titleId, ...{ 'data-testid': 'nextActionMoveToSheet' } } }}
+            // The title names the sheet (Base UI wires it as the dialog's label).
+            title={`Move “${item?.title ?? ''}” within ${sectionLabel}`}
+            className={styles.sheet}
+            data-testid="nextActionMoveToSheet"
         >
-            <Typography id={titleId} variant="subtitle1" className={styles.title}>
-                Move “{item?.title}” within {sectionLabel}
-            </Typography>
             {placement === null ? (
-                <Stack className={styles.actions}>
-                    <Button variant="outlined" onClick={() => move(edgeNeighbours(others, 'top'))} disabled={!canMove} data-testid="nextActionMoveToTop">
+                <div className={styles.actions}>
+                    <Button variant="outline" onClick={() => move(edgeNeighbours(others, 'top'))} disabled={!canMove} data-testid="nextActionMoveToTop">
                         Top of section
                     </Button>
-                    <Button variant="outlined" onClick={() => move(edgeNeighbours(others, 'bottom'))} disabled={!canMove} data-testid="nextActionMoveToBottom">
+                    <Button variant="outline" onClick={() => move(edgeNeighbours(others, 'bottom'))} disabled={!canMove} data-testid="nextActionMoveToBottom">
                         Bottom of section
                     </Button>
-                    <Button variant="outlined" onClick={() => setPlacement('above')} disabled={!canMove} data-testid="nextActionMoveToAbove">
+                    <Button variant="outline" onClick={() => setPlacement('above')} disabled={!canMove} data-testid="nextActionMoveToAbove">
                         Above…
                     </Button>
-                    <Button variant="outlined" onClick={() => setPlacement('below')} disabled={!canMove} data-testid="nextActionMoveToBelow">
+                    <Button variant="outline" onClick={() => setPlacement('below')} disabled={!canMove} data-testid="nextActionMoveToBelow">
                         Below…
                     </Button>
-                    <Button onClick={close} data-testid="nextActionMoveToCancel">
+                    <Button tone="neutral" onClick={close} data-testid="nextActionMoveToCancel">
                         Cancel
                     </Button>
-                </Stack>
+                </div>
             ) : (
-                <Stack className={styles.actions}>
+                <div className={styles.actions}>
                     <TextField
-                        size="small"
                         autoFocus
+                        fullWidth
                         label={placement === 'above' ? 'Above which item?' : 'Below which item?'}
                         value={query}
                         onChange={(e) => setQuery(e.target.value)}
-                        slotProps={{ htmlInput: { 'data-testid': 'nextActionMoveToSearch' } }}
+                        inputProps={{ 'data-testid': 'nextActionMoveToSearch' }}
                     />
-                    <List dense className={styles.targets}>
+                    <ul className={styles.targets}>
                         {matches.map((row) => (
-                            <ListItemButton
-                                key={row._id}
-                                onClick={() => move(neighboursRelativeTo(others, row._id, placement))}
-                                data-testid="nextActionMoveToTarget"
-                            >
-                                <ListItemText primary={row.title} />
-                            </ListItemButton>
+                            <li key={row._id}>
+                                <button
+                                    type="button"
+                                    className={styles.target}
+                                    onClick={() => move(neighboursRelativeTo(others, row._id, placement))}
+                                    data-testid="nextActionMoveToTarget"
+                                >
+                                    {row.title}
+                                </button>
+                            </li>
                         ))}
-                        {matches.length === 0 && (
-                            <Typography variant="body2" color="text.secondary">
-                                No items match.
-                            </Typography>
-                        )}
-                    </List>
-                    <Button onClick={() => setPlacement(null)}>Back</Button>
-                </Stack>
+                    </ul>
+                    {matches.length === 0 && (
+                        <Text variant="bodySm" tone="secondary">
+                            No items match.
+                        </Text>
+                    )}
+                    <Button tone="neutral" onClick={() => setPlacement(null)}>
+                        Back
+                    </Button>
+                </div>
             )}
         </Drawer>
     );

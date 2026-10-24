@@ -47,7 +47,7 @@ test.describe('editor picker owner scoping', () => {
             // "anywhere" twin does not (chips are alphabetical via sortByName).
             await expect(page.getByTestId('editorWorkContextChip')).toHaveText(['anywhere', 'b office']);
             // The stray renders as selected (filled), so the user can read and remove it.
-            await expect(page.getByTestId('editorWorkContextChip').filter({ hasText: 'b office' })).toHaveClass(/MuiChip-filled/);
+            await expect(page.getByTestId('editorWorkContextChip').filter({ hasText: 'b office' })).toHaveAttribute('aria-pressed', 'true');
         });
     });
 

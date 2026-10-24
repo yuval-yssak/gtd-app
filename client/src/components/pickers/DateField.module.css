@@ -1,10 +1,20 @@
+/* A date is a fixed-width value: never stretch to a flex column's width. */
+.field {
+    align-self: flex-start;
+}
+
 /* The field supplies its own calendar button (opens DatePickerPopover on every browser), so the
  * WebKit/Blink built-in indicator would be a second, redundant icon. Hiding it keeps the end
  * adornment to one row. Mobile browsers open their native picker from a tap anywhere in the
  * input, so nothing is lost there. Firefox draws its own (non-webkit) calendar button that this
  * cannot hide, so desktop Firefox shows two icons — accepted; there is no Firefox-only selector. */
-.nativeInput::-webkit-calendar-picker-indicator {
+.field input::-webkit-calendar-picker-indicator {
     display: none;
+}
+
+.adornment {
+    display: inline-flex;
+    align-items: center;
 }
 
 /* ── Picker popover ─────────────────────────────────────────────────────────── */
@@ -12,16 +22,16 @@
 .panel {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
-    width: 18.5rem;
-    max-width: calc(100vw - 2rem);
-    padding: 0.75rem;
+    gap: var(--space-2);
+    inline-size: 18.5rem;
+    max-inline-size: calc(100vw - 2rem);
+    padding: var(--space-3);
 }
 
 .quickPicks {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.375rem;
+    gap: var(--space-1-5);
 }
 
 .monthHeader {
@@ -33,42 +43,47 @@
 .grid {
     display: grid;
     grid-template-columns: repeat(7, 1fr);
-    gap: 0.125rem;
+    gap: var(--space-0-5);
 }
 
 .weekday {
-    padding: 0.25rem 0;
+    padding-block: var(--space-1);
     text-align: center;
-    font-size: 0.75rem;
-    color: var(--mui-palette-text-secondary, rgba(0, 0, 0, 0.6));
+    font-size: var(--type-xs-size);
+    color: var(--color-text-secondary);
 }
 
 .day {
-    height: 2.25rem;
+    block-size: 2.25rem;
     border: none;
-    border-radius: 50%;
+    border-radius: var(--radius-full);
     background: transparent;
-    color: var(--mui-palette-text-primary, rgba(0, 0, 0, 0.87));
+    color: var(--color-text-primary);
     font: inherit;
-    font-size: 0.875rem;
+    font-size: var(--type-sm-size);
     cursor: pointer;
 }
 
 .day:hover {
-    background: var(--mui-palette-action-hover, rgba(0, 0, 0, 0.04));
+    background: var(--color-state-hover);
 }
 
-.outside {
-    color: var(--mui-palette-text-disabled, rgba(0, 0, 0, 0.38));
+.day:focus-visible {
+    outline: var(--focus-ring-width) solid var(--focus-ring-color);
+    outline-offset: var(--focus-ring-offset);
 }
 
-.today {
-    box-shadow: inset 0 0 0 1px var(--mui-palette-primary-main, #1976d2);
+.day[data-outside] {
+    color: var(--color-text-disabled);
+}
+
+.day[data-today] {
+    box-shadow: inset 0 0 0 1px var(--color-accent);
 }
 
 /* Declared after `.day:hover` so the selected day keeps its fill under the pointer. */
-.day.selected,
-.day.selected:hover {
-    background: var(--mui-palette-primary-main, #1976d2);
-    color: var(--mui-palette-primary-contrastText, #fff);
+.day[data-selected],
+.day[data-selected]:hover {
+    background: var(--color-accent);
+    color: var(--color-on-accent);
 }

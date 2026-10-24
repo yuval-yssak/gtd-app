@@ -48,6 +48,17 @@ describe('IconButton', () => {
         expect(button.tabIndex).toBe(-1);
     });
 
+    it('can be named by title alone, so a label-substring query on the field never matches it', () => {
+        render(
+            <IconButton title="Clear Expected by">
+                <svg />
+            </IconButton>,
+        );
+        const button = screen.getByRole('button', { name: 'Clear Expected by' });
+        expect(button.hasAttribute('aria-label')).toBe(false);
+        expect(button.getAttribute('title')).toBe('Clear Expected by');
+    });
+
     it('complains in development when the label is blank', () => {
         const error = vi.spyOn(console, 'error').mockImplementation(() => {});
         render(

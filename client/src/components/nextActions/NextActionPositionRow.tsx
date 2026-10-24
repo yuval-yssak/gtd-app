@@ -1,13 +1,8 @@
-import Button from '@mui/material/Button';
-import ButtonGroup from '@mui/material/ButtonGroup';
-import FormHelperText from '@mui/material/FormHelperText';
-import FormLabel from '@mui/material/FormLabel';
-import Stack from '@mui/material/Stack';
-import Typography from '@mui/material/Typography';
 import type { IDBPDatabase } from 'idb';
 import { useMemo, useState, useTransition } from 'react';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { reorderItem } from '../../db/itemMutations';
+import { Button, ButtonGroup, Text } from '../../designSystem';
 import { POSITION_MOVE_ATTR } from '../../hooks/useEditorShortcuts';
 import { useTodayIso } from '../../hooks/useTodayIso';
 import type { NeighbourIds } from '../../lib/dragReorder';
@@ -68,12 +63,16 @@ export function NextActionPositionRow({ db, item, onBeforeMove }: Props) {
     }
 
     return (
-        <Stack className={styles.row} data-testid="nextActionPositionRow">
-            <FormLabel className={styles.label}>Position in {label}</FormLabel>
-            <Stack direction="row" className={styles.controls}>
-                {/* Each button states `isPending` itself: a child's own `disabled` prop overrides the group's. */}
-                <ButtonGroup size="small" variant="outlined" aria-label="Change position">
+        <div className={styles.row} data-testid="nextActionPositionRow">
+            <Text as="span" variant="caption" tone="secondary" className={styles.label}>
+                Position in {label}
+            </Text>
+            <div className={styles.controls}>
+                {/* Each button combines `isPending` with its own availability, so the group needs no disabled prop. */}
+                <ButtonGroup aria-label="Change position">
                     <Button
+                        size="sm"
+                        variant="outline"
                         onClick={() => move(moves.top)}
                         disabled={isPending || !moves.top}
                         data-testid="nextActionPositionTop"
@@ -83,6 +82,8 @@ export function NextActionPositionRow({ db, item, onBeforeMove }: Props) {
                         Top
                     </Button>
                     <Button
+                        size="sm"
+                        variant="outline"
                         onClick={() => move(moves.up)}
                         disabled={isPending || !moves.up}
                         data-testid="nextActionPositionUp"
@@ -92,6 +93,8 @@ export function NextActionPositionRow({ db, item, onBeforeMove }: Props) {
                         Up
                     </Button>
                     <Button
+                        size="sm"
+                        variant="outline"
                         onClick={() => move(moves.down)}
                         disabled={isPending || !moves.down}
                         data-testid="nextActionPositionDown"
@@ -101,6 +104,8 @@ export function NextActionPositionRow({ db, item, onBeforeMove }: Props) {
                         Down
                     </Button>
                     <Button
+                        size="sm"
+                        variant="outline"
                         onClick={() => move(moves.bottom)}
                         disabled={isPending || !moves.bottom}
                         data-testid="nextActionPositionBottom"
@@ -109,15 +114,25 @@ export function NextActionPositionRow({ db, item, onBeforeMove }: Props) {
                     >
                         Bottom
                     </Button>
-                    <Button onClick={() => setIsSheetOpen(true)} disabled={isPending || moves.total < 2} data-testid="nextActionPositionMoveTo">
+                    <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setIsSheetOpen(true)}
+                        disabled={isPending || moves.total < 2}
+                        data-testid="nextActionPositionMoveTo"
+                    >
                         Move to…
                     </Button>
                 </ButtonGroup>
-                <Typography variant="body2" color="text.secondary" aria-live="polite" data-testid="nextActionPositionText">
+                <Text as="span" variant="bodySm" tone="secondary" aria-live="polite" data-testid="nextActionPositionText">
                     {moves.position} of {moves.total}
-                </Typography>
-            </Stack>
-            {error && <FormHelperText error>{error}</FormHelperText>}
+                </Text>
+            </div>
+            {error && (
+                <Text as="span" variant="caption" tone="error" role="alert">
+                    {error}
+                </Text>
+            )}
             {/* Keyed per open so a half-finished "Above…" pick and its search never carry over to the next open. */}
             <MoveToSheet
                 key={isSheetOpen ? 'open' : 'closed'}
@@ -127,6 +142,6 @@ export function NextActionPositionRow({ db, item, onBeforeMove }: Props) {
                 onClose={() => setIsSheetOpen(false)}
                 onMove={move}
             />
-        </Stack>
+        </div>
     );
 }

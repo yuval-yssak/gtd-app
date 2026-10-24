@@ -106,13 +106,8 @@ test.describe('Item editor cross-account calendar picker', () => {
             const editor = page.getByTestId('itemPageWrapper');
             await expect(editor).toBeVisible();
 
-            // Verify the picker initially shows the source calendar. CalendarFields renders a raw
-            // FormControl/InputLabel/Select without `htmlFor` linking, so the label is not a11y-
-            // associated with the combobox — locate the FormControl by its label text and grab the
-            // sibling Select trigger directly.
-            const calendarSelect = editor
-                .locator('.MuiFormControl-root', { has: page.locator('label', { hasText: /^Calendar$/ }) })
-                .locator('[role="combobox"]');
+            // Verify the picker initially shows the source calendar. The Select's visible label names its combobox.
+            const calendarSelect = editor.getByRole('combobox', { name: 'Calendar' });
             await expect(calendarSelect).toBeVisible();
 
             // Switch the AccountPicker to the secondary account.

@@ -1,19 +1,6 @@
-import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
-import CheckIcon from '@mui/icons-material/Check';
-import ClearIcon from '@mui/icons-material/Clear';
-import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
-import Alert from '@mui/material/Alert';
-import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-import CircularProgress from '@mui/material/CircularProgress';
-import IconButton from '@mui/material/IconButton';
-import InputAdornment from '@mui/material/InputAdornment';
-import Snackbar from '@mui/material/Snackbar';
-import Stack from '@mui/material/Stack';
-import TextField from '@mui/material/TextField';
-import Tooltip from '@mui/material/Tooltip';
-import Typography from '@mui/material/Typography';
+import { Check, Pencil, Sparkles, X } from 'lucide-react';
 import { type KeyboardEvent, type Ref, useEffect, useId, useRef, useState } from 'react';
+import { Button, Callout, IconButton, Spinner, Text, TextField, Toast, Tooltip } from '../../designSystem';
 import type { BriefState } from '../../lib/briefSource';
 import { collapseToSingleLine } from '../../lib/singleLineText';
 import type { BriefOrigin } from '../../types/MyDB';
@@ -55,12 +42,12 @@ export interface BriefSectionProps {
      * `field` — the editor's default: a "Brief" section label above the brief.
      * `line` — review presentation: no label, so the brief reads as a plain line under the title.
      */
-    variant?: 'field' | 'line';
+    variant?: 'field' | 'line' | undefined;
     /**
      * Whether the item is open (briefs are generated only for open items). A done/trashed item's
      * empty brief must not promise "one is written automatically" — no sweep will ever write it.
      */
-    isBriefable?: boolean;
+    isBriefable?: boolean | undefined;
 }
 
 /**
@@ -87,15 +74,15 @@ export function BriefSection({ value, state, origin, onChange, onCommit, generat
     };
 
     return (
-        <Box data-testid="briefSection">
+        <div data-testid="briefSection">
             {variant === 'field' && (
-                <Typography variant="caption" className={styles.sectionLabel} sx={{ color: 'text.secondary', fontWeight: 600, mb: 0 }}>
+                <Text as="span" variant="caption" tone="secondary" weight="semibold" className={styles.notesLabel}>
                     {BRIEF_LABEL}
-                </Typography>
+                </Text>
             )}
             {/* Fixed child order — content, pencil, generate — so the generate button stays the SAME
                 mounted element across the edit→view flip its own click's blur triggers. */}
-            <Stack direction="row" spacing={0.5} sx={{ alignItems: 'flex-start' }}>
+            <div className={styles.briefRow}>
                 {isEditing ? (
                     <BriefEditor value={value} noticeId={noticeId} onChange={onChange} onLeave={commitOnLeave} onExit={commitAndExit} />
                 ) : (
@@ -103,17 +90,17 @@ export function BriefSection({ value, state, origin, onChange, onCommit, generat
                 )}
                 {isEditing ? null : <BriefEditButton ref={pencilFocus.ref} onEdit={() => setIsEditing(true)} />}
                 <GenerateBriefButton generation={generation} isRegenerate={isRegenerate} fieldValue={value} />
-            </Stack>
+            </div>
             {isEditing && (
-                // role="status", not MUI's default "alert": the notice must be read WITH the newly
+                // An info Callout is role="status", not "alert": the notice must be read WITH the newly
                 // focused field (aria-describedby), not interrupt its announcement on every open.
-                <Alert id={noticeId} role="status" severity="info" variant="outlined" sx={{ mt: 1, py: 0 }} data-testid="briefPinnedNotice">
+                <Callout id={noticeId} tone="info" variant="outline" className={styles.briefNotice} data-testid="briefPinnedNotice">
                     {BRIEF_PINNED_NOTICE}
-                </Alert>
+                </Callout>
             )}
             <BriefStateNote state={state} origin={origin} fieldValue={value} />
             <BriefGenerationFeedback generation={generation} />
-        </Box>
+        </div>
     );
 }
 
@@ -151,8 +138,9 @@ interface BriefEditorProps {
  */
 function BriefEditor({ value, noticeId, onChange, onLeave, onExit }: BriefEditorProps) {
     return (
-        <Box
-            sx={{ display: 'flex', flexGrow: 1, alignItems: 'flex-start', gap: 0.5 }}
+        // biome-ignore lint/a11y/noStaticElementInteractions: not a control — it only hears focus leaving the field and its own buttons (see the comment above)
+        <div
+            className={styles.briefEditor}
             onBlur={(e) => {
                 if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) {
                     return;
@@ -167,50 +155,41 @@ function BriefEditor({ value, noticeId, onChange, onLeave, onExit }: BriefEditor
                 // brief that renders as one line everywhere. Typed Enter commits (below) instead.
                 onChange={(e) => onChange(collapseToSingleLine(e.target.value))}
                 // Wraps instead of scrolling horizontally so a full brief is readable beside the
-                // title without scrolling. Enter still commits (handled above), so no newline lands.
+                // title without scrolling. Enter still commits (handled below), so no newline lands.
                 multiline
                 fullWidth
-                size="small"
                 // Mounted only by the pencil, so focusing it never yanks focus on editor open.
                 autoFocus
-                slotProps={{
-                    htmlInput: {
-                        'aria-label': BRIEF_LABEL,
-                        'aria-describedby': noticeId,
-                        // On the textarea itself, not the TextField root: the Clear button lives in
-                        // the root's end adornment, and a root handler would swallow Enter on it
-                        // (preventDefault cancels the button's click) and commit the old text.
-                        onKeyDown: (e: KeyboardEvent<HTMLElement>) => {
-                            // Mid-composition Enter/Escape belong to the IME (confirm/cancel the candidate).
-                            if (e.nativeEvent.isComposing || (e.key !== 'Enter' && e.key !== 'Escape')) {
-                                return;
-                            }
-                            // Escape steps out of the field only: claim it so the page-level ESC-to-leave
-                            // and a dialog's ESC-to-close don't also fire.
-                            e.preventDefault();
-                            e.stopPropagation();
-                            onExit(value);
-                        },
-                    },
-                    input: {
-                        // A multiline field grows downward; the clear button belongs on the first line.
-                        sx: { alignItems: 'flex-start' },
-                        endAdornment: value ? (
-                            <InputAdornment position="end">
-                                <BriefClearButton
-                                    onClear={() => {
-                                        onChange('');
-                                        onExit('');
-                                    }}
-                                />
-                            </InputAdornment>
-                        ) : undefined,
-                    },
+                inputProps={{ 'aria-label': BRIEF_LABEL, 'aria-describedby': noticeId }}
+                // On the textarea itself, not the field root: the Clear button lives in the end
+                // adornment, and a root handler would swallow Enter on it (preventDefault cancels
+                // the button's click) and commit the old text.
+                onKeyDown={(e: KeyboardEvent<HTMLElement>) => {
+                    // Mid-composition Enter/Escape belong to the IME (confirm/cancel the candidate).
+                    if (e.nativeEvent.isComposing || (e.key !== 'Enter' && e.key !== 'Escape')) {
+                        return;
+                    }
+                    // Escape steps out of the field only: claim it so the page-level ESC-to-leave
+                    // and a dialog's ESC-to-close don't also fire.
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onExit(value);
                 }}
+                endAdornment={
+                    value ? (
+                        <BriefClearButton
+                            onClear={() => {
+                                onChange('');
+                                onExit('');
+                            }}
+                        />
+                    ) : undefined
+                }
+                className={styles.briefField}
                 data-testid="briefField"
             />
             <BriefDoneButton onDone={() => onExit(value)} />
-        </Box>
+        </div>
     );
 }
 
@@ -218,22 +197,22 @@ function BriefEditor({ value, noticeId, onChange, onLeave, onExit }: BriefEditor
 function BriefText({ text, emptyHint, isLine }: { text: string; emptyHint: string; isLine: boolean }) {
     if (!text.trim()) {
         return (
-            <Typography variant="body2" className={styles.briefText} sx={{ color: 'text.secondary' }} data-testid="briefEmpty">
+            <Text variant="bodySm" tone="secondary" className={styles.briefText} data-testid="briefEmpty">
                 {emptyHint}
-            </Typography>
+            </Text>
         );
     }
     return (
-        <Typography variant={isLine ? 'body1' : 'body2'} className={styles.briefText} data-testid="briefLine">
+        <Text variant={isLine ? 'body' : 'bodySm'} className={styles.briefText} data-testid="briefLine">
             {text}
-        </Typography>
+        </Text>
     );
 }
 
 function BriefEditButton({ ref, onEdit }: { ref: Ref<HTMLButtonElement>; onEdit: () => void }) {
     return (
-        <IconButton ref={ref} size="small" aria-label="Edit brief" title="Edit brief" onClick={onEdit} data-testid="briefEditButton">
-            <EditOutlinedIcon fontSize="small" />
+        <IconButton ref={ref} size="sm" aria-label="Edit brief" onClick={onEdit} data-testid="briefEditButton">
+            <Pencil />
         </IconButton>
     );
 }
@@ -241,16 +220,15 @@ function BriefEditButton({ ref, onEdit }: { ref: Ref<HTMLButtonElement>; onEdit:
 function BriefDoneButton({ onDone }: { onDone: () => void }) {
     return (
         <IconButton
-            size="small"
+            size="sm"
             aria-label="Done editing brief"
-            title="Done editing brief"
             // Keep focus in the field on press: otherwise its blur flips to the read view first
             // and the click would land on the pencil that replaced this button.
             onMouseDown={(e) => e.preventDefault()}
             onClick={onDone}
             data-testid="briefDoneButton"
         >
-            <CheckIcon fontSize="small" />
+            <Check />
         </IconButton>
     );
 }
@@ -258,7 +236,7 @@ function BriefDoneButton({ onDone }: { onDone: () => void }) {
 function BriefClearButton({ onClear }: { onClear: () => void }) {
     return (
         <IconButton
-            size="small"
+            size="sm"
             aria-label="Clear brief"
             // mousedown, not click: a click would blur the field first and commit the
             // still-populated value before the clear lands.
@@ -266,7 +244,7 @@ function BriefClearButton({ onClear }: { onClear: () => void }) {
             onClick={onClear}
             data-testid="briefClearButton"
         >
-            <ClearIcon fontSize="small" />
+            <X />
         </IconButton>
     );
 }
@@ -288,13 +266,13 @@ function GenerateBriefButton({ generation, isRegenerate, fieldValue }: { generat
             {/* A disabled button fires no pointer events, so the tooltip needs a live wrapper to anchor to. */}
             <span>
                 <IconButton
-                    size="small"
+                    size="sm"
                     aria-label={label}
                     disabled={isDisabled}
                     onClick={() => generation.requestGenerate(fieldValue)}
                     data-testid="briefGenerateButton"
                 >
-                    {generation.phase === 'loading' ? <CircularProgress size={18} /> : <AutoAwesomeIcon fontSize="small" />}
+                    {generation.phase === 'loading' ? <Spinner size={16} aria-hidden="true" /> : <Sparkles />}
                 </IconButton>
             </span>
         </Tooltip>
@@ -306,15 +284,11 @@ function BriefGenerationFeedback({ generation }: { generation: BriefGeneration }
     return (
         <>
             {generation.phase === 'confirm' && <ReplaceConfirm onReplace={generation.confirmReplace} onKeep={generation.keepBrief} />}
-            <Snackbar
+            {/* A click elsewhere on the page never dismisses a toast, so the notice is always read. */}
+            <Toast
                 open={generation.notice !== null}
                 autoHideDuration={6000}
-                // A click elsewhere on the page must not swallow the notice before it is read.
-                onClose={(_event, reason) => {
-                    if (reason !== 'clickaway') {
-                        generation.dismissNotice();
-                    }
-                }}
+                onClose={generation.dismissNotice}
                 message={generation.notice}
                 data-testid="briefGenerateNotice"
             />
@@ -324,15 +298,15 @@ function BriefGenerationFeedback({ generation }: { generation: BriefGeneration }
 
 function ReplaceConfirm({ onReplace, onKeep }: { onReplace: () => void; onKeep: () => void }) {
     return (
-        <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mt: 0.5 }} data-testid="briefReplaceConfirm">
-            <Typography variant="body2">{REPLACE_BRIEF_PROMPT}</Typography>
-            <Button size="small" variant="contained" onClick={onReplace} data-testid="briefReplaceButton">
+        <div className={styles.replaceConfirm} data-testid="briefReplaceConfirm">
+            <Text variant="bodySm">{REPLACE_BRIEF_PROMPT}</Text>
+            <Button size="sm" variant="solid" onClick={onReplace} data-testid="briefReplaceButton">
                 Replace
             </Button>
-            <Button size="small" onClick={onKeep} data-testid="briefKeepButton">
+            <Button size="sm" onClick={onKeep} data-testid="briefKeepButton">
                 Keep
             </Button>
-        </Stack>
+        </div>
     );
 }
 
@@ -364,8 +338,8 @@ function BriefStateNote({ state, origin, fieldValue }: { state: BriefState; orig
 
 function BriefCaption({ text, testId }: { text: string; testId: string }) {
     return (
-        <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mt: 0.5 }} data-testid={testId}>
+        <Text as="span" variant="caption" tone="secondary" className={styles.briefCaption} data-testid={testId}>
             {text}
-        </Typography>
+        </Text>
     );
 }

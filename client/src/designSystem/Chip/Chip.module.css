@@ -122,11 +122,17 @@
             }
         }
 
-        /* A toggled-on chip: solid accent, whatever its tone (MUI filled + primary). */
+        /* A toggled-on chip: solid accent (MUI filled + primary) — or solid in its status tone, so a
+         * selected Done reads green and Trash red (MUI filled + success / error). */
         &[data-selected] {
             border-color: var(--color-accent);
             background-color: var(--color-accent);
             color: var(--color-on-accent);
+
+            &:is([data-tone="success"], [data-tone="warning"], [data-tone="error"], [data-tone="info"]) {
+                border-color: var(--chip-color);
+                background-color: var(--chip-color);
+            }
         }
     }
 

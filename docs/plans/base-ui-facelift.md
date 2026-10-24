@@ -310,3 +310,20 @@ After batch 10: `grep -rE "@mui/|--mui-|classnames" client/src` must return noth
   - `usePageEscapeToClose` used a raw `.MuiModal-root` probe, so Escape inside an open DS popup also left the page. It now uses `isModalOpen()`.
   - e2e: `pinEditorModeToDialog` is gone from the login helpers; specs scope the editor to `itemPageWrapper` / `routinePageWrapper` / `newRoutinePage`. Two tests whose scenario no longer exists were deleted: a drag beside an expanded inline editor, and row letters inside an inline editor. `editors-are-pages.spec.ts` is new.
   - The weekly-review brief/sweep and card-fits specs fail the same way on the pristine pre-facelift copy against the same reused API on :4000. That server appears to run without `BRIEF_FAKE_MODEL=1`, so briefs never arrive; this is not a branch regression.
+- **Batch 3b (pickers, clarify, item editor, next-action position, markdown):**
+  - The attendee picker uses Base UI **Autocomplete** (`designSystem/Autocomplete`), not Combobox: it is free text with suggestions (MUI `freeSolo`). Picks arrive through `onItemPicked`, and Enter with nothing highlighted submits the typed text.
+  - DS additions:
+    - `Select` options take a `group` label (per-account calendar headers).
+    - `ToggleGroup` gains `allowDeselect` (energy can be empty).
+    - `IconButton` can be named by `title` alone. ClearFieldButton needs this: an `aria-label` would make every `getByLabel(<field>)` match the button too.
+    - A selected `Chip` fills with its status tone (Done green, Trash red).
+    - `fieldset`/`legend` are reset in `base.css`, so labelled groups (status chips, `FieldSection`) use them for semantics.
+  - The meeting-details Accordion is a disclosure button over `Collapsible`. Attendee chips carry RSVP as `data-tone`, and a clickable chip with a remove button puts its click target inside the label (a button cannot hold another button).
+  - Three `biome-ignore`s are new accepted cases, all on elements that were MUI `Box` before and so unchecked:
+    - two key/focus delegation wrappers, which must stay React handlers so a child's `stopPropagation` is honoured;
+    - the focusable scrollable notes preview (WCAG scrollable-region-focusable).
+  - For Phase 2's `lint:css` widening, the app-CSS config needs:
+    - `composes` allowed;
+    - `:global(p)`-style descendant type selectors permitted;
+    - CodeMirror's `cm-*` classes exempt from the camelCase class pattern.
+  - E2E reads chip state from `aria-pressed` and `data-tone` instead of MUI classes. Status chips have `data-testid="itemEditorStatusChip"`.

@@ -82,3 +82,5 @@
 - [Body shortcut bypasses host primary](feedback_body_shortcut_bypasses_host_primary.md) — Cmd+Enter in ItemEditorBody skips renderActions hosts' armExplicitSave/undo; grep hosts.
 - [Stale-snapshot race fix leaves side effects](feedback_stale_snapshot_fix_leaves_side_effects.md) — Functional-updater fixes repair state, but `textAutosave.reset` etc. still decide from the stale snapshot; silent text loss.
 - [Partial touch stopPropagation leaves stale swipe start](feedback_partial_touch_stoppropagation_stale_start.md) — Stopping only touchstart lets move/end reach useSwipeGesture with a stale startX; drag/tap on the child trashes the row.
+- [App-CSS stylelint "clean" claims](feedback_app_css_stylelint_claim_unverified.md) — lint:css globs only designSystem; run stylelint on touched app modules and filter plan-noted noise.
+- [Chip tone applied while unselected](feedback_chip_tone_applied_unselected.md) — MUI ported `color={sel ? x : default}` to unconditional DS `tone`; unselected Done/Trash turn green/red.

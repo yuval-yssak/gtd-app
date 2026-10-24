@@ -1,5 +1,4 @@
-import InputAdornment from '@mui/material/InputAdornment';
-import TextField from '@mui/material/TextField';
+import { TextField } from '../../designSystem';
 import { ClearFieldButton } from './ClearFieldButton';
 import { useClearAndRefocus } from './useClearAndRefocus';
 
@@ -8,9 +7,10 @@ export interface TimeFieldProps {
     /** `HH:mm` or empty. */
     value: string;
     onChange: (next: string) => void;
-    size?: 'small' | 'medium';
-    required?: boolean;
-    disabled?: boolean;
+    size?: 'sm' | 'md' | undefined;
+    required?: boolean | undefined;
+    disabled?: boolean | undefined;
+    className?: string | undefined;
 }
 
 /**
@@ -18,7 +18,7 @@ export interface TimeFieldProps {
  * have no way to empty the field once it holds a value. The desktop browsers' own time dropdown
  * is kept: unlike the date indicator it has no in-app replacement.
  */
-export function TimeField({ label, value, onChange, size = 'small', required, disabled }: TimeFieldProps) {
+export function TimeField({ label, value, onChange, size, required, disabled, className }: TimeFieldProps) {
     const { inputRef, onCleared } = useClearAndRefocus(onChange);
     const showClear = value !== '' && !disabled;
     return (
@@ -31,16 +31,8 @@ export function TimeField({ label, value, onChange, size = 'small', required, di
             size={size}
             required={required}
             disabled={disabled}
-            slotProps={{
-                inputLabel: { shrink: true },
-                input: {
-                    endAdornment: showClear ? (
-                        <InputAdornment position="end">
-                            <ClearFieldButton fieldName={label} onClear={onCleared} testId="timeFieldClear" edge="end" />
-                        </InputAdornment>
-                    ) : undefined,
-                },
-            }}
+            className={className}
+            endAdornment={showClear ? <ClearFieldButton fieldName={label} onClear={onCleared} testId="timeFieldClear" edge="end" /> : undefined}
         />
     );
 }

@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import {
     addAttendeeByEmail,
     applyOptimisticRsvp,
+    attendeeSuggestions,
     countResponseStatuses,
     filterPeopleForAutocomplete,
     findPersonByEmail,
@@ -259,5 +260,28 @@ describe('addAttendeeByEmail', () => {
         const original = [attendee('Alice@X.com', 'accepted')];
         const result = addAttendeeByEmail(original, 'alice@x.com');
         expect(result).toBe(original);
+    });
+});
+
+describe('attendeeSuggestions', () => {
+    const alice = person('p1', 'Alice', 'alice@x.com');
+    const bob = person('p2', 'Bob');
+    const roster = [alice, bob];
+
+    it('suggests nothing until the user types', () => {
+        expect(attendeeSuggestions(roster, '  ')).toEqual([]);
+    });
+
+    it('suggests the people matching by name or email', () => {
+        expect(attendeeSuggestions(roster, 'bo')).toEqual([{ kind: 'person', person: bob }]);
+        expect(attendeeSuggestions(roster, 'x.com')).toEqual([{ kind: 'person', person: alice }]);
+    });
+
+    it('offers the typed text as a new email when it parses as one', () => {
+        expect(attendeeSuggestions(roster, 'carol@y.com ')).toEqual([{ kind: 'newEmail', newEmail: 'carol@y.com' }]);
+    });
+
+    it('does not offer a new email that a matched person already carries', () => {
+        expect(attendeeSuggestions(roster, 'ALICE@x.com')).toEqual([{ kind: 'person', person: alice }]);
     });
 });

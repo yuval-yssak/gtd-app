@@ -76,7 +76,8 @@ describe('DatePickerPanel', () => {
     });
 
     it('renders the full six-week grid of day buttons', () => {
-        expect(countOf(html, 'aria-pressed=')).toBe(42);
+        // Day buttons are named by their full date ("Thursday, October 15, 2026"); the quick-pick chips are not.
+        expect(html.match(/aria-label="\w+day, /g) ?? []).toHaveLength(42);
     });
 
     it('marks only the selected day as pressed', () => {
