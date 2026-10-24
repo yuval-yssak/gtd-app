@@ -1,8 +1,8 @@
-import Snackbar from '@mui/material/Snackbar';
 import type { IDBPDatabase } from 'idb';
 import { createContext, type PropsWithChildren, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReassignParams } from '../api/syncApi';
 import { attemptReassign, offlineReassignMessage } from '../db/reassignMutations';
+import { Toast } from '../designSystem';
 import { isBrowserOffline } from '../lib/onlineStatus';
 import type { MyDB, StoredItem, StoredRoutine } from '../types/MyDB';
 
@@ -112,7 +112,7 @@ interface ProviderProps {
 }
 
 interface RevertNotice {
-    /** Monotonic id so two distinct failures re-trigger the Snackbar's open transition. */
+    /** Monotonic id so two distinct failures each remount the toast (and restart its timer). */
     id: number;
     message: string;
 }
@@ -227,16 +227,17 @@ export function PendingReassignProvider({ db, children }: PropsWithChildren<Prov
             <PendingMapsContext.Provider value={maps}>
                 {children}
                 {/*
-                 * Layout-level snackbar for revert notices. Keyed by `id` so two distinct
-                 * failures in quick succession re-trigger the open transition rather than
-                 * silently swapping the message of an already-open snackbar.
+                 * Layout-level toast for revert notices. Keyed by `id` so two distinct failures in
+                 * quick succession each get their full display time rather than silently swapping
+                 * the message of an already-open toast.
                  */}
-                <Snackbar
+                <Toast
                     key={revertNotice?.id ?? 'idle'}
                     open={revertNotice !== null}
                     autoHideDuration={5000}
                     onClose={() => setRevertNotice(null)}
                     message={revertNotice?.message ?? ''}
+                    tone="error"
                 />
             </PendingMapsContext.Provider>
         </PendingReassignContext.Provider>

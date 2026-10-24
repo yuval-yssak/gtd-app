@@ -1,7 +1,5 @@
-import Box from '@mui/material/Box';
-import Link from '@mui/material/Link';
-import Typography from '@mui/material/Typography';
 import { API_SERVER } from '../../constants/globals';
+import { Text } from '../../designSystem';
 import { APP_NAME } from '../../lib/appName';
 import { claudeCodeAddCommand, LOCAL_MCP_README_URL, MCP_CONNECTOR_NAME, mcpConnectorUrl } from '../../lib/mcpConnector';
 import { CopyButton } from '../CopyButton';
@@ -14,23 +12,23 @@ import styles from './ConnectClaude.module.css';
 export function ConnectClaude() {
     const connectorUrl = mcpConnectorUrl(API_SERVER);
     return (
-        <Box data-testid="connectClaudeSection">
-            <Typography variant="body2" sx={{ mb: 0.5 }}>
+        <div data-testid="connectClaudeSection">
+            <Text variant="bodySm" className={styles.urlLabel}>
                 Your connector URL:
-            </Typography>
+            </Text>
             <CopyableLine value={connectorUrl} testId="mcpConnectorUrl" label="connector URL" />
             <ClaudeAppSteps />
             <ClaudeCodeSteps connectorUrl={connectorUrl} />
             <SignInSteps />
             <GoodToKnow />
-        </Box>
+        </div>
     );
 }
 
 function ClaudeAppSteps() {
     return (
-        <Box className={styles.block}>
-            <Typography variant="subtitle2">In claude.ai or the Claude desktop app</Typography>
+        <div className={styles.block}>
+            <Text variant="subtitleSm">In claude.ai or the Claude desktop app</Text>
             <ol className={styles.steps}>
                 <li>
                     Open <strong>Settings → Connectors</strong> and choose <strong>Add custom connector</strong>.
@@ -42,17 +40,17 @@ function ClaudeAppSteps() {
                     Click <strong>Connect</strong> on the new connector. Connectors you add on claude.ai also work in the Claude mobile app.
                 </li>
             </ol>
-            <Typography variant="caption" component="p" sx={{ color: 'text.secondary', mt: 0.5 }}>
+            <Text as="p" variant="caption" tone="secondary" className={styles.note}>
                 On a Claude Team or Enterprise plan, only an owner can add custom connectors (in the organization's settings); members then just click Connect.
-            </Typography>
-        </Box>
+            </Text>
+        </div>
     );
 }
 
 function ClaudeCodeSteps({ connectorUrl }: { connectorUrl: string }) {
     return (
-        <Box className={styles.block}>
-            <Typography variant="subtitle2">In Claude Code (terminal)</Typography>
+        <div className={styles.block}>
+            <Text variant="subtitleSm">In Claude Code (terminal)</Text>
             <ol className={styles.steps}>
                 <li>
                     Run:
@@ -62,14 +60,14 @@ function ClaudeCodeSteps({ connectorUrl }: { connectorUrl: string }) {
                     In any Claude Code session, type <code>/mcp</code>, select <strong>{MCP_CONNECTOR_NAME}</strong> and choose <strong>Authenticate</strong>.
                 </li>
             </ol>
-        </Box>
+        </div>
     );
 }
 
 function SignInSteps() {
     return (
-        <Box className={styles.block}>
-            <Typography variant="subtitle2">Then sign in</Typography>
+        <div className={styles.block}>
+            <Text variant="subtitleSm">Then sign in</Text>
             <ol className={styles.steps}>
                 <li>A browser window opens. If it asks you to sign in, use the Google or GitHub account you use here.</li>
                 <li>
@@ -80,14 +78,14 @@ function SignInSteps() {
                     Back in Claude, ask something like <em>“What's in my {APP_NAME} inbox?”</em> to check the connection.
                 </li>
             </ol>
-        </Box>
+        </div>
     );
 }
 
 function GoodToKnow() {
     return (
-        <Box className={styles.block}>
-            <Typography variant="subtitle2">Good to know</Typography>
+        <div className={styles.block}>
+            <Text variant="subtitleSm">Good to know</Text>
             <ul className={styles.steps}>
                 <li>Claude stays signed in. You'll only be asked to sign in again after a month without use.</li>
                 <li>
@@ -97,24 +95,24 @@ function GoodToKnow() {
                 <li>To disconnect, remove the connector in Claude.</li>
                 <li>
                     Prefer running the server on your own machine with a personal API token? See the{' '}
-                    <Link href={LOCAL_MCP_README_URL} target="_blank" rel="noopener noreferrer" data-testid="localMcpReadmeLink">
+                    <a href={LOCAL_MCP_README_URL} target="_blank" rel="noopener noreferrer" data-testid="localMcpReadmeLink">
                         local MCP server guide
-                    </Link>
+                    </a>
                     .
                 </li>
             </ul>
-        </Box>
+        </div>
     );
 }
 
 /** A monospace value the user pastes elsewhere, with a copy button beside it. */
 function CopyableLine({ value, testId, label }: { value: string; testId: string; label: string }) {
     return (
-        <Box className={styles.copyBox}>
-            <Box component="span" className={styles.copyText} data-testid={testId}>
+        <div className={styles.copyBox}>
+            <span className={styles.copyText} data-testid={testId}>
                 {value}
-            </Box>
+            </span>
             <CopyButton value={value} label={label} testId={`${testId}CopyButton`} />
-        </Box>
+        </div>
     );
 }

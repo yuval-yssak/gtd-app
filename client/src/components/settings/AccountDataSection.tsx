@@ -1,22 +1,13 @@
-import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-import Dialog from '@mui/material/Dialog';
-import DialogActions from '@mui/material/DialogActions';
-import DialogContent from '@mui/material/DialogContent';
-import DialogContentText from '@mui/material/DialogContentText';
-import DialogTitle from '@mui/material/DialogTitle';
-import Divider from '@mui/material/Divider';
-import Paper from '@mui/material/Paper';
-import TextField from '@mui/material/TextField';
-import Typography from '@mui/material/Typography';
 import type { IDBPDatabase } from 'idb';
 import { useState } from 'react';
 import { AccountApiError, deleteMyAccount, downloadMyData, SESSION_MISMATCH_CODE } from '#api/accountApi';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { evaporateUserAndRecoverGated } from '../../db/evaporateUser';
+import { Button, Card, Dialog, DialogActions, DialogContent, DialogDescription, DialogTitle, Separator, Text, TextField } from '../../designSystem';
 import { APP_NAME } from '../../lib/appName';
 import styles from '../../routes/_authenticated/-settings.module.css';
 import type { MyDB, StoredAccount } from '../../types/MyDB';
+import sectionStyles from './AccountDataSection.module.css';
 import { describeError, isDeleteConfirmationValid, runAccountDeletion, SESSION_MISMATCH_MESSAGE } from './accountDataSectionLogic';
 
 interface Props {
@@ -48,31 +39,31 @@ export function AccountDataSection({ db, account }: Props) {
     }
 
     return (
-        <Paper variant="outlined" className={styles.section}>
-            <Box className={styles.sectionContent}>
-                <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 0.5 }}>
+        <Card padding="none" className={styles.section}>
+            <div className={styles.sectionContent}>
+                <Text variant="subtitle" weight="semibold" className={sectionStyles.heading}>
                     Your data
-                </Typography>
-                <Typography variant="body2" sx={{ color: 'text.secondary', mb: 2 }}>
+                </Text>
+                <Text variant="bodySm" tone="secondary" className={sectionStyles.intro}>
                     Download a copy of everything {APP_NAME} stores for this account as a JSON file, or delete the account and all of its data.
-                </Typography>
-                <Button variant="outlined" size="small" onClick={onDownloadClicked} disabled={isDownloading || !account} data-testid="downloadMyDataButton">
+                </Text>
+                <Button variant="outline" size="sm" onClick={onDownloadClicked} disabled={isDownloading || !account} data-testid="downloadMyDataButton">
                     {isDownloading ? 'Preparing…' : 'Download my data'}
                 </Button>
                 {downloadError && (
-                    <Typography variant="body2" color="error" sx={{ mt: 1 }} data-testid="downloadMyDataError">
+                    <Text variant="bodySm" tone="error" className={sectionStyles.error} data-testid="downloadMyDataError">
                         {downloadError}
-                    </Typography>
+                    </Text>
                 )}
-                <Divider className={styles.divider} />
-                <Typography variant="body2" sx={{ color: 'text.secondary', mb: 1.5 }}>
+                <Separator className={styles.divider} />
+                <Text variant="bodySm" tone="secondary" className={sectionStyles.deleteIntro}>
                     Deleting your account removes your items, routines, people, calendar connections, devices and API tokens from our servers immediately and
                     permanently. Other accounts signed in on this device are not affected.
-                </Typography>
+                </Text>
                 <Button
-                    variant="outlined"
-                    color="error"
-                    size="small"
+                    variant="outline"
+                    tone="danger"
+                    size="sm"
                     onClick={() => setIsDeleteDialogOpen(true)}
                     disabled={!account}
                     data-testid="deleteAccountButton"
@@ -80,8 +71,8 @@ export function AccountDataSection({ db, account }: Props) {
                     Delete my account
                 </Button>
                 {account && <DeleteAccountDialog db={db} account={account} open={isDeleteDialogOpen} onClose={() => setIsDeleteDialogOpen(false)} />}
-            </Box>
-        </Paper>
+            </div>
+        </Card>
     );
 }
 
@@ -126,37 +117,42 @@ function DeleteAccountDialog({ db, account, open, onClose }: DeleteAccountDialog
     }
 
     return (
-        <Dialog open={open} onClose={onCancel} data-testid="deleteAccountDialog" fullWidth maxWidth="xs">
+        // A plain Dialog, not AlertDialog: the typed-email field takes focus (the confirmation gate),
+        // and the destructive button stays disabled until it matches.
+        <Dialog open={open} onClose={onCancel} data-testid="deleteAccountDialog" fullWidth size="xs">
             <DialogTitle>Delete this account?</DialogTitle>
             <DialogContent>
-                <DialogContentText sx={{ mb: 2 }}>
+                <DialogDescription className={sectionStyles.dialogParagraph}>
                     This permanently deletes <strong>{account.email}</strong> and everything in it, right now. There is no undo and no backup — download your
                     data first if you want to keep a copy.
-                </DialogContentText>
-                <DialogContentText sx={{ mb: 1 }}>Type the account email to confirm.</DialogContentText>
+                </DialogDescription>
+                <Text variant="bodySm" tone="secondary" className={sectionStyles.dialogPrompt}>
+                    Type the account email to confirm.
+                </Text>
                 <TextField
                     autoFocus
                     fullWidth
-                    size="small"
+                    size="sm"
                     type="email"
                     autoComplete="off"
                     placeholder={account.email}
                     value={typedEmail}
                     onChange={(e) => setTypedEmail(e.target.value)}
                     disabled={isDeleting}
+                    inputProps={{ 'aria-label': 'Account email' }}
                     data-testid="deleteAccountEmailInput"
                 />
                 {deleteError && (
-                    <Typography variant="body2" color="error" sx={{ mt: 1 }} data-testid="deleteAccountError">
+                    <Text variant="bodySm" tone="error" className={sectionStyles.error} data-testid="deleteAccountError">
                         {deleteError}
-                    </Typography>
+                    </Text>
                 )}
             </DialogContent>
             <DialogActions>
                 <Button onClick={onCancel} disabled={isDeleting} data-testid="cancelDeleteAccountButton">
                     Cancel
                 </Button>
-                <Button onClick={onConfirm} color="error" variant="contained" disabled={!canConfirm} data-testid="confirmDeleteAccountButton">
+                <Button onClick={onConfirm} tone="danger" variant="solid" disabled={!canConfirm} data-testid="confirmDeleteAccountButton">
                     {isDeleting ? 'Deleting…' : 'Delete account'}
                 </Button>
             </DialogActions>

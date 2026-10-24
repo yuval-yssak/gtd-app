@@ -1,0 +1,22 @@
+declare const styles: {
+    readonly actions: string;
+    readonly configActions: string;
+    readonly configList: string;
+    readonly configName: string;
+    readonly configRow: string;
+    readonly connectError: string;
+    readonly destructiveChoice: string;
+    readonly dialogError: string;
+    readonly dialogIntro: string;
+    readonly emptyNote: string;
+    readonly integration: string;
+    readonly integrationError: string;
+    readonly integrationSeparator: string;
+    readonly integrationTitle: string;
+    readonly italic: string;
+    readonly noCalendarRow: string;
+    readonly repairSummary: string;
+    readonly scopeNotice: string;
+    readonly syncedEmpty: string;
+};
+export = styles;

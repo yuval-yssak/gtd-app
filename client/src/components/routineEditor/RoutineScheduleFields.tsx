@@ -1,9 +1,10 @@
 import { useMemo } from 'react';
-import { Checkbox, Chip, Select, type SelectOption, Switch, Text, TextField, ToggleGroup } from '../../designSystem';
+import { Checkbox, Chip, Select, Switch, Text, TextField, ToggleGroup } from '../../designSystem';
 import type { CalendarOption } from '../../hooks/useCalendarOptions';
 import { rankByUsage, type UsageIndex } from '../../lib/entityUsage';
 import { sortByName } from '../../lib/sortByName';
 import type { EnergyLevel, StoredPerson, StoredWorkContext } from '../../types/MyDB';
+import { calendarSelectOptions } from '../clarify/CalendarFields';
 import { FieldSection } from '../clarify/FieldSection';
 import { CollapsibleChipGroup } from '../pickers/CollapsibleChipGroup';
 import { DateField } from '../pickers/DateField';
@@ -180,19 +181,6 @@ function CalendarSettingsFields({
     );
 }
 
-/** Picker options: Default first, then each account's calendars — grouped under the account once there are several. */
-export function calendarPickerOptions(calendarOptions: CalendarOption[]): SelectOption<string>[] {
-    // A Set keeps insertion order: accounts are listed in the order they first appear.
-    const accountEmails = [...new Set(calendarOptions.map((option) => option.accountEmail))];
-    const isGrouped = accountEmails.length > 1;
-    const calendarRows = accountEmails.flatMap((email) =>
-        calendarOptions
-            .filter((option) => option.accountEmail === email)
-            .map((option) => ({ value: option.configId, label: option.displayName, ...(isGrouped ? { group: email } : {}) })),
-    );
-    return [{ value: '', label: 'Default' }, ...calendarRows];
-}
-
 interface CalendarPickerProps {
     calendarOptions: CalendarOption[];
     value: string;
@@ -201,7 +189,7 @@ interface CalendarPickerProps {
 }
 
 function CalendarPicker({ calendarOptions, value, onChange, disabled }: CalendarPickerProps) {
-    return <Select label="Calendar" size="sm" value={value} onValueChange={onChange} options={calendarPickerOptions(calendarOptions)} disabled={disabled} />;
+    return <Select label="Calendar" size="sm" value={value} onValueChange={onChange} options={calendarSelectOptions(calendarOptions)} disabled={disabled} />;
 }
 
 // ── Ends section ──────────────────────────────────────────────────────────────

@@ -1,24 +1,6 @@
-import ContentCopyIcon from '@mui/icons-material/ContentCopy';
-import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-import Checkbox from '@mui/material/Checkbox';
-import Chip from '@mui/material/Chip';
-import Dialog from '@mui/material/Dialog';
-import DialogActions from '@mui/material/DialogActions';
-import DialogContent from '@mui/material/DialogContent';
-import DialogContentText from '@mui/material/DialogContentText';
-import DialogTitle from '@mui/material/DialogTitle';
-import FormControlLabel from '@mui/material/FormControlLabel';
-import IconButton from '@mui/material/IconButton';
-import List from '@mui/material/List';
-import ListItem from '@mui/material/ListItem';
-import ListItemText from '@mui/material/ListItemText';
-import TextField from '@mui/material/TextField';
-import Tooltip from '@mui/material/Tooltip';
-import Typography from '@mui/material/Typography';
-import classNames from 'classnames';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
+import { Copy } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, useTransition } from 'react';
 import {
     type ApiTokenScope,
@@ -30,6 +12,21 @@ import {
     revokeToken,
     TokensApiError,
 } from '../../api/tokensApi';
+import {
+    AlertDialog,
+    Button,
+    Checkbox,
+    Chip,
+    Dialog,
+    DialogActions,
+    DialogContent,
+    DialogDescription,
+    DialogTitle,
+    IconButton,
+    Text,
+    TextField,
+    Tooltip,
+} from '../../designSystem';
 import styles from './PersonalApiTokens.module.css';
 
 dayjs.extend(relativeTime);
@@ -144,25 +141,25 @@ export function PersonalApiTokens() {
 
     if (isLoading) {
         return (
-            <Typography variant="body2" className={styles.loadingState}>
+            <Text variant="bodySm" tone="secondary" className={styles.loadingState}>
                 Loading tokens…
-            </Typography>
+            </Text>
         );
     }
     if (loadError) {
         return (
-            <Typography variant="body2" className={styles.loadError}>
+            <Text variant="bodySm" tone="error">
                 {loadError}
-            </Typography>
+            </Text>
         );
     }
     return (
-        <Box>
+        <div>
             <TokenList tokens={tokens} onRevoke={openRevoke} revokingId={revokingId} onCreate={openCreate} />
             {actionError && (
-                <Typography variant="body2" className={styles.actionError} sx={{ mt: 1 }} data-testid="tokensActionError">
+                <Text variant="bodySm" tone="error" className={styles.actionError} data-testid="tokensActionError">
                     {actionError}
-                </Typography>
+                </Text>
             )}
             <CreateDialog
                 state={createState}
@@ -177,7 +174,7 @@ export function PersonalApiTokens() {
                 onConfirm={onRevokeConfirm}
                 isRevoking={revokingId !== null}
             />
-        </Box>
+        </div>
     );
 }
 
@@ -191,27 +188,27 @@ interface TokenListProps {
 function TokenList({ tokens, onRevoke, revokingId, onCreate }: TokenListProps) {
     if (tokens.length === 0) {
         return (
-            <Box>
-                <Typography variant="body2" sx={{ color: 'text.secondary', mb: 1.5 }} data-testid="tokensEmptyState">
+            <div>
+                <Text variant="bodySm" tone="secondary" className={styles.emptyState} data-testid="tokensEmptyState">
                     No API tokens yet.
-                </Typography>
-                <Button variant="outlined" size="small" onClick={onCreate} data-testid="createTokenButton">
+                </Text>
+                <Button variant="outline" size="sm" onClick={onCreate} data-testid="createTokenButton">
                     Create token
                 </Button>
-            </Box>
+            </div>
         );
     }
     return (
-        <Box>
-            <List dense disablePadding data-testid="tokenList">
+        <div>
+            <ul className={styles.list} data-testid="tokenList">
                 {tokens.map((t) => (
                     <TokenRow key={t.id} token={t} onRevoke={onRevoke} isRevoking={revokingId === t.id} />
                 ))}
-            </List>
-            <Button variant="outlined" size="small" onClick={onCreate} sx={{ mt: 1 }} data-testid="createTokenButton">
+            </ul>
+            <Button variant="outline" size="sm" onClick={onCreate} className={styles.createButton} data-testid="createTokenButton">
                 Create token
             </Button>
-        </Box>
+        </div>
     );
 }
 
@@ -244,35 +241,29 @@ function TokenRow({ token, onRevoke, isRevoking }: TokenRowProps) {
     const secondary = isRevoked ? `${created} · Revoked ${dayjs(token.revokedTs).format('MMM D, YYYY')}` : `${created} · ${lastUsed}`;
     const showUnusedChip = isTokenUnused(token);
     return (
-        <ListItem
-            disableGutters
-            data-testid="tokenRow"
-            className={classNames(isRevoked && styles.revokedRow)}
-            secondaryAction={
-                isRevoked ? null : (
-                    <Button size="small" color="warning" onClick={() => onRevoke(token)} disabled={isRevoking} data-testid="revokeTokenButton">
-                        {isRevoking ? 'Revoking…' : 'Revoke'}
-                    </Button>
-                )
-            }
-        >
-            <ListItemText
-                primary={
-                    <Box className={styles.primaryLine}>
-                        <Box component="span">{token.label}</Box>
-                        {showUnusedChip && <Chip size="small" variant="outlined" label="unused" data-testid="unusedTokenChip" />}
-                        {/* Render the raw scope string — never index SCOPE_DESCRIPTIONS here. `scopes` is
-                            typed ApiTokenScope[] but populated from untyped network JSON, so a row can carry
-                            a value outside the current union (e.g. a not-yet-migrated legacy scope). The raw
-                            label keeps that chip rendering instead of crashing on a missing description key. */}
-                        {token.scopes.map((scope) => (
-                            <Chip key={scope} size="small" variant="outlined" label={scope} data-testid="tokenScopeChip" />
-                        ))}
-                    </Box>
-                }
-                secondary={secondary}
-            />
-        </ListItem>
+        <li className={styles.row} data-revoked={isRevoked || undefined} data-testid="tokenRow">
+            <div className={styles.rowText}>
+                <span className={styles.primaryLine}>
+                    <Text as="span">{token.label}</Text>
+                    {showUnusedChip && <Chip variant="outline" label="unused" data-testid="unusedTokenChip" />}
+                    {/* Render the raw scope string — never index SCOPE_DESCRIPTIONS here. `scopes` is
+                        typed ApiTokenScope[] but populated from untyped network JSON, so a row can carry
+                        a value outside the current union (e.g. a not-yet-migrated legacy scope). The raw
+                        label keeps that chip rendering instead of crashing on a missing description key. */}
+                    {token.scopes.map((scope) => (
+                        <Chip key={scope} variant="outline" label={scope} data-testid="tokenScopeChip" />
+                    ))}
+                </span>
+                <Text as="span" variant="bodySm" tone="secondary">
+                    {secondary}
+                </Text>
+            </div>
+            {!isRevoked && (
+                <Button size="sm" tone="warning" onClick={() => onRevoke(token)} disabled={isRevoking} data-testid="revokeTokenButton">
+                    {isRevoking ? 'Revoking…' : 'Revoke'}
+                </Button>
+            )}
+        </li>
     );
 }
 
@@ -290,6 +281,8 @@ function CreateDialog({ state, onCancel, onSubmit, onDismissReveal, isCreating }
     const [scopes, setScopes] = useState<Set<ApiTokenScope>>(() => new Set(DEFAULT_NEW_TOKEN_SCOPES));
     const [scopesError, setScopesError] = useState<string | null>(null);
     const [copyError, setCopyError] = useState<string | null>(null);
+    // The reveal's acknowledge button takes focus, so Enter dismisses only once the user is ready.
+    const dismissButtonRef = useRef<HTMLButtonElement>(null);
 
     useEffect(() => {
         if (state.phase === 'form') {
@@ -334,16 +327,16 @@ function CreateDialog({ state, onCancel, onSubmit, onDismissReveal, isCreating }
             onSubmit(trimmed, [...scopes]);
         }
         return (
-            <Dialog open onClose={onCancel} data-testid="createTokenDialog">
+            <Dialog open onClose={onCancel} size="sm" fullWidth data-testid="createTokenDialog">
                 <DialogTitle>Create API token</DialogTitle>
                 <DialogContent>
-                    <DialogContentText sx={{ mb: 2 }}>
+                    <DialogDescription className={styles.formIntro}>
                         Give your token a label so you can identify it later (e.g. "iOS Shortcut", "Local MCP").
-                    </DialogContentText>
+                    </DialogDescription>
                     <TextField
                         autoFocus
                         fullWidth
-                        size="small"
+                        size="sm"
                         label="Label"
                         value={label}
                         onChange={(e) => {
@@ -351,48 +344,44 @@ function CreateDialog({ state, onCancel, onSubmit, onDismissReveal, isCreating }
                             if (labelError !== null) setLabelError(null);
                         }}
                         error={labelError !== null}
-                        helperText={labelError ?? ''}
+                        helperText={labelError ?? undefined}
                         autoComplete="off"
                         data-testid="tokenLabelInput"
                     />
-                    <Box className={styles.scopesGroup}>
-                        <Typography variant="body2" className={styles.scopesLabel}>
+                    <fieldset className={styles.scopesGroup}>
+                        <Text as="legend" variant="bodySm" weight="medium" className={styles.scopesLabel}>
                             Capabilities
-                        </Typography>
+                        </Text>
                         {MINTABLE_API_TOKEN_SCOPES.map((scope) => (
-                            <FormControlLabel
+                            <Checkbox
                                 key={scope}
-                                control={
-                                    <Checkbox
-                                        size="small"
-                                        checked={scopes.has(scope)}
-                                        onChange={() => toggleScope(scope)}
-                                        data-testid={`scopeCheckbox-${scope}`}
-                                    />
-                                }
+                                size="sm"
+                                checked={scopes.has(scope)}
+                                onCheckedChange={() => toggleScope(scope)}
+                                data-testid={`scopeCheckbox-${scope}`}
                                 label={
-                                    <Box>
-                                        <Typography variant="body2" component="span">
+                                    <span>
+                                        <Text as="span" variant="bodySm">
                                             <code>{scope}</code>
-                                        </Typography>
-                                        <Typography variant="caption" component="span" className={styles.scopesHelp}>
+                                        </Text>
+                                        <Text as="span" variant="caption" tone="secondary">
                                             {' '}
                                             — {SCOPE_DESCRIPTIONS[scope]}
-                                        </Typography>
-                                    </Box>
+                                        </Text>
+                                    </span>
                                 }
                             />
                         ))}
                         {scopesError && (
-                            <Typography variant="caption" className={styles.scopesError} data-testid="scopesError">
+                            <Text variant="caption" tone="error" className={styles.scopesError} data-testid="scopesError">
                                 {scopesError}
-                            </Typography>
+                            </Text>
                         )}
-                    </Box>
+                    </fieldset>
                 </DialogContent>
                 <DialogActions>
                     <Button onClick={onCancel}>Cancel</Button>
-                    <Button variant="contained" onClick={handleCreate} disabled={isCreating} data-testid="confirmCreateTokenButton">
+                    <Button variant="solid" onClick={handleCreate} disabled={isCreating} data-testid="confirmCreateTokenButton">
                         {isCreating ? 'Creating…' : 'Create'}
                     </Button>
                 </DialogActions>
@@ -400,8 +389,8 @@ function CreateDialog({ state, onCancel, onSubmit, onDismissReveal, isCreating }
         );
     }
 
-    // Reveal phase: this is the only time the plaintext is in the DOM. Disable Esc and the
-    // backdrop-click dismiss path so the user must explicitly acknowledge they copied it.
+    // Reveal phase: this is the only time the plaintext is in the DOM. Escape and the backdrop are
+    // no-ops so the user must explicitly acknowledge they copied it.
     async function copyPlaintext() {
         if (state.phase !== 'reveal') {
             return;
@@ -419,38 +408,41 @@ function CreateDialog({ state, onCancel, onSubmit, onDismissReveal, isCreating }
     return (
         <Dialog
             open
-            // Both backdropClick and escapeKeyDown are no-ops so the modal stays pinned
-            // until the user clicks "I've copied it". MUI 9 removed disableEscapeKeyDown,
-            // so Esc is suppressed by ignoring the reason here.
+            // A no-op close keeps the controlled dialog open on Escape and backdrop clicks — it
+            // stays pinned until the user clicks "I've copied it".
             onClose={() => {}}
+            disableBackdropClose
+            initialFocus={dismissButtonRef}
+            size="sm"
+            fullWidth
             data-testid="tokenRevealDialog"
         >
             <DialogTitle>Token created</DialogTitle>
             <DialogContent>
-                <DialogContentText className={styles.warning} sx={{ mb: 1.5 }}>
+                <DialogDescription className={styles.warning}>
                     This is the only time you will see this token. Store it somewhere safe before closing.
-                </DialogContentText>
-                <Box className={styles.plaintextBox}>
-                    <Box component="span" className={styles.plaintextText} data-testid="tokenPlaintext">
+                </DialogDescription>
+                <div className={styles.plaintextBox}>
+                    <span className={styles.plaintextText} data-testid="tokenPlaintext">
                         {state.plaintext}
-                    </Box>
+                    </span>
                     <Tooltip title="Copy to clipboard">
-                        <IconButton size="small" onClick={() => void copyPlaintext()} data-testid="copyTokenButton" aria-label="Copy token to clipboard">
-                            <ContentCopyIcon fontSize="small" />
+                        <IconButton size="sm" onClick={() => void copyPlaintext()} data-testid="copyTokenButton" aria-label="Copy token to clipboard">
+                            <Copy />
                         </IconButton>
                     </Tooltip>
-                </Box>
-                <Typography variant="caption" component="span" className={styles.labelCaption}>
+                </div>
+                <Text as="span" variant="caption" tone="secondary" className={styles.labelCaption}>
                     Label: {state.label}
-                </Typography>
+                </Text>
                 {copyError && (
-                    <Typography variant="body2" className={styles.copyError} data-testid="copyTokenError">
+                    <Text variant="bodySm" tone="error" className={styles.copyError} data-testid="copyTokenError">
                         {copyError}
-                    </Typography>
+                    </Text>
                 )}
             </DialogContent>
             <DialogActions>
-                <Button autoFocus variant="contained" onClick={onDismissReveal} data-testid="dismissRevealButton">
+                <Button ref={dismissButtonRef} variant="solid" onClick={onDismissReveal} data-testid="dismissRevealButton">
                     I've copied it
                 </Button>
             </DialogActions>
@@ -470,19 +462,17 @@ function RevokeDialog({ state, onCancel, onConfirm, isRevoking }: RevokeDialogPr
         return null;
     }
     return (
-        <Dialog open onClose={onCancel} data-testid="revokeTokenDialog">
+        <AlertDialog open onClose={onCancel} size="xs" data-testid="revokeTokenDialog">
             <DialogTitle>Revoke token</DialogTitle>
-            <DialogContent>
-                <DialogContentText>
-                    Revoke <strong>{state.token.label}</strong>? Any integration using this token will stop working immediately.
-                </DialogContentText>
-            </DialogContent>
+            <DialogDescription>
+                Revoke <strong>{state.token.label}</strong>? Any integration using this token will stop working immediately.
+            </DialogDescription>
             <DialogActions>
                 <Button onClick={onCancel}>Cancel</Button>
-                <Button variant="contained" color="warning" onClick={onConfirm} disabled={isRevoking} data-testid="confirmRevokeTokenButton">
+                <Button variant="solid" tone="warning" onClick={onConfirm} disabled={isRevoking} data-testid="confirmRevokeTokenButton">
                     {isRevoking ? 'Revoking…' : 'Revoke'}
                 </Button>
             </DialogActions>
-        </Dialog>
+        </AlertDialog>
     );
 }

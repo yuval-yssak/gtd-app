@@ -17,8 +17,9 @@ import { startColorSchemeSync } from './lib/colorScheme';
 // Stamp <html data-theme> before anything renders (including the pre-React upgrade notice), so the
 // first paint is already in the user's scheme; it then follows the OS and other tabs for the page's life.
 startColorSchemeSync();
-// The toasts' live region exists before any toast, so even the first one is announced.
-ensureToastRegion();
+// The toasts' live regions exist before any toast, so even the first one is announced.
+ensureToastRegion('start');
+ensureToastRegion('center');
 
 // Pre-React notice: openAppDB is still awaiting a schema upgrade blocked by an older connection
 // (a stale tab or PWA window running the previous bundle), so React cannot mount yet. Once the

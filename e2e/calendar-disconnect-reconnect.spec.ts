@@ -83,7 +83,7 @@ async function clickDisconnectInSettings(page: Page, removeLinkedEntities: boole
     }
     await dialog.getByRole('button', { name: 'Disconnect' }).click();
     // Settings row disappears once the DELETE completes.
-    await expect(page.getByRole('button', { name: 'Disconnect' })).toBeHidden({ timeout: 10_000 });
+    await expect(page.getByRole('button', { name: 'Disconnect' })).toHaveCount(0, { timeout: 10_000 });
 }
 
 test.describe('calendar disconnect/reconnect idempotency', () => {

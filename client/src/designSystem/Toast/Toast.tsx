@@ -5,6 +5,9 @@ import styles from './Toast.module.css';
 
 export type ToastCloseReason = 'timeout' | 'closeButton';
 
+/** `start` stacks past the sidebar's inline-start edge on wide screens; `center` sits mid-viewport. */
+export type ToastPlacement = 'start' | 'center';
+
 type ToastProps = {
     open: boolean;
     message: ReactNode;
@@ -17,46 +20,47 @@ type ToastProps = {
     tone?: 'neutral' | 'error' | 'success' | undefined;
     /** Show a close (×) button. */
     dismissible?: boolean | undefined;
+    placement?: ToastPlacement | undefined;
     className?: string | undefined;
     'data-testid'?: string | undefined;
 };
 
-const REGION_ID = 'gtd-toast-region';
-
 /**
- * The one shared stacking region — a persistent polite live region, so a toast is announced as
+ * The shared stacking region for one placement — a persistent polite live region, so a toast is announced as
  * content arriving in an existing region (screen readers skip live regions that arrive already
  * filled). Not Base UI's Toast: its viewport takes over F6 globally while a toast is visible, which
  * would steal the app's F6 region cycling.
  */
-export function ensureToastRegion() {
-    const existing = document.getElementById(REGION_ID);
+export function ensureToastRegion(placement: ToastPlacement = 'start') {
+    const id = `gtd-toast-region-${placement}`;
+    const existing = document.getElementById(id);
     if (existing) return existing;
     const region = document.createElement('div');
-    region.id = REGION_ID;
+    region.id = id;
     region.setAttribute('role', 'status');
+    region.setAttribute('data-placement', placement);
     region.className = styles.region ?? '';
     document.body.append(region);
     return region;
 }
 
 /** The region, created after mount — never during render. */
-function useToastRegion() {
+function useToastRegion(placement: ToastPlacement) {
     const [region, setRegion] = useState<HTMLElement | null>(null);
-    useLayoutEffect(() => setRegion(ensureToastRegion()), []);
+    useLayoutEffect(() => setRegion(ensureToastRegion(placement)), [placement]);
     return region;
 }
 
 /** A transient notice (MUI Snackbar's declarative shape: `open` + `message` + `onClose`). */
-export function Toast({ open, ...bodyProps }: ToastProps) {
-    const region = useToastRegion();
+export function Toast({ open, placement = 'start', ...bodyProps }: ToastProps) {
+    const region = useToastRegion(placement);
     if (!open || !region) return null;
     return createPortal(<ToastBody {...bodyProps} />, region);
 }
 
 // Mounted only while open, so the pause latch and the timer are born and die with each showing: a
 // toast closed under the pointer (Undo, ×) never receives the pointerleave that would unpause it.
-function ToastBody({ message, action, autoHideDuration, onClose, tone = 'neutral', dismissible, className, ...rest }: Omit<ToastProps, 'open'>) {
+function ToastBody({ message, action, autoHideDuration, onClose, tone = 'neutral', dismissible, className, ...rest }: Omit<ToastProps, 'open' | 'placement'>) {
     const pause = useHoverOrFocusPause();
     useAutoHide(!pause.isPaused, autoHideDuration, onClose);
     return (

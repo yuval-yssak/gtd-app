@@ -1,5 +1,6 @@
 @layer gtd.composites {
-    /* Bottom-centre on phones, bottom-start on wider screens; newest at the bottom. */
+    /* Bottom-centre on phones; on wider screens the start region sits bottom-start, the centre
+       region stays centred. Newest at the bottom. */
     .region {
         position: fixed;
         inset-block-end: var(--space-4);
@@ -13,8 +14,10 @@
 
         /* MUI's md breakpoint (900px) — see hooks/useIsMobile.ts. */
         @media (width >= 900px) {
-            inset-inline-end: auto;
-            align-items: flex-start;
+            &[data-placement="start"] {
+                inset-inline-end: auto;
+                align-items: flex-start;
+            }
         }
     }
 

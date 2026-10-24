@@ -1,17 +1,6 @@
-import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-import Divider from '@mui/material/Divider';
-import FormControlLabel from '@mui/material/FormControlLabel';
-import MenuItem from '@mui/material/MenuItem';
-import Paper from '@mui/material/Paper';
-import Radio from '@mui/material/Radio';
-import RadioGroup from '@mui/material/RadioGroup';
-import Switch from '@mui/material/Switch';
-import TextField from '@mui/material/TextField';
-import Typography from '@mui/material/Typography';
 import { createFileRoute, Link } from '@tanstack/react-router';
 import type { IDBPDatabase } from 'idb';
-import { Suspense, useCallback, useEffect, useState, useTransition } from 'react';
+import { type ReactNode, Suspense, useCallback, useEffect, useId, useState, useTransition } from 'react';
 import { getPushStatus } from '../../api/pushApi';
 import { AppErrorBoundary } from '../../components/AppErrorBoundary';
 import { AccountDataSection } from '../../components/settings/AccountDataSection';
@@ -23,7 +12,7 @@ import { PersonalApiTokens } from '../../components/settings/PersonalApiTokens';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { getOrCreateDeviceId } from '../../db/deviceId';
 import { requestAndRegisterPushSubscription } from '../../db/pushSubscription';
-import { Card, RadioGroup as DsRadioGroup, type RadioOption, Text } from '../../designSystem';
+import { Button, Card, RadioGroup, type RadioOption, Select, Separator, Switch, Text } from '../../designSystem';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { APP_NAME, METHOD_NAME } from '../../lib/appName';
 import { setShowBriefs, useShowBriefs } from '../../lib/briefPreference';
@@ -53,210 +42,111 @@ export const Route = createFileRoute('/_authenticated/settings')({
     component: SettingsPage,
 });
 
+interface SettingsSectionProps {
+    title: string;
+    /** The grey line under the title. */
+    description?: ReactNode | undefined;
+    /** Rules a separator between the description and the section's controls. */
+    isDivided?: boolean | undefined;
+    children?: ReactNode | undefined;
+}
+
+/** One settings card: a heading, an optional description, then the section's own controls. */
+function SettingsSection({ title, description, isDivided = false, children }: SettingsSectionProps) {
+    const headingId = useId();
+    return (
+        <Card padding="none" className={styles.section}>
+            <section className={styles.sectionContent} aria-labelledby={headingId}>
+                <Text variant="subtitle" weight="semibold" id={headingId} className={styles.sectionHeading}>
+                    {title}
+                </Text>
+                {description !== undefined && (
+                    <Text variant="bodySm" tone="secondary" className={styles.sectionDescription}>
+                        {description}
+                    </Text>
+                )}
+                {isDivided && <Separator className={styles.divider} />}
+                {children}
+            </section>
+        </Card>
+    );
+}
+
 function SettingsPage() {
     useDocumentTitle('Settings');
     const { db } = Route.useRouteContext();
     const { account } = useAppData();
 
     return (
-        <Box className={styles.pageWrapper}>
-            <Typography
-                variant="h5"
-                sx={{
-                    fontWeight: 600,
-                    mb: 3,
-                }}
-            >
+        <div className={styles.pageWrapper}>
+            <Text variant="title" weight="semibold" className={styles.pageTitle}>
                 Settings
-            </Typography>
-            {/* Account section */}
-            <Paper variant="outlined" className={styles.section}>
-                <Box className={styles.sectionContent}>
-                    <Typography
-                        variant="subtitle1"
-                        sx={{
-                            fontWeight: 600,
-                            mb: 0.5,
-                        }}
-                    >
-                        Account
-                    </Typography>
-                    <Typography
-                        variant="body2"
-                        sx={{
-                            color: 'text.secondary',
-                        }}
-                    >
-                        {account?.name ?? '—'} · {account?.email ?? '—'}
-                    </Typography>
-                </Box>
-            </Paper>
-            {/* Appearance section */}
+            </Text>
+            <SettingsSection title="Account" description={`${account?.name ?? '—'} · ${account?.email ?? '—'}`} />
             <AppearanceSection />
-            {/* Calendar sync section */}
-            <Paper variant="outlined" className={styles.section}>
-                <Box className={styles.sectionContent}>
-                    <Typography
-                        variant="subtitle1"
-                        sx={{
-                            fontWeight: 600,
-                            mb: 0.5,
-                        }}
-                    >
-                        Calendar Sync
-                    </Typography>
-                    <Typography
-                        variant="body2"
-                        sx={{
-                            color: 'text.secondary',
-                            mb: 2,
-                        }}
-                    >
-                        Connect a Google Calendar account to sync calendar items bidirectionally. Changes made here or in Google Calendar stay in sync
-                        automatically.
-                    </Typography>
-                    <Divider className={styles.divider} />
-                    {/* Scoped boundary: only the calendar section waits on its network reads — the rest
-                        of the settings page renders immediately. The skeleton reserves the section's
-                        final height so content sharpens in without shifting the sections below it. */}
-                    <AppErrorBoundary mode="inline" title="Couldn't load calendar settings">
-                        <Suspense fallback={<CalendarIntegrationsSkeleton />}>
-                            <CalendarIntegrations />
-                        </Suspense>
-                    </AppErrorBoundary>
-                </Box>
-            </Paper>
-            {/* Calendar horizon */}
+            <SettingsSection
+                title="Calendar Sync"
+                description="Connect a Google Calendar account to sync calendar items bidirectionally. Changes made here or in Google Calendar stay in sync automatically."
+                isDivided
+            >
+                {/* Scoped boundary: only the calendar section waits on its network reads — the rest
+                    of the settings page renders immediately. The skeleton reserves the section's
+                    final height so content sharpens in without shifting the sections below it. */}
+                <AppErrorBoundary mode="inline" title="Couldn't load calendar settings">
+                    <Suspense fallback={<CalendarIntegrationsSkeleton />}>
+                        <CalendarIntegrations />
+                    </Suspense>
+                </AppErrorBoundary>
+            </SettingsSection>
             <CalendarHorizonSection />
-            {/* Routine indicator style */}
             <RoutineIndicatorSection />
-            {/* Weekly review preferences */}
             <WeeklyReviewSection />
-            {/* Notifications section */}
             <NotificationsSection db={db} />
-            {/* Connected devices */}
-            <Paper variant="outlined" className={styles.section}>
-                <Box className={styles.sectionContent}>
-                    <Typography
-                        variant="subtitle1"
-                        sx={{
-                            fontWeight: 600,
-                            mb: 0.5,
-                        }}
-                    >
-                        Connected devices
-                    </Typography>
-                    <Typography
-                        variant="body2"
-                        sx={{
-                            color: 'text.secondary',
-                            mb: 2,
-                        }}
-                    >
-                        Every device signed in to this account keeps its own sync position, and sync history is retained until the slowest device catches up.
-                        Remove a device you no longer use to free the history it is holding on to.
-                    </Typography>
-                    <Divider className={styles.divider} />
-                    <ConnectedDevices db={db} />
-                </Box>
-            </Paper>
+            <SettingsSection
+                title="Connected devices"
+                description="Every device signed in to this account keeps its own sync position, and sync history is retained until the slowest device catches up. Remove a device you no longer use to free the history it is holding on to."
+                isDivided
+            >
+                <ConnectedDevices db={db} />
+            </SettingsSection>
             {/* Connect Claude via the hosted MCP endpoint (OAuth, no token) */}
-            <Paper variant="outlined" className={styles.section}>
-                <Box className={styles.sectionContent}>
-                    <Typography
-                        variant="subtitle1"
-                        sx={{
-                            fontWeight: 600,
-                            mb: 0.5,
-                        }}
-                    >
-                        Connect Claude
-                    </Typography>
-                    <Typography
-                        variant="body2"
-                        sx={{
-                            color: 'text.secondary',
-                            mb: 2,
-                        }}
-                    >
-                        Let Claude capture, clarify and review your items in conversation. Add {APP_NAME} as a connector in Claude, then sign in. No install or
-                        token needed.
-                    </Typography>
-                    <Divider className={styles.divider} />
-                    <ConnectClaude />
-                </Box>
-            </Paper>
-            {/* Personal API tokens */}
-            <Paper variant="outlined" className={styles.section}>
-                <Box className={styles.sectionContent}>
-                    <Typography
-                        variant="subtitle1"
-                        sx={{
-                            fontWeight: 600,
-                            mb: 0.5,
-                        }}
-                    >
-                        Personal API tokens
-                    </Typography>
-                    <Typography
-                        variant="body2"
-                        sx={{
-                            color: 'text.secondary',
-                            mb: 2,
-                        }}
-                    >
+            <SettingsSection
+                title="Connect Claude"
+                description={`Let Claude capture, clarify and review your items in conversation. Add ${APP_NAME} as a connector in Claude, then sign in. No install or token needed.`}
+                isDivided
+            >
+                <ConnectClaude />
+            </SettingsSection>
+            <SettingsSection
+                title="Personal API tokens"
+                description={
+                    <>
                         Bearer tokens for the public <code>/v1</code> API. Use them to integrate this account with shortcuts, automations, or the local MCP
                         server. Connecting Claude doesn't need one; use Connect Claude above.
-                    </Typography>
-                    <Divider className={styles.divider} />
-                    <PersonalApiTokens />
-                </Box>
-            </Paper>
+                    </>
+                }
+                isDivided
+            >
+                <PersonalApiTokens />
+            </SettingsSection>
             {/* Data export + account deletion (GDPR portability / erasure) */}
             <AccountDataSection db={db} account={account} />
-            {/* App info */}
-            <Paper variant="outlined">
-                <Box className={styles.sectionContent}>
-                    <Typography
-                        variant="subtitle1"
-                        sx={{
-                            fontWeight: 600,
-                            mb: 0.5,
-                        }}
-                    >
-                        App
-                    </Typography>
-                    <Typography
-                        variant="body2"
-                        sx={{
-                            color: 'text.secondary',
-                        }}
-                    >
-                        {APP_NAME} — an offline-first productivity app built around the {METHOD_NAME} method.
-                    </Typography>
-                    <Typography
-                        variant="caption"
-                        component="p"
-                        sx={{
-                            color: 'text.secondary',
-                            mt: 1,
-                        }}
-                    >
-                        Version: {__COMMIT_HASH__}
-                    </Typography>
-                    {/* The only in-app route to the legal documents; signed-out visitors get them from
-                        the sign-in card and the landing page. */}
-                    <nav aria-label="Legal pages" className={styles.legalLinks}>
-                        <Link to={LEGAL_DOCUMENTS.privacy.path} data-testid="settingsPrivacyLink">
-                            {LEGAL_DOCUMENTS.privacy.title}
-                        </Link>
-                        <Link to={LEGAL_DOCUMENTS.terms.path} data-testid="settingsTermsLink">
-                            {LEGAL_DOCUMENTS.terms.title}
-                        </Link>
-                    </nav>
-                </Box>
-            </Paper>
-        </Box>
+            <SettingsSection title="App" description={`${APP_NAME} — an offline-first productivity app built around the ${METHOD_NAME} method.`}>
+                <Text as="p" variant="caption" tone="secondary">
+                    Version: {__COMMIT_HASH__}
+                </Text>
+                {/* The only in-app route to the legal documents; signed-out visitors get them from
+                    the sign-in card and the landing page. */}
+                <nav aria-label="Legal pages" className={styles.legalLinks}>
+                    <Link to={LEGAL_DOCUMENTS.privacy.path} data-testid="settingsPrivacyLink">
+                        {LEGAL_DOCUMENTS.privacy.title}
+                    </Link>
+                    <Link to={LEGAL_DOCUMENTS.terms.path} data-testid="settingsTermsLink">
+                        {LEGAL_DOCUMENTS.terms.title}
+                    </Link>
+                </nav>
+            </SettingsSection>
+        </div>
     );
 }
 
@@ -269,20 +159,15 @@ const COLOR_SCHEME_OPTIONS: RadioOption<ColorSchemePreference>[] = [
 function AppearanceSection() {
     const preference = useColorSchemePreference();
     return (
-        <Card padding="none" className={styles.section}>
-            <div className={styles.sectionContent}>
-                <Text variant="subtitle" weight="semibold" id="appearanceHeading" className={styles.sectionHeading}>
-                    Appearance
-                </Text>
-                <DsRadioGroup
-                    aria-labelledby="appearanceHeading"
-                    value={preference}
-                    onValueChange={setColorSchemePreference}
-                    options={COLOR_SCHEME_OPTIONS}
-                    data-testid="colorSchemeRadio"
-                />
-            </div>
-        </Card>
+        <SettingsSection title="Appearance">
+            <RadioGroup
+                aria-label="Appearance"
+                value={preference}
+                onValueChange={setColorSchemePreference}
+                options={COLOR_SCHEME_OPTIONS}
+                data-testid="colorSchemeRadio"
+            />
+        </SettingsSection>
     );
 }
 
@@ -290,37 +175,21 @@ function WeeklyReviewSection() {
     const isShowBriefsOn = useShowBriefs();
 
     return (
-        <Paper variant="outlined" className={styles.section}>
-            <Box className={styles.sectionContent}>
-                <Typography
-                    variant="subtitle1"
-                    sx={{
-                        fontWeight: 600,
-                        mb: 0.5,
-                    }}
-                >
-                    Weekly review
-                </Typography>
-                <Typography
-                    variant="body2"
-                    sx={{
-                        color: 'text.secondary',
-                        mb: 1,
-                    }}
-                >
+        <SettingsSection
+            title="Weekly review"
+            description={
+                <>
                     A brief is a one-line condensation of an item's title and notes. When shown, review cards lead with the brief and fold the notes behind
                     &ldquo;Show notes&rdquo;. This device only.
-                </Typography>
-                <FormControlLabel
-                    control={<Switch checked={isShowBriefsOn} onChange={(_, checked) => setShowBriefs(checked)} data-testid="settingsShowBriefsToggle" />}
-                    label={<Typography variant="body2">Show briefs</Typography>}
-                />
-            </Box>
-        </Paper>
+                </>
+            }
+        >
+            <Switch label="Show briefs" checked={isShowBriefsOn} onCheckedChange={setShowBriefs} data-testid="settingsShowBriefsToggle" />
+        </SettingsSection>
     );
 }
 
-const HORIZON_OPTIONS = [1, 2, 3, 4, 6, 9, 12] as const;
+const HORIZON_OPTIONS = [1, 2, 3, 4, 6, 9, 12].map((months) => ({ value: String(months), label: months === 1 ? '1 month' : `${months} months` }));
 
 function CalendarHorizonSection() {
     const [horizon, setHorizon] = useState(() => getCalendarHorizonMonths());
@@ -331,38 +200,28 @@ function CalendarHorizonSection() {
     }
 
     return (
-        <Paper variant="outlined" className={styles.section}>
-            <Box className={styles.sectionContent}>
-                <Typography
-                    variant="subtitle1"
-                    sx={{
-                        fontWeight: 600,
-                        mb: 0.5,
-                    }}
-                >
-                    Calendar horizon
-                </Typography>
-                <Typography
-                    variant="body2"
-                    sx={{
-                        color: 'text.secondary',
-                        mb: 2,
-                    }}
-                >
-                    How far ahead to generate calendar items for recurring routines. Existing routines are not affected until their next edit or item
-                    completion.
-                </Typography>
-                <TextField select size="small" value={horizon} onChange={(e) => onChange(Number(e.target.value))} sx={{ width: 160 }}>
-                    {HORIZON_OPTIONS.map((m) => (
-                        <MenuItem key={m} value={m}>
-                            {m === 1 ? '1 month' : `${m} months`}
-                        </MenuItem>
-                    ))}
-                </TextField>
-            </Box>
-        </Paper>
+        <SettingsSection
+            title="Calendar horizon"
+            description="How far ahead to generate calendar items for recurring routines. Existing routines are not affected until their next edit or item completion."
+        >
+            <Select
+                aria-label="Calendar horizon"
+                size="sm"
+                value={String(horizon)}
+                onValueChange={(months) => onChange(Number(months))}
+                options={HORIZON_OPTIONS}
+                className={styles.horizonSelect}
+            />
+        </SettingsSection>
     );
 }
+
+const ROUTINE_INDICATOR_OPTIONS: RadioOption<RoutineIndicatorStyle>[] = [
+    { value: 'icon', label: 'Loop icon' },
+    { value: 'colorAccent', label: 'Color dot' },
+    { value: 'chip', label: 'Chip label' },
+    { value: 'none', label: 'None' },
+];
 
 function RoutineIndicatorSection() {
     const [style, setStyle] = useState<RoutineIndicatorStyle>(() => getRoutineIndicatorStyle());
@@ -373,34 +232,9 @@ function RoutineIndicatorSection() {
     }
 
     return (
-        <Paper variant="outlined" className={styles.section}>
-            <Box className={styles.sectionContent}>
-                <Typography
-                    variant="subtitle1"
-                    sx={{
-                        fontWeight: 600,
-                        mb: 0.5,
-                    }}
-                >
-                    Routine indicator
-                </Typography>
-                <Typography
-                    variant="body2"
-                    sx={{
-                        color: 'text.secondary',
-                        mb: 1,
-                    }}
-                >
-                    How items linked to a routine are marked in lists.
-                </Typography>
-                <RadioGroup value={style} onChange={(e) => onChange(e.target.value as RoutineIndicatorStyle)}>
-                    <FormControlLabel value="icon" control={<Radio size="small" />} label={<Typography variant="body2">Loop icon</Typography>} />
-                    <FormControlLabel value="colorAccent" control={<Radio size="small" />} label={<Typography variant="body2">Color dot</Typography>} />
-                    <FormControlLabel value="chip" control={<Radio size="small" />} label={<Typography variant="body2">Chip label</Typography>} />
-                    <FormControlLabel value="none" control={<Radio size="small" />} label={<Typography variant="body2">None</Typography>} />
-                </RadioGroup>
-            </Box>
-        </Paper>
+        <SettingsSection title="Routine indicator" description="How items linked to a routine are marked in lists.">
+            <RadioGroup aria-label="Routine indicator" value={style} onValueChange={onChange} options={ROUTINE_INDICATOR_OPTIONS} />
+        </SettingsSection>
     );
 }
 
@@ -458,29 +292,9 @@ function NotificationsSection({ db }: { db: IDBPDatabase<MyDB> }) {
     }
 
     return (
-        <Paper variant="outlined" className={styles.section}>
-            <Box className={styles.sectionContent}>
-                <Typography
-                    variant="subtitle1"
-                    sx={{
-                        fontWeight: 600,
-                        mb: 0.5,
-                    }}
-                >
-                    Notifications
-                </Typography>
-                <Typography
-                    variant="body2"
-                    sx={{
-                        color: 'text.secondary',
-                        mb: 2,
-                    }}
-                >
-                    Push notifications keep your items in sync across devices, even when the app is closed.
-                </Typography>
-                <NotificationsBody status={status} isRequesting={isRequesting} onEnableOrRegister={onEnableOrRegister} />
-            </Box>
-        </Paper>
+        <SettingsSection title="Notifications" description="Push notifications keep your items in sync across devices, even when the app is closed.">
+            <NotificationsBody status={status} isRequesting={isRequesting} onEnableOrRegister={onEnableOrRegister} />
+        </SettingsSection>
     );
 }
 
@@ -490,63 +304,33 @@ interface NotificationsBodyProps {
     onEnableOrRegister: () => void;
 }
 
+const NOTIFICATION_STATUS_NOTES: Partial<Record<NotificationStatus, string>> = {
+    loading: 'Checking notification status…',
+    unsupported: 'Push notifications are not supported in this browser.',
+    denied: "Notifications are blocked. To enable them, update your browser's site permissions.",
+};
+
 function NotificationsBody({ status, isRequesting, onEnableOrRegister }: NotificationsBodyProps) {
-    if (status === 'loading') {
+    const note = NOTIFICATION_STATUS_NOTES[status];
+    if (note !== undefined) {
         return (
-            <Typography
-                variant="body2"
-                sx={{
-                    color: 'text.secondary',
-                    fontStyle: 'italic',
-                }}
-            >
-                Checking notification status…
-            </Typography>
-        );
-    }
-    if (status === 'unsupported') {
-        return (
-            <Typography
-                variant="body2"
-                sx={{
-                    color: 'text.secondary',
-                    fontStyle: 'italic',
-                }}
-            >
-                Push notifications are not supported in this browser.
-            </Typography>
-        );
-    }
-    if (status === 'denied') {
-        return (
-            <Typography
-                variant="body2"
-                sx={{
-                    color: 'text.secondary',
-                    fontStyle: 'italic',
-                }}
-            >
-                Notifications are blocked. To enable them, update your browser's site permissions.
-            </Typography>
+            <Text variant="bodySm" tone="secondary" className={styles.statusNote}>
+                {note}
+            </Text>
         );
     }
     if (status === 'enabled') {
         return (
-            <Typography
-                variant="body2"
-                sx={{
-                    color: 'success.main',
-                }}
-            >
+            <Text variant="bodySm" tone="success">
                 Notifications enabled.
-            </Typography>
+            </Text>
         );
     }
     // needsPermission or needsRegister — both resolve via the same one-click flow:
     // requestAndRegisterPushSubscription handles both prompting and re-subscribing.
     const label = status === 'needsPermission' ? 'Enable notifications' : 'Re-enable notifications';
     return (
-        <Button variant="outlined" size="small" onClick={onEnableOrRegister} disabled={isRequesting}>
+        <Button variant="outline" size="sm" onClick={onEnableOrRegister} disabled={isRequesting}>
             {isRequesting ? 'Requesting…' : label}
         </Button>
     );

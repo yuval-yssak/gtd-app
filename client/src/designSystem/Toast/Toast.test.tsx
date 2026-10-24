@@ -14,8 +14,15 @@ afterEach(() => {
     vi.useRealTimers();
 });
 
+// Each placement has its own region, and regions persist across tests (they live on <body>).
+function regionFor(placement: 'start' | 'center') {
+    const match = screen.getAllByRole('status').find((candidate) => candidate.getAttribute('data-placement') === placement);
+    if (!match) throw new Error(`expected a ${placement} toast region`);
+    return match;
+}
+
 function region() {
-    return screen.getByRole('status');
+    return regionFor('start');
 }
 
 describe('Toast', () => {
@@ -106,5 +113,18 @@ describe('Toast', () => {
         );
         expect(within(region()).getByText('Saved')).toBeDefined();
         expect(within(region()).getByText('Moved')).toBeDefined();
+    });
+
+    it('renders a centred toast in its own persistent region, apart from the start-aligned stack', () => {
+        render(
+            <>
+                <Toast open message="Saved" />
+                <Toast open placement="center" message="Hidden account" />
+            </>,
+        );
+        const centred = regionFor('center');
+        expect(within(centred).getByText('Hidden account')).toBeDefined();
+        expect(within(centred).queryByText('Saved')).toBeNull();
+        expect(within(region()).queryByText('Hidden account')).toBeNull();
     });
 });

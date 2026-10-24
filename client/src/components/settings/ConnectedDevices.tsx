@@ -1,22 +1,10 @@
-import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-import Chip from '@mui/material/Chip';
-import Dialog from '@mui/material/Dialog';
-import DialogActions from '@mui/material/DialogActions';
-import DialogContent from '@mui/material/DialogContent';
-import DialogContentText from '@mui/material/DialogContentText';
-import DialogTitle from '@mui/material/DialogTitle';
-import List from '@mui/material/List';
-import ListItem from '@mui/material/ListItem';
-import ListItemText from '@mui/material/ListItemText';
-import TextField from '@mui/material/TextField';
-import Typography from '@mui/material/Typography';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import type { IDBPDatabase } from 'idb';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { type ConnectedDevice, listConnectedDevices, removeDevice, renameDevice } from '../../api/devicesApi';
 import { getOrCreateDeviceId } from '../../db/deviceId';
+import { AlertDialog, Button, Chip, Dialog, DialogActions, DialogContent, DialogDescription, DialogTitle, Text, TextField } from '../../designSystem';
 import type { MyDB } from '../../types/MyDB';
 import styles from './ConnectedDevices.module.css';
 
@@ -153,35 +141,35 @@ export function ConnectedDevices({ db }: { db: IDBPDatabase<MyDB> }) {
 
     if (isLoading) {
         return (
-            <Typography variant="body2" className={styles.loadingState}>
+            <Text variant="bodySm" tone="secondary" className={styles.loadingState}>
                 Loading devices…
-            </Typography>
+            </Text>
         );
     }
     if (loadError) {
         return (
-            <Typography variant="body2" className={styles.loadError} data-testid="devicesLoadError">
+            <Text variant="bodySm" tone="error" data-testid="devicesLoadError">
                 {loadError}
-            </Typography>
+            </Text>
         );
     }
     return (
-        <Box>
+        <div>
             <DeviceList devices={devices} currentDeviceId={currentDeviceId} removingId={removingId} onRemove={openRemove} onRename={openRename} />
             {freedSummary && (
-                <Typography variant="body2" className={styles.freedSummary} data-testid="deviceRemovedSummary">
+                <Text variant="bodySm" tone="success" className={styles.freedSummary} data-testid="deviceRemovedSummary">
                     {freedSummary}
-                </Typography>
+                </Text>
             )}
             {actionError && (
-                <Typography variant="body2" className={styles.actionError} data-testid="devicesActionError">
+                <Text variant="bodySm" tone="error" data-testid="devicesActionError">
                     {actionError}
-                </Typography>
+                </Text>
             )}
-            <Typography variant="caption" className={styles.opsSummary} data-testid="opsLogSummary">
+            <Text as="p" variant="caption" tone="secondary" className={styles.opsSummary} data-testid="opsLogSummary">
                 Sync history: {totalOps} operation{totalOps === 1 ? '' : 's'} retained. History older than what every connected device has received is cleaned
                 up automatically.
-            </Typography>
+            </Text>
             <RemoveDeviceDialog
                 state={removeState}
                 onCancel={() => setRemoveState({ phase: 'closed' })}
@@ -199,7 +187,7 @@ export function ConnectedDevices({ db }: { db: IDBPDatabase<MyDB> }) {
                     onSubmit={(name) => void onRenameSubmit(name)}
                 />
             )}
-        </Box>
+        </div>
     );
 }
 
@@ -216,13 +204,13 @@ function DeviceList({ devices, currentDeviceId, removingId, onRemove, onRename }
         // Only reachable before this device's first bootstrap completes (the bootstrap itself
         // registers a row) — but render something sensible rather than an empty gap.
         return (
-            <Typography variant="body2" sx={{ color: 'text.secondary' }} data-testid="devicesEmptyState">
+            <Text variant="bodySm" tone="secondary" data-testid="devicesEmptyState">
                 No devices are registered for sync yet.
-            </Typography>
+            </Text>
         );
     }
     return (
-        <List dense disablePadding data-testid="deviceList">
+        <ul className={styles.list} data-testid="deviceList">
             {sortDevicesForDisplay(devices, currentDeviceId).map((device) => (
                 <DeviceRow
                     key={device.deviceId}
@@ -233,7 +221,7 @@ function DeviceList({ devices, currentDeviceId, removingId, onRemove, onRename }
                     onRename={onRename}
                 />
             ))}
-        </List>
+        </ul>
     );
 }
 
@@ -247,37 +235,30 @@ interface DeviceRowProps {
 
 function DeviceRow({ device, isCurrentDevice, isRemoving, onRemove, onRename }: DeviceRowProps) {
     return (
-        <ListItem
-            disableGutters
-            data-testid="deviceRow"
-            secondaryAction={
-                <Box className={styles.rowActions}>
-                    <Button size="small" onClick={() => onRename(device)} data-testid="renameDeviceButton">
-                        Rename
+        <li className={styles.row} data-testid="deviceRow">
+            <div className={styles.rowText}>
+                <span className={styles.primaryLine}>
+                    <Text as="span">{deviceDisplayName(device)}</Text>
+                    {isCurrentDevice && <Chip tone="accent" variant="outline" label="This device" data-testid="thisDeviceChip" />}
+                    {isHoldingBackCleanup(device) && <Chip tone="warning" variant="outline" label="Holding back cleanup" data-testid="holdingCleanupChip" />}
+                </span>
+                <Text as="span" variant="bodySm" tone="secondary">
+                    {describeDeviceActivity(device)}
+                </Text>
+            </div>
+            <div className={styles.rowActions}>
+                <Button size="sm" onClick={() => onRename(device)} data-testid="renameDeviceButton">
+                    Rename
+                </Button>
+                {/* No Remove for the device you're on: removing it would only force this very
+                    browser through a full re-download on its next sync — never what's meant here. */}
+                {!isCurrentDevice && (
+                    <Button size="sm" tone="warning" onClick={() => onRemove(device)} disabled={isRemoving} data-testid="removeDeviceButton">
+                        {isRemoving ? 'Removing…' : 'Remove'}
                     </Button>
-                    {/* No Remove for the device you're on: removing it would only force this very
-                        browser through a full re-download on its next sync — never what's meant here. */}
-                    {!isCurrentDevice && (
-                        <Button size="small" color="warning" onClick={() => onRemove(device)} disabled={isRemoving} data-testid="removeDeviceButton">
-                            {isRemoving ? 'Removing…' : 'Remove'}
-                        </Button>
-                    )}
-                </Box>
-            }
-        >
-            <ListItemText
-                primary={
-                    <Box className={styles.primaryLine}>
-                        <Box component="span">{deviceDisplayName(device)}</Box>
-                        {isCurrentDevice && <Chip size="small" color="primary" variant="outlined" label="This device" data-testid="thisDeviceChip" />}
-                        {isHoldingBackCleanup(device) && (
-                            <Chip size="small" color="warning" variant="outlined" label="Holding back cleanup" data-testid="holdingCleanupChip" />
-                        )}
-                    </Box>
-                }
-                secondary={describeDeviceActivity(device)}
-            />
-        </ListItem>
+                )}
+            </div>
+        </li>
     );
 }
 
@@ -293,24 +274,24 @@ function RemoveDeviceDialog({ state, onCancel, onConfirm, isRemoving }: RemoveDe
         return null;
     }
     return (
-        <Dialog open onClose={onCancel} data-testid="removeDeviceDialog">
+        <AlertDialog open onClose={onCancel} size="sm" data-testid="removeDeviceDialog">
             <DialogTitle>Remove device</DialogTitle>
-            <DialogContent>
-                <DialogContentText>
-                    Remove <strong>{deviceDisplayName(state.device)}</strong> from sync? Sync history it was holding on to will be cleaned up.
-                </DialogContentText>
-                <DialogContentText sx={{ mt: 1.5 }}>
-                    Removing does not sign the device out or block it. If it is still in use, it will simply re-register on its next sync and reappear here
-                    after it re-downloads all your data — it will ask what to do with any unsynced changes, so nothing is discarded silently.
-                </DialogContentText>
-            </DialogContent>
+            {/* Base UI links one description per popup, so the confirm question is the description
+                and the explanation that follows is plain text. */}
+            <DialogDescription>
+                Remove <strong>{deviceDisplayName(state.device)}</strong> from sync? Sync history it was holding on to will be cleaned up.
+            </DialogDescription>
+            <Text tone="secondary" className={styles.followingParagraph}>
+                Removing does not sign the device out or block it. If it is still in use, it will simply re-register on its next sync and reappear here after it
+                re-downloads all your data — it will ask what to do with any unsynced changes, so nothing is discarded silently.
+            </Text>
             <DialogActions>
                 <Button onClick={onCancel}>Cancel</Button>
-                <Button variant="contained" color="warning" onClick={onConfirm} disabled={isRemoving} data-testid="confirmRemoveDeviceButton">
+                <Button variant="solid" tone="warning" onClick={onConfirm} disabled={isRemoving} data-testid="confirmRemoveDeviceButton">
                     {isRemoving ? 'Removing…' : 'Remove'}
                 </Button>
             </DialogActions>
-        </Dialog>
+        </AlertDialog>
     );
 }
 
@@ -339,13 +320,13 @@ function RenameDeviceDialog({ device, onCancel, onSubmit }: RenameDeviceDialogPr
     }
 
     return (
-        <Dialog open onClose={onCancel} data-testid="renameDeviceDialog">
+        <Dialog open onClose={onCancel} size="xs" fullWidth data-testid="renameDeviceDialog">
             <DialogTitle>Rename device</DialogTitle>
             <DialogContent>
                 <TextField
                     autoFocus
                     fullWidth
-                    size="small"
+                    size="sm"
                     label="Name"
                     value={name}
                     onChange={(e) => {
@@ -355,16 +336,15 @@ function RenameDeviceDialog({ device, onCancel, onSubmit }: RenameDeviceDialogPr
                         }
                     }}
                     error={nameError !== null}
-                    helperText={nameError ?? ''}
+                    helperText={nameError ?? undefined}
                     autoComplete="off"
-                    slotProps={{ htmlInput: { maxLength: 64 } }}
-                    sx={{ mt: 1 }}
+                    inputProps={{ maxLength: 64 }}
                     data-testid="deviceNameInput"
                 />
             </DialogContent>
             <DialogActions>
                 <Button onClick={onCancel}>Cancel</Button>
-                <Button variant="contained" onClick={handleSave} data-testid="confirmRenameDeviceButton">
+                <Button variant="solid" onClick={handleSave} data-testid="confirmRenameDeviceButton">
                     Save
                 </Button>
             </DialogActions>

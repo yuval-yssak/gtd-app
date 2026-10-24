@@ -25,7 +25,7 @@ test.describe('Personal API tokens (settings)', () => {
             await page.getByTestId('tokenLabelInput').locator('input').fill('Local MCP');
             // Tick items.write so the resulting row exposes three scope chips. (items.capture +
             // items.read are pre-checked from DEFAULT_NEW_TOKEN_SCOPES.)
-            await page.getByTestId('scopeCheckbox-items.write').locator('input').check();
+            await page.getByTestId('scopeCheckbox-items.write').getByRole('checkbox').check();
             await page.getByTestId('confirmCreateTokenButton').click();
 
             // Reveal dialog shows the plaintext exactly once. The plaintext starts with `gtd_` per
@@ -164,7 +164,7 @@ test.describe('Personal API tokens (settings)', () => {
             await page.getByTestId('tokenLabelInput').locator('input').fill('Recipient');
             // Tick the new reassign.accept scope so the resulting token authorises another
             // account's `reassign`-scoped token to push items into this account.
-            await page.getByTestId('scopeCheckbox-reassign.accept').locator('input').check();
+            await page.getByTestId('scopeCheckbox-reassign.accept').getByRole('checkbox').check();
             await page.getByTestId('confirmCreateTokenButton').click();
             await page.getByTestId('dismissRevealButton').click();
 

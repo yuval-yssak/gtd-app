@@ -1,0 +1,23 @@
+.heading {
+    margin-block-end: var(--space-1);
+}
+
+.intro {
+    margin-block-end: var(--space-4);
+}
+
+.deleteIntro {
+    margin-block-end: var(--space-3);
+}
+
+.error {
+    margin-block-start: var(--space-2);
+}
+
+.dialogParagraph {
+    margin-block-end: var(--space-4);
+}
+
+.dialogPrompt {
+    margin-block-end: var(--space-2);
+}

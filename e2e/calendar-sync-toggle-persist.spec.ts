@@ -53,7 +53,7 @@ test.describe('calendar sync toggle persistence', () => {
 
             await page.goto(SETTINGS_URL);
 
-            const secondaryToggle = page.getByRole('checkbox', { name: 'Sync Secondary' });
+            const secondaryToggle = page.getByRole('switch', { name: 'Sync Secondary' });
             // 10s: settings mount → fetch /calendar/integrations → render the row is two awaits.
             await expect(secondaryToggle).toBeChecked({ timeout: 10_000 });
 
@@ -72,9 +72,9 @@ test.describe('calendar sync toggle persistence', () => {
             await expect(page).toHaveURL(/\/settings$/);
 
             // The off state must persist — pre-fix this re-seeded from the stale cache as checked.
-            await expect(page.getByRole('checkbox', { name: 'Sync Secondary' })).not.toBeChecked({ timeout: 10_000 });
+            await expect(page.getByRole('switch', { name: 'Sync Secondary' })).not.toBeChecked({ timeout: 10_000 });
             // The default calendar is untouched.
-            await expect(page.getByRole('checkbox', { name: 'Sync Primary' })).toBeChecked();
+            await expect(page.getByRole('switch', { name: 'Sync Primary' })).toBeChecked();
         });
     });
 });

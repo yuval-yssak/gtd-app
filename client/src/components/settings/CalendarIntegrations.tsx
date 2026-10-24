@@ -1,30 +1,6 @@
-import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-import Chip from '@mui/material/Chip';
-import CircularProgress from '@mui/material/CircularProgress';
-import Dialog from '@mui/material/Dialog';
-import DialogActions from '@mui/material/DialogActions';
-import DialogContent from '@mui/material/DialogContent';
-import DialogContentText from '@mui/material/DialogContentText';
-import DialogTitle from '@mui/material/DialogTitle';
-import Divider from '@mui/material/Divider';
-import FormControl from '@mui/material/FormControl';
-import FormControlLabel from '@mui/material/FormControlLabel';
-import IconButton from '@mui/material/IconButton';
-import InputLabel from '@mui/material/InputLabel';
-import List from '@mui/material/List';
-import ListItem from '@mui/material/ListItem';
-import ListItemText from '@mui/material/ListItemText';
-import ListSubheader from '@mui/material/ListSubheader';
-import MenuItem from '@mui/material/MenuItem';
-import Radio from '@mui/material/Radio';
-import RadioGroup from '@mui/material/RadioGroup';
-import Select from '@mui/material/Select';
-import Switch from '@mui/material/Switch';
-import Tooltip from '@mui/material/Tooltip';
-import Typography from '@mui/material/Typography';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import dayjs from 'dayjs';
+import { X } from 'lucide-react';
 import { startTransition, use, useCallback, useEffect, useRef, useState, useTransition } from 'react';
 import {
     type CalendarIntegration,
@@ -43,8 +19,29 @@ import {
 } from '../../api/calendarApi';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { getCalendarIntegrationsResource, type IntegrationWithDetails, invalidateCalendarIntegrationsResource } from '../../data/calendarIntegrationsResource';
+import {
+    Button,
+    Callout,
+    Chip,
+    Dialog,
+    DialogActions,
+    DialogContent,
+    DialogDescription,
+    DialogTitle,
+    IconButton,
+    RadioGroup,
+    type RadioOption,
+    Select,
+    type SelectOption,
+    Separator,
+    Spinner,
+    Switch,
+    Text,
+    Tooltip,
+} from '../../designSystem';
 import { hasAtLeastOne, type NonEmptyArray } from '../../lib/typeUtils';
 import type { StoredAccount } from '../../types/MyDB';
+import styles from './CalendarIntegrations.module.css';
 import { buildCalendarPickerRows, defaultCalendarId } from './calendarPickerOrder';
 
 /**
@@ -188,21 +185,14 @@ export function CalendarIntegrations() {
     }
 
     return (
-        <Box>
+        <div>
             <ActiveAccountScopeNotice account={account} hasMultipleAccounts={loggedInAccounts.length > 1} />
             {calendarConnectError === 'mismatch' && <ConnectMismatchError onDismiss={dismissConnectError} />}
             {calendarConnectError === 'scope_missing' && <ScopeMissingError onDismiss={dismissConnectError} />}
             {details.length === 0 && (
-                <Typography
-                    variant="body2"
-                    sx={{
-                        color: 'text.secondary',
-                        fontStyle: 'italic',
-                        mb: 2,
-                    }}
-                >
+                <Text variant="bodySm" tone="secondary" className={styles.emptyNote}>
                     No calendars connected.
-                </Typography>
+                </Text>
             )}
             {details.map((detail) => (
                 <IntegrationRow
@@ -213,7 +203,7 @@ export function CalendarIntegrations() {
                     withActiveAccountSession={withActiveAccountSession}
                 />
             ))}
-            <Button variant="outlined" size="small" onClick={onConnectActiveAccount} disabled={!account}>
+            <Button variant="outline" size="sm" onClick={onConnectActiveAccount} disabled={!account}>
                 {account ? `Connect Google Calendar for ${account.email}` : 'Connect Google Calendar'}
             </Button>
             {chooseCalendarFor && (
@@ -234,7 +224,7 @@ export function CalendarIntegrations() {
                     withActiveAccountSession={withActiveAccountSession}
                 />
             )}
-        </Box>
+        </div>
     );
 }
 
@@ -249,21 +239,14 @@ function ActiveAccountScopeNotice({ account, hasMultipleAccounts }: { account: S
         return null;
     }
     return (
-        <Box
-            sx={{
-                mb: 2,
-                p: 1.25,
-                borderRadius: 1,
-                backgroundColor: 'action.hover',
-            }}
-        >
-            <Typography variant="body2" sx={{ fontWeight: 500 }}>
+        <div className={styles.scopeNotice}>
+            <Text variant="bodySm" weight="medium">
                 Managing calendars for <strong>{account.email}</strong>
-            </Typography>
-            <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block' }}>
+            </Text>
+            <Text as="p" variant="caption" tone="secondary">
                 To connect or disconnect a different account's calendar, switch to that account first.
-            </Typography>
-        </Box>
+            </Text>
+        </div>
     );
 }
 
@@ -274,47 +257,39 @@ function ActiveAccountScopeNotice({ account, hasMultipleAccounts }: { account: S
  */
 export function ScopeMissingError({ onDismiss }: { onDismiss: () => void }) {
     return (
-        <Box sx={{ mb: 2, p: 1.5, border: 1, borderColor: 'error.main', borderRadius: 1 }} data-testid="calendarScopeMissingError">
-            <Typography variant="body2" sx={{ color: 'error.main', fontWeight: 500, mb: 0.5 }}>
-                Google Calendar wasn't connected — some permissions were unticked
-            </Typography>
-            <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block' }}>
-                Calendar sync needs all three calendar permissions on Google's consent screen. Nothing was saved — try connecting again and leave every checkbox
-                ticked.
-            </Typography>
-            <Button size="small" sx={{ mt: 1 }} onClick={onDismiss}>
-                Dismiss
-            </Button>
-        </Box>
+        <Callout
+            tone="error"
+            variant="outline"
+            title="Google Calendar wasn't connected — some permissions were unticked"
+            action={<DismissButton onDismiss={onDismiss} />}
+            className={styles.connectError}
+            data-testid="calendarScopeMissingError"
+        >
+            Calendar sync needs all three calendar permissions on Google's consent screen. Nothing was saved — try connecting again and leave every checkbox
+            ticked.
+        </Callout>
     );
 }
 
 export function ConnectMismatchError({ onDismiss }: { onDismiss: () => void }) {
     return (
-        <Box sx={{ mb: 2, p: 1.5, border: 1, borderColor: 'error.main', borderRadius: 1 }}>
-            <Typography
-                variant="body2"
-                sx={{
-                    color: 'error.main',
-                    fontWeight: 500,
-                    mb: 0.5,
-                }}
-            >
-                Couldn't connect that Google Calendar account
-            </Typography>
-            <Typography
-                variant="caption"
-                sx={{
-                    color: 'text.secondary',
-                    display: 'block',
-                }}
-            >
-                The Google account you authorized didn't match the one you selected. Tokens were revoked and no calendar was added.
-            </Typography>
-            <Button size="small" sx={{ mt: 1 }} onClick={onDismiss}>
-                Dismiss
-            </Button>
-        </Box>
+        <Callout
+            tone="error"
+            variant="outline"
+            title="Couldn't connect that Google Calendar account"
+            action={<DismissButton onDismiss={onDismiss} />}
+            className={styles.connectError}
+        >
+            The Google account you authorized didn't match the one you selected. Tokens were revoked and no calendar was added.
+        </Callout>
+    );
+}
+
+function DismissButton({ onDismiss }: { onDismiss: () => void }) {
+    return (
+        <Button tone="neutral" size="sm" onClick={onDismiss}>
+            Dismiss
+        </Button>
     );
 }
 
@@ -585,41 +560,18 @@ function IntegrationRow({ detail, onIntegrationsChanged, onChooseCalendar, withA
     const hasNoCalendarChosen = configs.length === 0;
 
     return (
-        <Box
-            sx={{
-                mb: 2,
-            }}
-        >
-            <Divider sx={{ mb: 1.5 }} />
-            <Typography
-                variant="body2"
-                sx={{
-                    fontWeight: 600,
-                    mb: 0.5,
-                }}
-            >
+        <div className={styles.integration}>
+            <Separator className={styles.integrationSeparator} />
+            <Text variant="bodySm" weight="semibold" className={styles.integrationTitle}>
                 Google Calendar
-            </Typography>
-            <Typography
-                variant="caption"
-                sx={{
-                    color: 'text.secondary',
-                    display: 'block',
-                }}
-            >
+            </Text>
+            <Text as="p" variant="caption" tone="secondary">
                 Connected {connectedSince}
-            </Typography>
+            </Text>
             {errorMessage && (
-                <Typography
-                    variant="caption"
-                    color="error"
-                    sx={{
-                        display: 'block',
-                        mt: 1,
-                    }}
-                >
+                <Text as="p" variant="caption" tone="error" className={styles.integrationError}>
                     {errorMessage}
-                </Typography>
+                </Text>
             )}
             {hasNoCalendarChosen ? (
                 <NoCalendarChosenRow onChooseCalendar={onChooseCalendar} />
@@ -633,9 +585,9 @@ function IntegrationRow({ detail, onIntegrationsChanged, onChooseCalendar, withA
                 actions={{ onSyncNow, onRepair, onAddCalendar: () => setIsAddCalendarOpen(true), onDisconnect: () => setIsDisconnectOpen(true) }}
             />
             {repairSummary && (
-                <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mt: 1 }} data-testid="repairSyncSummary">
+                <Text as="p" variant="caption" tone="secondary" className={styles.repairSummary} data-testid="repairSyncSummary">
                     {repairSummary}
-                </Typography>
+                </Text>
             )}
             <DisconnectDialog
                 open={isDisconnectOpen}
@@ -660,26 +612,20 @@ function IntegrationRow({ detail, onIntegrationsChanged, onChooseCalendar, withA
                     }}
                 />
             )}
-        </Box>
+        </div>
     );
 }
 
 function NoCalendarChosenRow({ onChooseCalendar }: { onChooseCalendar: () => void }) {
     return (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
-            <Typography
-                variant="body2"
-                sx={{
-                    color: 'text.secondary',
-                    fontStyle: 'italic',
-                }}
-            >
+        <div className={styles.noCalendarRow}>
+            <Text variant="bodySm" tone="secondary" className={styles.italic}>
                 No calendar selected — choose one
-            </Typography>
-            <Button size="small" onClick={onChooseCalendar}>
+            </Text>
+            <Button size="sm" onClick={onChooseCalendar}>
                 Choose calendar
             </Button>
-        </Box>
+        </div>
     );
 }
 
@@ -699,57 +645,59 @@ interface IntegrationActionsProps {
 
 function IntegrationActions({ isSyncing, isRepairing, hasAvailableCalendars, actions }: IntegrationActionsProps) {
     return (
-        <Box sx={{ display: 'flex', gap: 1, mt: 1.5, flexWrap: 'wrap' }}>
+        <div className={styles.actions}>
             {hasAvailableCalendars && (
-                <Button variant="outlined" size="small" onClick={actions.onAddCalendar}>
+                <Button variant="outline" size="sm" onClick={actions.onAddCalendar}>
                     Add calendar
                 </Button>
             )}
-            {/* Tooltip children are wrapped in <span> so the tooltip keeps working while the button is disabled. */}
+            {/* Tooltip children are wrapped in <span> so the tooltip keeps working while the button is disabled.
+                `loading` swaps the start icon for a spinner and disables the button. */}
             <Tooltip title="Fetch the latest changes from Google Calendar right now, without waiting for automatic sync. Also pushes app-created items that haven't reached Google yet.">
                 <span>
-                    <Button variant="outlined" size="small" onClick={actions.onSyncNow} disabled={isSyncing}>
-                        {isSyncing ? <CircularProgress size={14} sx={{ mr: 0.5 }} /> : null}
+                    <Button variant="outline" size="sm" onClick={actions.onSyncNow} loading={isSyncing}>
                         {isSyncing ? 'Syncing…' : 'Sync now'}
                     </Button>
                 </span>
             </Tooltip>
             <Tooltip title="Reconnect items and routines that lost their link to Google Calendar — for example after disconnecting and reconnecting an account. Runs for every signed-in account; safe to use any time.">
                 <span>
-                    <Button variant="outlined" size="small" onClick={actions.onRepair} disabled={isRepairing} data-testid="repairSyncButton">
-                        {isRepairing ? <CircularProgress size={14} sx={{ mr: 0.5 }} /> : null}
+                    <Button variant="outline" size="sm" onClick={actions.onRepair} loading={isRepairing} data-testid="repairSyncButton">
                         {isRepairing ? 'Repairing…' : 'Repair sync'}
                     </Button>
                 </span>
             </Tooltip>
-            <Button variant="outlined" size="small" color="error" onClick={actions.onDisconnect}>
+            <Button variant="outline" size="sm" tone="danger" onClick={actions.onDisconnect}>
                 Disconnect
             </Button>
-        </Box>
+        </div>
     );
 }
 
 /**
- * Builds the option rows for a calendar-picker `<Select>`: grouped (primary → owned → shared) with a
- * non-selectable `<ListSubheader>` before the "Your calendars" / "Shared with you" sections. MUI's
- * Select skips `<ListSubheader>` for value resolution and keyboard nav, so headers don't become options.
- *
- * Returns a flat element ARRAY (not a fragment): MUI Select resolves options via
- * `React.Children.toArray(children)` over its *direct* children and does not recurse into a wrapper
- * component or fragment — so the rows must be spread directly as Select children. A fragment child
- * makes Select see one invalid option and breaks selection/value display entirely.
+ * The calendar picker's Select options, in picker order (primary → owned → shared). Each header row
+ * becomes the `group` of the calendars after it, so the DS Select lists "Your calendars" / "Shared
+ * with you" as group labels — never as choosable options.
  */
-export function calendarSelectRows(calendars: GoogleCalendar[]) {
-    return buildCalendarPickerRows(calendars).map((row) =>
-        row.kind === 'header' ? (
-            <ListSubheader key={`header-${row.key}`}>{row.label}</ListSubheader>
-        ) : (
-            <MenuItem key={row.calendar.id} value={row.calendar.id}>
-                {row.calendar.name}
-                {row.calendar.primary ? ' (primary)' : ''}
-            </MenuItem>
-        ),
-    );
+export function googleCalendarSelectOptions(calendars: GoogleCalendar[]): SelectOption<string>[] {
+    const rows = buildCalendarPickerRows(calendars);
+    return rows.flatMap((row, index) => {
+        if (row.kind === 'header') {
+            return [];
+        }
+        const group = headerAbove(rows, index);
+        const label = row.calendar.primary ? `${row.calendar.name} (primary)` : row.calendar.name;
+        return [{ value: row.calendar.id, label, ...(group !== undefined ? { group } : {}) }];
+    });
+}
+
+/** The label of the nearest group header before `index` — the section that row belongs to. */
+function headerAbove(rows: ReturnType<typeof buildCalendarPickerRows>, index: number): string | undefined {
+    const header = rows
+        .slice(0, index)
+        .reverse()
+        .find((row) => row.kind === 'header');
+    return header?.kind === 'header' ? header.label : undefined;
 }
 
 interface ConfigActions {
@@ -767,62 +715,41 @@ interface SyncConfigListProps {
 function SyncConfigList({ configs, resolveCalendarName, actions }: SyncConfigListProps) {
     if (configs.length === 0) {
         return (
-            <Typography
-                variant="body2"
-                sx={{
-                    color: 'text.secondary',
-                    fontStyle: 'italic',
-                    mt: 1,
-                }}
-            >
+            <Text variant="bodySm" tone="secondary" className={styles.syncedEmpty}>
                 No calendars synced yet.
-            </Typography>
+            </Text>
         );
     }
 
     return (
-        <List dense disablePadding sx={{ mt: 0.5 }}>
+        <ul className={styles.configList}>
             {configs.map((config) => {
-                // Same expression as the visible ListItemText below, so the switch's accessible name
-                // matches the calendar name the user sees (not the raw calendarId when displayName is null).
+                // Same expression as the visible name below, so the switch's accessible name matches the
+                // calendar name the user sees (not the raw calendarId when displayName is null).
                 const calendarName = config.displayName ?? resolveCalendarName(config.calendarId);
                 return (
-                    <ListItem
-                        key={config._id}
-                        disableGutters
-                        secondaryAction={
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                {config.isDefault && <Chip label="default" size="small" color="primary" variant="outlined" />}
-                                {!config.isDefault && config.enabled && (
-                                    <Button size="small" onClick={() => actions.onSetDefault(config)}>
-                                        Set default
-                                    </Button>
-                                )}
-                                {/* aria-label on the input slot doubles as the e2e selector (getByRole checkbox,
-                                    name: "Sync <calendar>" — MUI's Switch input is type=checkbox) and as
-                                    accessible labelling for the otherwise-unlabeled toggle. */}
-                                <Switch
-                                    size="small"
-                                    checked={config.enabled}
-                                    onChange={() => actions.onToggleEnabled(config)}
-                                    slotProps={{ input: { 'aria-label': `Sync ${calendarName}` } }}
-                                />
-                                <IconButton size="small" onClick={() => actions.onRemove(config)} title="Stop syncing this calendar">
-                                    <Typography variant="body2">✕</Typography>
-                                </IconButton>
-                            </Box>
-                        }
-                    >
-                        <ListItemText
-                            primary={calendarName}
-                            slotProps={{
-                                primary: { variant: 'body2', color: config.enabled ? 'text.primary' : 'text.disabled' },
-                            }}
-                        />
-                    </ListItem>
+                    <li key={config._id} className={styles.configRow}>
+                        <Text as="span" variant="bodySm" tone={config.enabled ? 'primary' : 'disabled'} className={styles.configName}>
+                            {calendarName}
+                        </Text>
+                        <span className={styles.configActions}>
+                            {config.isDefault && <Chip label="default" tone="accent" variant="outline" />}
+                            {!config.isDefault && config.enabled && (
+                                <Button size="sm" onClick={() => actions.onSetDefault(config)}>
+                                    Set default
+                                </Button>
+                            )}
+                            {/* The aria-label names the otherwise-unlabelled toggle ("Sync <calendar>") and
+                                is what the e2e specs select it by. */}
+                            <Switch checked={config.enabled} onCheckedChange={() => actions.onToggleEnabled(config)} aria-label={`Sync ${calendarName}`} />
+                            <IconButton size="sm" onClick={() => actions.onRemove(config)} aria-label={`Stop syncing ${calendarName}`}>
+                                <X />
+                            </IconButton>
+                        </span>
+                    </li>
                 );
             })}
-        </List>
+        </ul>
     );
 }
 
@@ -861,26 +788,28 @@ function AddCalendarDialog({ integrationId, availableCalendars, isFirstCalendar,
     }
 
     return (
-        <Dialog open onClose={onClose} maxWidth="sm" fullWidth>
+        <Dialog open onClose={onClose} size="sm" fullWidth>
             <DialogTitle>Add a calendar to sync</DialogTitle>
             <DialogContent>
-                <FormControl size="small" fullWidth sx={{ mt: 1 }}>
-                    <InputLabel>Calendar</InputLabel>
-                    <Select label="Calendar" value={selectedId} onChange={(e) => setSelectedId(e.target.value)}>
-                        {calendarSelectRows(availableCalendars)}
-                    </Select>
-                </FormControl>
+                <Select
+                    label="Calendar"
+                    size="sm"
+                    fullWidth
+                    value={selectedId}
+                    onValueChange={setSelectedId}
+                    options={googleCalendarSelectOptions(availableCalendars)}
+                />
+                {saveError && (
+                    <Text variant="bodySm" tone="error" className={styles.dialogError}>
+                        {saveError}
+                    </Text>
+                )}
             </DialogContent>
-            {saveError && (
-                <Typography variant="body2" color="error" sx={{ px: 3, pb: 1 }}>
-                    {saveError}
-                </Typography>
-            )}
             <DialogActions>
                 <Button onClick={onClose} disabled={isSaving}>
                     Cancel
                 </Button>
-                <Button onClick={onConfirm} variant="contained" disabled={isSaving || !selectedId}>
+                <Button onClick={onConfirm} variant="solid" disabled={isSaving || !selectedId}>
                     {isSaving ? 'Adding…' : 'Add'}
                 </Button>
             </DialogActions>
@@ -948,47 +877,56 @@ function ChooseCalendarDialog({ integration, onClose, onSaved, onStaleIntegratio
     }
 
     return (
-        <Dialog open onClose={onClose} maxWidth="sm" fullWidth>
+        <Dialog open onClose={onClose} size="sm" fullWidth>
             <DialogTitle>Choose a calendar to sync</DialogTitle>
             <DialogContent>
-                <DialogContentText
-                    sx={{
-                        mb: 2,
-                    }}
-                >
-                    Select which Google Calendar events should appear in this app.
-                </DialogContentText>
+                <DialogDescription className={styles.dialogIntro}>Select which Google Calendar events should appear in this app.</DialogDescription>
                 {isLoading ? (
-                    <CircularProgress size={20} />
+                    <Spinner size={20} label="Loading calendars" />
                 ) : calendarFetchError ? (
-                    <Typography variant="body2" color="error">
+                    <Text variant="bodySm" tone="error">
                         {calendarFetchError}
-                    </Typography>
+                    </Text>
                 ) : (
-                    <FormControl size="small" fullWidth>
-                        <InputLabel>Calendar</InputLabel>
-                        <Select label="Calendar" value={selectedId} onChange={(e) => setSelectedId(e.target.value)}>
-                            {calendarSelectRows(calendars)}
-                        </Select>
-                    </FormControl>
+                    <Select
+                        label="Calendar"
+                        size="sm"
+                        fullWidth
+                        value={selectedId}
+                        onValueChange={setSelectedId}
+                        options={googleCalendarSelectOptions(calendars)}
+                    />
+                )}
+                {saveError && (
+                    <Text variant="bodySm" tone="error" className={styles.dialogError}>
+                        {saveError}
+                    </Text>
                 )}
             </DialogContent>
-            {saveError && (
-                <Typography variant="body2" color="error" sx={{ px: 3, pb: 1 }}>
-                    {saveError}
-                </Typography>
-            )}
             <DialogActions>
                 {/* No "Skip" button: Step 2 makes calendar choice mandatory. The integration row
                     surfaces a "No calendar selected — choose one" CTA if the user dismisses the
                     dialog by clicking outside. */}
-                <Button onClick={onConfirm} variant="contained" disabled={isSaving || isLoading || !selectedId}>
+                <Button onClick={onConfirm} variant="solid" disabled={isSaving || isLoading || !selectedId}>
                     {isSaving ? 'Saving…' : 'Save & sync'}
                 </Button>
             </DialogActions>
         </Dialog>
     );
 }
+
+const UNLINK_OPTIONS: RadioOption<UnlinkAction>[] = [
+    { value: 'keepLinkedEntities', label: 'Keep calendar items and calendar routines in the app. Google Calendar events will not be touched.' },
+    {
+        value: 'removeLinkedEntities',
+        // The destructive choice reads in the error colour, as it did before.
+        label: (
+            <span className={styles.destructiveChoice}>
+                Remove calendar items and calendar routines from the app. Google Calendar events will not be touched.
+            </span>
+        ),
+    },
+];
 
 interface DisconnectDialogProps {
     open: boolean;
@@ -1038,57 +976,25 @@ function DisconnectDialog({ open, integrationId, onClose, onDisconnected, withAc
     }
 
     return (
-        <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
+        <Dialog open={open} onClose={onClose} size="sm" fullWidth>
             <DialogTitle>Disconnect Google Calendar</DialogTitle>
             <DialogContent>
-                <DialogContentText
-                    sx={{
-                        mb: 2,
-                    }}
-                >
+                <DialogDescription className={styles.dialogIntro}>
                     What would you like to do with calendar items and calendar routines linked to this integration? Disconnecting never modifies your Google
                     Calendar.
-                </DialogContentText>
-                <RadioGroup value={action} onChange={(e) => setAction(e.target.value as UnlinkAction)}>
-                    <FormControlLabel
-                        value="keepLinkedEntities"
-                        control={<Radio size="small" />}
-                        label={
-                            <Box>
-                                <Typography variant="body2">
-                                    Keep calendar items and calendar routines in the app. Google Calendar events will not be touched.
-                                </Typography>
-                            </Box>
-                        }
-                    />
-                    <FormControlLabel
-                        value="removeLinkedEntities"
-                        control={<Radio size="small" />}
-                        label={
-                            <Box>
-                                <Typography
-                                    variant="body2"
-                                    sx={{
-                                        color: 'error.main',
-                                    }}
-                                >
-                                    Remove calendar items and calendar routines from the app. Google Calendar events will not be touched.
-                                </Typography>
-                            </Box>
-                        }
-                    />
-                </RadioGroup>
+                </DialogDescription>
+                <RadioGroup aria-label="Linked calendar items" value={action} onValueChange={setAction} options={UNLINK_OPTIONS} />
+                {deleteError && (
+                    <Text variant="bodySm" tone="error" className={styles.dialogError}>
+                        {deleteError}
+                    </Text>
+                )}
             </DialogContent>
-            {deleteError && (
-                <Typography variant="body2" color="error" sx={{ px: 3, pb: 1 }}>
-                    {deleteError}
-                </Typography>
-            )}
             <DialogActions>
                 <Button onClick={onClose} disabled={isDeleting}>
                     Cancel
                 </Button>
-                <Button onClick={onConfirm} color="error" disabled={isDeleting}>
+                <Button onClick={onConfirm} tone="danger" disabled={isDeleting}>
                     {isDeleting ? 'Disconnecting…' : 'Disconnect'}
                 </Button>
             </DialogActions>

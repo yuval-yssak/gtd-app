@@ -1,17 +1,18 @@
 .warning {
-    font-weight: 600;
+    font-weight: var(--weight-semibold);
+    margin-block-end: var(--space-3);
 }
 
 .plaintextBox {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    padding: 0.625rem;
-    border: 1px solid var(--mui-palette-divider);
-    border-radius: 0.25rem;
-    background-color: var(--mui-palette-background-default);
-    font-family: var(--mui-typography-fontFamilyMonospace, monospace);
-    font-size: 0.875rem;
+    gap: var(--space-2);
+    padding: calc(var(--space-2) + var(--space-0-5));
+    border: 1px solid var(--color-divider);
+    border-radius: var(--radius-sm);
+    background-color: var(--color-bg-sunken);
+    font-family: var(--font-mono);
+    font-size: var(--type-sm-size);
     word-break: break-all;
 }
 
@@ -21,52 +22,76 @@
 
 .labelCaption {
     display: block;
-    margin-top: 0.5rem;
-    color: var(--mui-palette-text-secondary);
+    margin-block-start: var(--space-2);
 }
 
 .copyError {
-    margin-top: 0.5rem;
-    color: var(--mui-palette-error-main);
+    margin-block-start: var(--space-2);
 }
 
 .loadingState {
-    color: var(--mui-palette-text-secondary);
     font-style: italic;
 }
 
-.loadError,
 .actionError {
-    color: var(--mui-palette-error-main);
+    margin-block-start: var(--space-2);
 }
 
-.revokedRow {
-    opacity: 0.6;
+.emptyState {
+    margin-block-end: var(--space-3);
+}
+
+.createButton {
+    margin-block-start: var(--space-2);
+}
+
+.list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+/* Label, scope chips and dates on the start side, Revoke on the end — wraps at phone width. */
+.row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    padding-block: var(--space-1-5);
+
+    &[data-revoked] {
+        opacity: 0.6;
+    }
+}
+
+.rowText {
+    display: flex;
+    flex: 1 1 14rem;
+    flex-direction: column;
+    min-inline-size: 0;
 }
 
 .primaryLine {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
-    gap: 0.5rem;
+    gap: var(--space-2);
+}
+
+.formIntro {
+    margin-block-end: var(--space-4);
 }
 
 .scopesGroup {
     display: flex;
     flex-direction: column;
-    margin-top: 1rem;
+    margin-block-start: var(--space-4);
 }
 
 .scopesLabel {
-    font-weight: 500;
-    margin-bottom: 0.25rem;
-}
-
-.scopesHelp {
-    color: var(--mui-palette-text-secondary);
+    margin-block-end: var(--space-1);
 }
 
 .scopesError {
-    color: var(--mui-palette-error-main);
-    margin-top: 0.25rem;
+    margin-block-start: var(--space-1);
 }

@@ -75,7 +75,7 @@ async function disconnectKeepInSettings(page: Page): Promise<void> {
     const dialog = page.getByRole('dialog', { name: 'Disconnect Google Calendar' });
     await expect(dialog).toBeVisible();
     await dialog.getByRole('button', { name: 'Disconnect' }).click();
-    await expect(page.getByRole('button', { name: 'Disconnect' })).toBeHidden({ timeout: 10_000 });
+    await expect(page.getByRole('button', { name: 'Disconnect' })).toHaveCount(0, { timeout: 10_000 });
 }
 
 /** Seeds a linked calendar item via an inbound webhook event and waits for the client to see it. */

@@ -1,32 +1,49 @@
 .loadingState {
-    color: var(--mui-palette-text-secondary);
     font-style: italic;
 }
 
-.loadError,
-.actionError {
-    color: var(--mui-palette-error-main);
+.list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+/* Device name + activity on the start side, Rename/Remove on the end — wraps at phone width. */
+.row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    padding-block: var(--space-1-5);
+}
+
+.rowText {
+    display: flex;
+    flex: 1 1 14rem;
+    flex-direction: column;
+    min-inline-size: 0;
 }
 
 .primaryLine {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
-    gap: 0.5rem;
+    gap: var(--space-2);
 }
 
 .rowActions {
     display: flex;
-    gap: 0.25rem;
+    gap: var(--space-1);
 }
 
 .freedSummary {
-    color: var(--mui-palette-success-main);
-    margin-top: 0.5rem;
+    margin-block-start: var(--space-2);
 }
 
 .opsSummary {
-    display: block;
-    margin-top: 0.75rem;
-    color: var(--mui-palette-text-secondary);
+    margin-block-start: var(--space-3);
+}
+
+.followingParagraph {
+    margin-block-start: var(--space-3);
 }

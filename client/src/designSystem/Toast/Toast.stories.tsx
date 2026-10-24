@@ -27,6 +27,8 @@ export const WithTwoActions: Story = {
     },
 };
 export const ErrorTone: Story = { args: { tone: 'error', message: 'Could not switch accounts', dismissible: true } };
+/** Mid-viewport on wide screens too — for a notice about the sidebar's own controls. */
+export const Centered: Story = { args: { placement: 'center', message: 'Item captured, but its account is hidden' } };
 export const SuccessTone: Story = { args: { tone: 'success', message: 'Copied' } };
 export const LongMessage: Story = {
     args: { message: 'Captured to an account you have hidden — show it from the account switcher to see the item in your lists.', dismissible: true },

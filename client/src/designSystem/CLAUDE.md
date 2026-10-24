@@ -68,8 +68,10 @@ Import from the barrel: `import { Button, Dialog, Text } from '../designSystem'`
   `nativeButton={false}` would stamp `role="button"` on the anchor.
 - **Toast is not Base UI's.** Base UI's toast viewport binds F6 globally while a toast is visible,
   which would steal the app's F6 region cycling. `Toast` is a small declarative component that
-  renders into one persistent `role="status"` region (created after mount, so a toast arrives in an
-  existing live region and is announced); errors add `role="alert"`. The body mounts only while
+  renders into one persistent `role="status"` region per `placement` — `start` (default; bottom-start
+  on wide screens) and `center` (for a notice about the sidebar's own controls, which a start toast
+  would cover). `main.tsx` creates both before any toast, so a toast arrives in an existing live
+  region and is announced; errors add `role="alert"`. The body mounts only while
   open, so its pause-on-hover/focus latch can never outlive a showing. Unlike MUI's Snackbar,
   Escape does not dismiss a toast (Escape belongs to whatever popup or region has focus). The
   region sits outside every DS Dialog, so pressing a toast's action while a Dialog is open counts

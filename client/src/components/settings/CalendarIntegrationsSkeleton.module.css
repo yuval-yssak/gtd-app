@@ -1,0 +1,49 @@
+/* Sizes mirror the live CalendarIntegrations layout (see the component's comment). */
+.separator {
+    margin-block-end: var(--space-3);
+}
+
+.heading {
+    inline-size: 8.75rem;
+    block-size: 1.25rem;
+}
+
+.caption {
+    inline-size: 11.25rem;
+    block-size: 1rem;
+}
+
+.calendarRow {
+    block-size: 2rem;
+    margin-block-start: var(--space-2);
+}
+
+.actions {
+    display: flex;
+    gap: var(--space-2);
+    margin-block-start: var(--space-3);
+}
+
+.addButton,
+.syncButton,
+.disconnectButton,
+.connectButton {
+    block-size: var(--control-height-sm);
+}
+
+.addButton {
+    inline-size: 6.875rem;
+}
+
+.syncButton {
+    inline-size: 5.5rem;
+}
+
+.disconnectButton {
+    inline-size: 6rem;
+}
+
+.connectButton {
+    inline-size: 16.25rem;
+    margin-block-start: var(--space-4);
+}

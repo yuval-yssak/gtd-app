@@ -25,6 +25,6 @@ export { Switch } from './Switch/Switch';
 export { type TabOption, Tabs } from './Tabs/Tabs';
 export { Text, type TextElement, type TextTone, type TextVariant } from './Text/Text';
 export { TextField, type TextFieldControlProps, type TextFieldProps } from './TextField/TextField';
-export { ensureToastRegion, Toast, type ToastCloseReason } from './Toast/Toast';
+export { ensureToastRegion, Toast, type ToastCloseReason, type ToastPlacement } from './Toast/Toast';
 export { ToggleGroup, type ToggleOption } from './ToggleGroup/ToggleGroup';
 export { Tooltip } from './Tooltip/Tooltip';

@@ -1,6 +1,5 @@
-import Box from '@mui/material/Box';
-import Divider from '@mui/material/Divider';
-import Skeleton from '@mui/material/Skeleton';
+import { Separator, Skeleton } from '../../designSystem';
+import styles from './CalendarIntegrationsSkeleton.module.css';
 
 /**
  * Suspense fallback for the Calendar Sync section. It reserves the section's final footprint —
@@ -10,21 +9,21 @@ import Skeleton from '@mui/material/Skeleton';
  */
 export function CalendarIntegrationsSkeleton() {
     return (
-        <Box data-testid="calendarIntegrationsSkeleton">
-            <Divider sx={{ mb: 1.5 }} />
+        <div data-testid="calendarIntegrationsSkeleton">
+            <Separator className={styles.separator} />
             {/* "Google Calendar" heading + "Connected …" caption */}
-            <Skeleton variant="text" width={140} height={20} />
-            <Skeleton variant="text" width={180} height={16} />
+            <Skeleton className={styles.heading} />
+            <Skeleton className={styles.caption} />
             {/* One synced-calendar row */}
-            <Skeleton variant="rounded" height={32} sx={{ mt: 1 }} />
+            <Skeleton shape="rect" className={styles.calendarRow} />
             {/* Action buttons: Add calendar / Sync now / Disconnect */}
-            <Box sx={{ display: 'flex', gap: 1, mt: 1.5 }}>
-                <Skeleton variant="rounded" width={110} height={31} />
-                <Skeleton variant="rounded" width={88} height={31} />
-                <Skeleton variant="rounded" width={96} height={31} />
-            </Box>
+            <div className={styles.actions}>
+                <Skeleton shape="rect" className={styles.addButton} />
+                <Skeleton shape="rect" className={styles.syncButton} />
+                <Skeleton shape="rect" className={styles.disconnectButton} />
+            </div>
             {/* Connect-account button below the list */}
-            <Skeleton variant="rounded" width={260} height={31} sx={{ mt: 2 }} />
-        </Box>
+            <Skeleton shape="rect" className={styles.connectButton} />
+        </div>
     );
 }
