@@ -1,8 +1,9 @@
-import { expect, type Page, test } from '@playwright/test';
+import { expect, type Page, request, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { resetServerForEmails, withTwoAccountsOnOneDevice } from './helpers/context';
-import { API_URL } from './helpers/env';
+import { API_URL, CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Active-account switching is now local-first ONLY (IDB write + hard reload — no network), so it
 // must work fully offline: the target account's cached data renders from IDB, and the server-side
@@ -49,6 +50,86 @@ async function switchAccountViaMenu(page: Page, targetUserId: string): Promise<v
     const target = page.getByTestId(`accountSwitcherItem-${targetUserId}`);
     await target.waitFor({ state: 'visible' });
     await Promise.all([page.waitForLoadState('load'), target.click()]);
+}
+
+/**
+ * Revokes one of the device's Better Auth sessions out of band (an expiry or a remote sign-out).
+ * Sent through the context's request client: it shares the device's cookies but bypasses
+ * `page.route`, so it works while the API is blocked — and the page itself never sees the revoke.
+ */
+async function revokeSessionOutOfBand(page: Page, sessionToken: string): Promise<void> {
+    const res = await page.context().request.post(`${API_ORIGIN}/auth/multi-session/revoke`, {
+        // Better Auth's CSRF check wants a trusted Origin on cookie-authenticated POSTs.
+        headers: { Origin: CLIENT_URL },
+        data: { sessionToken },
+    });
+    if (!res.ok()) {
+        throw new Error(`revoke failed: ${res.status()}`);
+    }
+}
+
+/**
+ * Points the device's active-session cookie at `sessionToken`, as a sync pass's pivot does — out of
+ * band, like `revokeSessionOutOfBand`, so `delayCookiePivots` holds back only the app's own pivots.
+ */
+async function pivotCookieOutOfBand(page: Page, sessionToken: string): Promise<void> {
+    const res = await page.context().request.post(`${API_ORIGIN}/auth/multi-session/set-active`, {
+        headers: { Origin: CLIENT_URL },
+        data: { sessionToken },
+    });
+    if (!res.ok()) {
+        throw new Error(`set-active failed: ${res.status()}`);
+    }
+}
+
+const ACTIVE_SESSION_COOKIE = 'better-auth.session_token';
+
+/**
+ * Revokes `revokedToken` from a second client holding this device's cookies, but with
+ * `actingToken`'s session active. Better Auth moves a client's active cookie off a session that
+ * client itself revokes, so revoking from the device would heal the cookie at once. Revoked from
+ * elsewhere, the device's cookie stays on the dead session, which is the state a sync pass leaves
+ * when its pivot lands just before a revoke completes.
+ */
+async function revokeSessionElsewhere(page: Page, revokedToken: string, actingToken: string): Promise<void> {
+    const deviceCookies = await page.context().cookies(API_ORIGIN);
+    const actingCookie = deviceCookies.find((cookie) => cookie.name.endsWith(`_multi-${actingToken.toLowerCase()}`));
+    if (!actingCookie) {
+        throw new Error('expected a multi-session cookie for the acting account');
+    }
+    const cookies = deviceCookies.map((cookie) => (cookie.name === ACTIVE_SESSION_COOKIE ? { ...cookie, value: actingCookie.value } : cookie));
+    const elsewhere = await request.newContext({ storageState: { cookies, origins: [] } });
+    try {
+        const res = await elsewhere.post(`${API_ORIGIN}/auth/multi-session/revoke`, { headers: { Origin: CLIENT_URL }, data: { sessionToken: revokedToken } });
+        if (!res.ok()) {
+            throw new Error(`revoke failed: ${res.status()}`);
+        }
+    } finally {
+        await elsewhere.dispose();
+    }
+}
+
+/** Collects every navigation to /login from now on. */
+function recordLoginNavigations(page: Page): string[] {
+    const navigations: string[] = [];
+    page.on('request', (outgoing) => {
+        if (outgoing.isNavigationRequest() && new URL(outgoing.url()).pathname === '/login') {
+            navigations.push(outgoing.url());
+        }
+    });
+    return navigations;
+}
+
+/**
+ * Holds back the app's own cookie pivots after the next load, so the route guard's session check
+ * always runs against the dead cookie before the boot reconcile re-points it — the losing order
+ * of the race this pins, deterministically.
+ */
+async function delayCookiePivots(page: Page): Promise<void> {
+    await page.route(`${API_ORIGIN}/auth/multi-session/set-active`, async (route) => {
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
+        await route.continue();
+    });
 }
 
 /** Reads the server's view of the active Better Auth session via the page (cookies included). */
@@ -102,7 +183,7 @@ async function idbHasItem(page: Page, itemId: string): Promise<boolean> {
 
 test.describe('offline account switch', () => {
     test('switching while the API is unreachable renders the target account from IDB; the cookie realigns on reconnect', async ({ browser }) => {
-        const ts = dayjs().valueOf();
+        const ts = uniqueStamp();
         const emailA = `off-switch-a-${ts}@example.com`;
         const emailB = `off-switch-b-${ts}@example.com`;
         await resetServerForEmails([emailA, emailB]);
@@ -139,34 +220,51 @@ test.describe('offline account switch', () => {
         });
     });
 
+    // A sync pass can pivot the cookie onto a session revoked a moment earlier (its session list
+    // predates the revoke), and a dropped connection then keeps the restore pivot from undoing
+    // it. That leaves one account needing re-login, never "signed out": the app must stay up and
+    // raise the reauth dialog instead of bouncing to /login while another account is still live.
+    test('a cookie left on a revoked session, with another live account on the device, raises the reauth dialog — not the login page', async ({ browser }) => {
+        const stamp = uniqueStamp();
+        const emailA = `dead-cookie-a-${stamp}@example.com`;
+        const emailB = `dead-cookie-b-${stamp}@example.com`;
+        await resetServerForEmails([emailA, emailB]);
+        await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page, { active, secondary }) => {
+            await waitForBothCursors(page);
+            // Hold the app's own pivots first, so a pass still in flight cannot re-point the cookie.
+            await delayCookiePivots(page);
+            // A pass pivots the cookie onto B; B's session is then revoked from elsewhere.
+            await pivotCookieOutOfBand(page, secondary.rawToken);
+            await revokeSessionElsewhere(page, secondary.rawToken, active.rawToken);
+            // Precondition: the cookie now authenticates as nobody.
+            expect(await fetchActiveSessionUserId(page)).toBeNull();
+            const loginNavigations = recordLoginNavigations(page);
+
+            await page.reload();
+
+            // The dialog for B is raised by the sync pass, which starts only after the held-back reconcile
+            // pivot — so it shows after the guard's session check has already run.
+            await expect(page.getByTestId('accountReauthDialog')).toBeVisible({ timeout: 15_000 });
+            expect(loginNavigations).toEqual([]);
+        });
+    });
+
     test('offline switch to a revoked-session account: cached data offline, reauth dialog on reconnect, Re-login disabled while offline', async ({
         browser,
     }) => {
-        const ts = dayjs().valueOf();
+        const ts = uniqueStamp();
         const emailA = `off-revoked-a-${ts}@example.com`;
         const emailB = `off-revoked-b-${ts}@example.com`;
         await resetServerForEmails([emailA, emailB]);
         await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page, { secondary }) => {
             await waitForBothCursors(page);
 
-            // Revoke B's Better Auth session server-side while still online (mirrors an expiry /
-            // remote sign-out). The device's IDB still lists B, so the switcher still offers it.
-            await page.evaluate(
-                async ({ origin, token }) => {
-                    const res = await fetch(`${origin}/auth/multi-session/revoke`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        credentials: 'include',
-                        body: JSON.stringify({ sessionToken: token }),
-                    });
-                    if (!res.ok) {
-                        throw new Error(`revoke failed: ${res.status}`);
-                    }
-                },
-                { origin: API_ORIGIN, token: secondary.rawToken },
-            );
-
+            // Offline first, then revoke B's session out of band (an expiry / remote sign-out): the
+            // device cannot learn of it. Revoked while the page was online, a sync pass in flight
+            // could see B's 401 and raise the reauth dialog before the switch. The device's IDB
+            // still lists B, so the switcher still offers it.
             await blockApiOrigin(page);
+            await revokeSessionOutOfBand(page, secondary.rawToken);
             await switchAccountViaMenu(page, secondary.userId);
 
             // Offline: the switch still lands on B with cached data; the revocation is unknowable
@@ -180,6 +278,8 @@ test.describe('offline account switch', () => {
             const dialog = page.getByTestId('accountReauthDialog');
             await expect(dialog).toBeVisible({ timeout: 15_000 });
             await expect(dialog.getByText(emailB)).toBeVisible();
+            // The app stays on the account the user chose — it needs re-login, it is never swapped for A.
+            expect(await gtd.getActiveAccountId(page)).toBe(secondary.userId);
             await expect(dialog.getByTestId('accountReauthDialogRelogin')).toBeEnabled();
 
             // Going offline flips the dialog into its informative, non-actionable state: Re-login

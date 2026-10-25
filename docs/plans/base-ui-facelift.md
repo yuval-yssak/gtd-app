@@ -327,3 +327,31 @@ After batch 10: `grep -rE "@mui/|--mui-|classnames" client/src` must return noth
     - `:global(p)`-style descendant type selectors permitted;
     - CodeMirror's `cm-*` classes exempt from the camelCase class pattern.
   - E2E reads chip state from `aria-pressed` and `data-tone` instead of MUI classes. Status chips have `data-testid="itemEditorStatusChip"`.
+- **Batches 4–10** each landed as one local commit (see `git log`). Notable fixes found along the way:
+  - **Weekly Review:** decisions are recorded per entry (`completeEntry`), not on whatever card is current, which closes a fast-click race.
+  - **Toast:** the DS Toast takes a `placement`, with one live region per placement. The hidden-account capture notice is centred so it never covers the sidebar's account visibility toggles; MUI centred that one notice the same way.
+  - **Boot flicker on multi-account devices:** the multi-session seed adds an account just after boot. `AppResourceProvider` adopted the new snapshot urgently, which suspended to the boot boundary above the app shell. The whole shell flashed hidden and keyboard focus dropped to `<body>`, the cause of the flaky `keyboard-regions` avatar test. The provider now shows its snapshot through `useDeferredValue`. A Suspense boundary inside `<main>` was tried first and rejected: it made boot staged, and the inbox's autofocus then closed a just-opened account menu.
+- **Phase 2 (MUI removed):**
+  - Bundle, measured with `vite build` into a scratch directory:
+
+    | | Main chunk | Main chunk (gzip) | All JS | Precache |
+    |---|---|---|---|---|
+    | Before | 1,431.68 kB | 452.67 kB | 3,200 KB | 189 entries, 3,960 KiB |
+    | After | 1,347.20 kB | 423.83 kB | 3,116 KB | 189 entries, 3,878 KiB |
+
+    The drop is small because, by then, only `__root.tsx` still pulled MUI in.
+  - The Inter 400/500/600/700 woff2 files are in the service-worker precache manifest.
+  - The manifest's `background_color` is now the light `--color-bg-page`. `theme_color` already equalled `--color-accent`.
+  - **Import ban:** Biome `noRestrictedImports` bans `@mui/**`, `@emotion/**` and `classnames` under `client/`.
+  - **`lint:css`** covers all of `src/**/*.css`. For app modules:
+    - `composes` is allowed;
+    - type selectors are allowed as descendants and children of a class;
+    - CodeMirror's `cm-*` class names are exempt from the camelCase pattern.
+
+    Element selectors in rendered markdown and the legal page dropped the `:global()` they never needed: CSS Modules hash only class names.
+  - **Removed:**
+    - `useResolvedColorScheme`, whose only consumer was the MUI bridge;
+    - the MUI branch of `isModalOpen()` and its two tests;
+    - the Storybook MUI wrapper.
+
+    The `mui-mode` localStorage key is still read once, so existing users keep their colour scheme.

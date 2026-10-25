@@ -64,9 +64,8 @@ function subscribeSystemScheme(onChange: () => void) {
 }
 
 /**
- * Copies the MUI-era choice into our own key once. From then on MUI's key only mirrors the
- * resolved scheme (the bridge in __root writes "dark" for a system user on a dark OS), so it must
- * never be read as a preference again.
+ * Copies the MUI-era choice (MUI's useColorScheme persisted it under `mui-mode`) into our own key
+ * once. From then on our key always wins, and `mui-mode` is dead state that nothing updates.
  */
 function adoptLegacyPreference() {
     if (localStorage.getItem(STORAGE_KEY) !== null) return;
@@ -91,22 +90,4 @@ export function startColorSchemeSync() {
 /** The stored preference, re-rendering on changes from any tab — for the Settings toggle. */
 export function useColorSchemePreference() {
     return useSyncExternalStore(subscribeColorSchemePreference, getColorSchemePreference);
-}
-
-/** The scheme actually painted — for the few consumers that need it in JS rather than CSS. */
-export function useResolvedColorScheme() {
-    return useSyncExternalStore(subscribeResolved, getResolvedColorScheme);
-}
-
-function subscribeResolved(onChange: () => void) {
-    const stopSystem = subscribeSystemScheme(onChange);
-    const stopPreference = subscribeColorSchemePreference(onChange);
-    return () => {
-        stopSystem();
-        stopPreference();
-    };
-}
-
-function getResolvedColorScheme() {
-    return resolveColorScheme(getColorSchemePreference(), systemPrefersDark());
 }

@@ -48,8 +48,8 @@ export function focusLeftEditor(event: Pick<FocusEvent, 'relatedTarget'>, editor
 }
 
 /**
- * Editor colours reference MUI's CSS variables so light/dark/theme switches apply without any
- * JS re-theming; fallbacks mirror the convention in ItemEditorBody.module.css.
+ * Editor colours reference the design-system tokens, so a light/dark switch applies without any JS
+ * re-theming.
  */
 const notesHighlightStyle = HighlightStyle.define([
     { tag: tags.heading1, fontWeight: '700', fontSize: '1.35em' },

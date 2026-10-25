@@ -1,16 +1,16 @@
-/* Markdown content styling for rendered notes. Element selectors are :global because
- * react-markdown emits plain tags; scoping under .markdownBody keeps them contained. */
-.markdownBody :global(p) {
+/* Markdown content styling for rendered notes. react-markdown emits plain tags, styled by element
+ * under .markdownBody (CSS Modules hash only class names, so no :global is needed). */
+.markdownBody p {
     margin: 0 0 0.5em;
 }
 
-.markdownBody :global(ul),
-.markdownBody :global(ol) {
+.markdownBody ul,
+.markdownBody ol {
     padding-inline-start: 1.5em;
     margin: 0 0 0.5em;
 }
 
-.markdownBody :global(code) {
+.markdownBody code {
     background: var(--color-code-bg);
     border-radius: 0.1875rem;
     padding: 0.1em 0.3em;
@@ -19,7 +19,7 @@
     font-size: calc(1em * 0.9);
 }
 
-.markdownBody :global(pre) {
+.markdownBody pre {
     background: var(--color-code-bg);
     border-radius: 0.25rem;
     padding: 0.75em 1em;
@@ -27,12 +27,12 @@
     margin: 0 0 0.5em;
 }
 
-.markdownBody :global(pre code) {
+.markdownBody pre code {
     background: none;
     padding: 0;
 }
 
-.markdownBody :global(blockquote) {
+.markdownBody blockquote {
     margin: 0 0 0.5em;
     padding-block: 0.125em;
     padding-inline: 0.75em 0;
@@ -40,14 +40,14 @@
     color: var(--color-text-secondary);
 }
 
-.markdownBody :global(hr) {
+.markdownBody hr {
     border: 0;
     border-block-start: 1px solid var(--color-divider);
     margin: 0.75em 0;
 }
 
 /* GFM tables — react-markdown only emits <table> with remark-gfm enabled. */
-.markdownBody :global(table) {
+.markdownBody table {
     border-collapse: collapse;
     margin: 0 0 0.5em;
     display: block;
@@ -55,24 +55,24 @@
     overflow-x: auto;
 }
 
-.markdownBody :global(th),
-.markdownBody :global(td) {
+.markdownBody th,
+.markdownBody td {
     border: 1px solid var(--color-border-strong);
     padding: 0.25em 0.6em;
     text-align: start;
 }
 
-.markdownBody :global(th) {
+.markdownBody th {
     background: var(--color-code-bg);
 }
 
 /* GFM task lists — hide the list bullet next to the checkbox. */
-.markdownBody :global(li:has(> input[type="checkbox"])) {
+.markdownBody li:has(> input[type="checkbox"]) {
     list-style: none;
     margin-inline-start: -1.25em;
 }
 
-.markdownBody :global(input[type="checkbox"]) {
+.markdownBody input[type="checkbox"] {
     margin-inline-end: 0.4em;
     vertical-align: middle;
 }

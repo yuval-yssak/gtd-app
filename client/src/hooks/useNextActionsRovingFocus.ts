@@ -258,7 +258,7 @@ export function useNextActionsRovingFocus({
         [onContainerKey, runRowKey, isGhost],
     );
 
-    // MUI synthesises a click from Space on keyUP of a non-native button — Space is the grab/drop key here.
+    // ListRowButton activates on Space keyup (native-button parity) unless a keyup handler claims it — Space is the grab/drop key here.
     const onRowButtonKeyUp = useCallback((e: ReactKeyboardEvent<HTMLElement>) => {
         if (e.key === ' ') {
             e.preventDefault();

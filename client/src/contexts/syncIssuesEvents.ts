@@ -1,6 +1,6 @@
 /**
  * Window-level event name the SyncIssuesPanel listens for to refetch. Kept in its own module so
- * the dispatcher side (sync layer) can import it without pulling in the panel's MUI dependencies.
+ * the dispatcher side (sync layer) can import it without pulling in the panel's UI dependencies.
  */
 export const SYNC_ISSUES_REFRESH_EVENT = 'gtd:sync-issues-refresh';
 

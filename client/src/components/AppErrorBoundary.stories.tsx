@@ -1,6 +1,5 @@
-import Box from '@mui/material/Box';
-import Typography from '@mui/material/Typography';
 import type { Meta, StoryObj } from '@storybook/react';
+import { Text } from '../designSystem';
 import { AppErrorBoundary } from './AppErrorBoundary';
 
 function Thrower({ message }: { message: string }) {
@@ -14,11 +13,7 @@ function Thrower({ message }: { message: string }) {
 }
 
 function HappyChild() {
-    return (
-        <Box sx={{ p: 2 }}>
-            <Typography>Happy child — boundary stays invisible.</Typography>
-        </Box>
-    );
+    return <Text>Happy child — boundary stays invisible.</Text>;
 }
 
 const meta = {

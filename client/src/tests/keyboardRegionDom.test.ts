@@ -16,18 +16,6 @@ describe('isModalOpen', () => {
         expect(isModalOpen()).toBe(false);
     });
 
-    describe('MUI modals (until the last MUI dialog is gone)', () => {
-        it('is true while an MUI modal root is shown', () => {
-            mount('<div class="MuiModal-root"><div role="dialog"></div></div>');
-            expect(isModalOpen()).toBe(true);
-        });
-
-        it('ignores a keep-mounted MUI modal that is aria-hidden while closed', () => {
-            mount('<div class="MuiModal-root" aria-hidden="true"><nav></nav></div>');
-            expect(isModalOpen()).toBe(false);
-        });
-    });
-
     describe('design-system popups', () => {
         it('is true while a marked popup is open', () => {
             mount(`<div ${MODAL_POPUP_ATTR} data-open role="dialog"></div>`);

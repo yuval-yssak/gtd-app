@@ -3,7 +3,7 @@ import type { StoredAccount } from '../types/MyDB';
 /**
  * Fixed 8-hue palette for tagging entities by owning account in the unified view.
  * Each colour was chosen to be readable as a Chip background under both the light and
- * dark MUI themes (low saturation, mid lightness). Order is deliberate: the first
+ * dark themes (low saturation, mid lightness). Order is deliberate: the first
  * colour goes to the oldest-added account, so a user signing in with their primary
  * email first always gets the same colour. Beyond 8 accounts the palette wraps modulo;
  * we never expect that many accounts on one device but the wrap keeps the function total.

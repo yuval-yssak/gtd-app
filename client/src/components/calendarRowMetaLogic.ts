@@ -42,7 +42,7 @@ export function getAttendeeCount(item: StoredItem): number {
 }
 
 /**
- * Maps a GCal response status to the MUI palette color used for the RSVP dot. `needsAction`
+ * Maps a GCal response status to the status tone of the RSVP dot. `needsAction`
  * intentionally falls through to a neutral gray ("no answer" visual).
  */
 export function rsvpDotColorFor(status: GCalResponseStatus): 'success' | 'error' | 'warning' | 'default' {

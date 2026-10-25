@@ -516,6 +516,16 @@ export function withSessionGate<T>(task: () => Promise<T>): Promise<T> {
     return result;
 }
 
+/**
+ * The user-selected active account. Read inside the session gate: a sync pass pivots IDB's active
+ * pointer to each account it syncs and restores it before releasing the gate, so a bare read
+ * mid-pass returns whichever account is being synced. Known limit: a pass that outlives the gate's
+ * hard timeout releases it early, and a read queued behind it can still see the pivoted pointer.
+ */
+export function readSettledActiveAccount(db: IDBPDatabase<MyDB>) {
+    return withSessionGate(() => getActiveAccount(db));
+}
+
 const pullInFlight = new Map<string, Promise<void>>();
 
 /**

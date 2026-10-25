@@ -781,7 +781,7 @@ describe('shouldHandlePageEscape', () => {
         expect(shouldHandlePageEscape({ ...cleanEvent, isComposing: true }, false)).toBe(false);
     });
 
-    it('stands down while a MUI modal surface is open', () => {
+    it('stands down while a modal popup is open', () => {
         expect(shouldHandlePageEscape(cleanEvent, true)).toBe(false);
     });
 });

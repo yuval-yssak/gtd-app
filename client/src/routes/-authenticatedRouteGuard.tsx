@@ -2,6 +2,7 @@ import { redirect } from '@tanstack/router-core';
 import type { IDBPDatabase } from 'idb';
 import { getActiveAccount, hydrateAccountFromSession } from '../db/accountHelpers';
 import { authClient } from '../lib/authClient';
+import { hasAtLeastOne } from '../lib/typeUtils';
 import type { MyDB } from '../types/MyDB';
 
 export async function authenticatedRouteGuard({ context }: { context: { db: IDBPDatabase<MyDB> } }) {
@@ -39,18 +40,44 @@ export async function recoverAccountFromServerSession(db: IDBPDatabase<MyDB>) {
     return true;
 }
 
-// Fire-and-forget: if the server confirms the session is gone, force re-login.
+// Fire-and-forget: if the server confirms there is no session left on this device, force re-login.
 // Network errors are ignored — the user may be offline, which is a valid state.
 function verifySessionInBackground() {
-    fetchSessionSafely()
-        .then(({ session, networkError }) => {
-            if (!networkError && !session) {
-                // Session revoked server-side; redirect outside TanStack Router since
-                // we have no router reference here and a full reload is fine in this edge case.
+    confirmSignedOutEverywhere()
+        .then((isSignedOut) => {
+            if (isSignedOut) {
+                // Redirect outside TanStack Router: we have no router reference here, and a full
+                // reload is fine in this edge case.
                 window.location.href = '/login';
             }
         })
         .catch((err) => console.error('[auth] background session check failed:', err));
+}
+
+/**
+ * Whether the server confirms this device is signed out of every account. A dead cookie session
+ * alone is not that: a sync pass can leave the cookie on a just-revoked account while another
+ * account on the device is live — the boot cookie reconcile then re-aligns the cookie to IDB's
+ * active account and the sync pass flags the dead one for re-login. Anything short of a clean
+ * "no sessions" answer (offline, a 5xx, a rate limit) keeps the user in.
+ */
+export async function confirmSignedOutEverywhere() {
+    const { session, networkError } = await fetchSessionSafely();
+    if (session || networkError) {
+        return false;
+    }
+    return !(await hasLiveDeviceSession());
+}
+
+/** Fails open: an unanswered or failed list counts as "still signed in somewhere". */
+async function hasLiveDeviceSession() {
+    try {
+        // Better Auth resolves an HTTP error as `{ data: null, error }` rather than throwing.
+        const { data, error } = await authClient.multiSession.listDeviceSessions();
+        return Boolean(error) || !data || hasAtLeastOne(data);
+    } catch {
+        return true;
+    }
 }
 
 /** A stalled ("lie-fi") connection must not blank the public homepage or /login for minutes. */

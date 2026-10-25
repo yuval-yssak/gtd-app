@@ -50,7 +50,7 @@ These are patterns specific to this codebase not covered by `CLAUDE.md`:
 - **SSE lifecycle**: `EventSource` must be closed on component unmount. SSE messages must trigger `syncAndRefresh()`, not direct state mutations.
 - **Sync queue collapse rules**: `create → update` = merged create with final snapshot; `create → delete` = drop both (never reached server); `update → delete` = single delete. Verify any code touching `syncOperations` respects these rules.
 - **Dates**: `dayjs` only — flag any `new Date()`, `Date.now()`, or `toISOString()` used outside of `dayjs` wrappers.
-- **CSS Modules**: `classnames` package for conditional class composition — flag array `.join(' ')`. Dot notation only (`styles.foo`) — flag bracket notation (`styles['foo']`).
+- **CSS Modules**: `clsx` (`import { clsx } from 'clsx'`) for conditional class composition — flag array `.join(' ')`. Dot notation only (`styles.foo`) — flag bracket notation (`styles['foo']`).
 - **Type narrowing**: `hasAtLeastOne(arr)` from `lib/typeUtils.ts` instead of `arr.length > 0`; `NonEmptyString` for strings known to be non-empty. Flag `arr[0]!` assertions.
 - **Service Worker**: `skipWaiting` + `clientsClaim` means offline users with active tabs may hit stale chunk URLs after a deploy. Flag any change that increases this risk (e.g., new code-split boundaries without graceful fallback).
 

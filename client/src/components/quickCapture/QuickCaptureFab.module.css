@@ -3,6 +3,7 @@
 .fab {
     position: fixed;
     inset-inline-end: var(--space-5);
+
     /* Clears the mobile bottom navigation (see AppNav). */
     inset-block-end: 5rem;
     z-index: var(--z-fab);

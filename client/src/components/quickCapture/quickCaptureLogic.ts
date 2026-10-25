@@ -10,7 +10,7 @@ export interface CaptureShortcutEvent {
 }
 
 export interface CaptureShortcutContext {
-    /** An open MUI modal (dialog, drawer, popover) — the shortcut must not fire underneath it. */
+    /** An open modal popup (dialog, drawer, menu, popover) — the shortcut must not fire underneath it. */
     isModalOpen: boolean;
     /** The event target is a text-entry surface — typing "c" there is content, not a command. */
     isEditableTarget: boolean;

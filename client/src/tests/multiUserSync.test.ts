@@ -574,6 +574,38 @@ describe('syncAllLoggedInUsers', () => {
         expect(active?.userId).toBe('user-a');
     });
 
+    it('restores the IDB active account even when the network drops before the cookie can follow', async () => {
+        await seedAccount(db, 'user-a', 'a@example.com');
+        await seedAccount(db, 'user-b', 'b@example.com');
+        await db.put('activeAccount', { userId: 'user-a' }, 'active');
+        // The per-user pivots (a, then b) succeed; the restore pivot back to a fails like a dropped connection.
+        vi.mocked(authClient.multiSession.setActive)
+            .mockResolvedValueOnce(undefined)
+            .mockResolvedValueOnce(undefined)
+            .mockRejectedValueOnce(new TypeError('Failed to fetch'));
+
+        await syncAllLoggedInUsers(db);
+
+        // The user's choice is local truth; the cookie is re-aligned by the next reconcile.
+        const active = await db.get('activeAccount', 'active');
+        expect(active?.userId).toBe('user-a');
+    });
+
+    it('keeps the IDB active account when it has no live session to pivot back to (it needs re-login, not a silent switch)', async () => {
+        await seedAccount(db, 'user-a', 'a@example.com');
+        await seedAccount(db, 'user-b', 'b@example.com');
+        await db.put('activeAccount', { userId: 'user-a' }, 'active');
+        // A's session is gone (expired / revoked); only B can still be pivoted to. Listed at the start
+        // of the pass, then once more when the pass re-fetches for the missing account.
+        const onlyUserB = { data: [{ user: { id: 'user-b' }, session: { token: 'token-b' } }] };
+        vi.mocked(authClient.multiSession.listDeviceSessions).mockResolvedValueOnce(onlyUserB).mockResolvedValueOnce(onlyUserB);
+
+        await syncAllLoggedInUsers(db);
+
+        const active = await db.get('activeAccount', 'active');
+        expect(active?.userId).toBe('user-a');
+    });
+
     it('still restores the previously-active session when a per-user pass throws', async () => {
         await seedAccount(db, 'user-a', 'a@example.com');
         await seedAccount(db, 'user-b', 'b@example.com');

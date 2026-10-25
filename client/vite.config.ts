@@ -46,8 +46,10 @@ export default defineConfig({
             manifest: {
                 name: APP_NAME,
                 short_name: APP_NAME,
+                // The manifest is single-valued, so both take the LIGHT tokens: --color-accent and
+                // --color-bg-page (tokens/variables.css). Keep them in step with the tokens.
                 theme_color: '#1976d2',
-                background_color: '#ffffff',
+                background_color: '#f7f8fa',
                 display: 'standalone',
                 start_url: '/',
                 icons: [

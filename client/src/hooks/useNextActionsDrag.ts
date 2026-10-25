@@ -513,8 +513,9 @@ export function useNextActionsDrag({ sections, isGhost, onCommit, scrollRowIntoV
     // drag that no key can end. Any pointer press cancels it.
     const attachKeyboardListeners = useCallback(
         (draggedId: string) => {
-            // Capture phase, and the event is stopped: the row button (a non-native MUI button) would
-            // otherwise turn the Enter that drops the row into a click that opens the editor.
+            // Capture phase, and the event is stopped: the row body (ListRowButton activates on Enter
+            // keydown, like a native button) would otherwise turn the Enter that drops the row into a
+            // click that opens the editor.
             const onKeyDown = (e: KeyboardEvent) => {
                 const action = resolveGrabKey(e);
                 if (action) {

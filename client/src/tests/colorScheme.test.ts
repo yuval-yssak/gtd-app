@@ -147,7 +147,7 @@ describe('startColorSchemeSync', () => {
         const stop = startColorSchemeSync();
         expect(localStorage.getItem(STORAGE_KEY)).toBe('system');
 
-        // The MUI bridge mirrors the RESOLVED scheme into its own key; that is not a preference.
+        // Anything left in or written to the MUI key after adoption is ignored.
         localStorage.setItem(LEGACY_MUI_KEY, 'dark');
         expect(getColorSchemePreference()).toBe('system');
         stop();

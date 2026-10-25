@@ -3,9 +3,9 @@ import type { IDBPDatabase } from 'idb';
 import { useCallback, useEffect, useState } from 'react';
 import { signOutDevice } from '../api/pushApi';
 import { runLocalAccountAction } from '../contexts/accountEvaporatedRecovery';
-import { clearAllAccounts, getActiveAccount, getAllAccounts, removeAccount, setActiveAccount, wipeUserData } from '../db/accountHelpers';
+import { clearAllAccounts, getAllAccounts, removeAccount, setActiveAccount, wipeUserData } from '../db/accountHelpers';
 import { getOrCreateDeviceId } from '../db/deviceId';
-import { withSessionGate } from '../db/syncHelpers';
+import { readSettledActiveAccount, withSessionGate } from '../db/syncHelpers';
 import { authClient } from '../lib/authClient';
 import { clearPersistedListScrollMemory } from '../lib/listScrollMemory';
 import type { MyDB, OAuthProvider, StoredAccount } from '../types/MyDB';
@@ -125,7 +125,9 @@ export function useAccounts(db: IDBPDatabase<MyDB>): AccountsState {
                 // Offline or server unreachable — fall through to load from IDB cache
             }
 
-            const [all, active] = await Promise.all([getAllAccounts(db), getActiveAccount(db)]);
+            // Settled read: mounted mid-pass, a bare read returned the account being synced, so the
+            // switcher check-marked it and ignored a click on it as "already active".
+            const [all, active] = await Promise.all([getAllAccounts(db), readSettledActiveAccount(db)]);
             setAllAccounts(all);
             setActiveAccountState(active);
         }

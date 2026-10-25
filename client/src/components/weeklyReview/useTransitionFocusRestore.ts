@@ -100,9 +100,9 @@ export function useTransitionFocusRestore(rootRef: React.RefObject<HTMLElement |
     // entering/leaving the revisit view is stage-local state, and the replacement action row
     // portals in yet another child commit. Watching the DOM directly catches every transition
     // regardless of which component committed it, and naturally retries when the replacement
-    // control appears a mutation later. No feedback loop: a successful restore DOES mutate the
-    // subtree (MUI's focus ripple), but its focusin dispatches synchronously — re-recording onto
-    // the now-connected control — before the observer's microtask-scheduled callback runs.
+    // control appears a mutation later. No feedback loop: a successful restore may mutate the
+    // subtree (focus attributes on the control), but its focusin dispatches synchronously —
+    // re-recording onto the now-connected control — before the observer's microtask-scheduled callback runs.
     useEffect(() => {
         const root = rootRef.current;
         if (!root) {

@@ -21,6 +21,27 @@
     },
     "overrides": [
         {
+            // The client is built from the design system (client/src/designSystem); MUI and Emotion are gone for good.
+            "includes": ["client/**"],
+            "linter": {
+                "rules": {
+                    "style": {
+                        "noRestrictedImports": {
+                            "level": "error",
+                            "options": {
+                                "patterns": [
+                                    {
+                                        "group": ["@mui/**", "@emotion/**", "classnames"],
+                                        "message": "Build from the design system (client/src/designSystem) and clsx — MUI, Emotion and classnames were removed."
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        {
             // Playwright's locator.innerText() is not DOM Node.innerText; its textContent() drops layout line breaks.
             "includes": ["e2e/**"],
             "linter": { "rules": { "performance": { "useDomNodeTextContent": "off" } } }

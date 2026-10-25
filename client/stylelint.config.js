@@ -66,13 +66,17 @@ export default {
         },
         {
             // App CSS (pages and app components): same rules, plus the type ramp is mandatory, and type
-            // selectors are allowed as descendants only — app surfaces style markup they don't author
-            // (rendered markdown, svg icons).
+            // selectors are allowed below a class only — app surfaces style markup they don't author
+            // (rendered markdown, svg icons, a DS list's <ul>).
             files: ['src/**/*.module.css', '!src/designSystem/**'],
             extends: ['stylelint-config-standard'],
             rules: {
                 ...tokenDisciplineRules,
-                'selector-max-type': [0, { ignore: ['descendant'] }],
+                'selector-max-type': [0, { ignore: ['descendant', 'child'] }],
+                // CSS Modules composition.
+                'property-no-unknown': [true, { ignoreProperties: ['composes'] }],
+                // CodeMirror's own `cm-*` classes, reached through :global().
+                'selector-class-pattern': ['^([a-z][a-zA-Z0-9]*|cm-[a-zA-Z-]+)$', { message: 'Expected class selector to be camelCase' }],
                 'declaration-property-value-allowed-list': {
                     ...tokenDisciplineRules['declaration-property-value-allowed-list'],
                     'font-size': ['/^var\\(--type-/', 'inherit', '/^calc\\(/'],

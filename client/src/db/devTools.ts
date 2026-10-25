@@ -10,7 +10,6 @@ import { announceAccountReauthResolved } from '../contexts/accountReauthEvents';
 import { setItemsReadDelayForTesting } from '../data/appResource';
 import { briefSourceHash } from '../lib/briefSource';
 import type { MyDB, StoredItem, StoredItemBrief } from '../types/MyDB';
-import { getActiveAccount } from './accountHelpers';
 import { getOrCreateDeviceId } from './deviceId';
 import { getItemBriefById, getItemBriefsByUser, putItemBrief } from './itemBriefHelpers';
 import { clearBrief, setUserBrief } from './itemBriefMutations';
@@ -43,18 +42,9 @@ import { deleteAndRegenerateFutureItems, generateCalendarItemsToHorizon, materia
 import type { NewRoutineFields } from './routineMutations';
 import { createRoutine, pauseRoutine, removeRoutine, updateRoutine } from './routineMutations';
 import { closeSseConnections, getConnectedSseUserIds, getOpenSseUserIds } from './sseClient';
-import { flushSyncQueue, pullFromServer, waitForPendingFlush, withSessionGate } from './syncHelpers';
+import { flushSyncQueue, pullFromServer, readSettledActiveAccount, waitForPendingFlush, withSessionGate } from './syncHelpers';
 import { getWorkContextsByUser } from './workContextHelpers';
 import { createWorkContext } from './workContextMutations';
-
-/**
- * The user-selected active account. Read inside the session gate: a sync pass pivots IDB's active
- * pointer to each account it syncs and restores it before releasing the gate, so a bare read
- * mid-pass returns whichever account is being synced — a harness write would land under it.
- */
-function readSettledActiveAccount(db: IDBPDatabase<MyDB>) {
-    return withSessionGate(() => getActiveAccount(db));
-}
 
 async function resolveUserId(db: IDBPDatabase<MyDB>): Promise<string> {
     const account = await readSettledActiveAccount(db);

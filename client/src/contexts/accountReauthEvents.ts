@@ -4,7 +4,7 @@ import dayjs from 'dayjs';
  * Window-level event the AccountReauthBanner listens for. The sync orchestrator dispatches it when
  * a logged-in account has no Better Auth multi-session entry (so its data can never sync on this
  * device). Kept in its own module — like `syncIssuesEvents.ts` — so the dispatcher side (sync layer)
- * can import it without pulling in the banner's MUI dependencies.
+ * can import it without pulling in the banner's UI dependencies.
  */
 export const ACCOUNT_NEEDS_REAUTH_EVENT = 'gtd:account-needs-reauth';
 

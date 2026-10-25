@@ -41,8 +41,7 @@ export function navigateOrOpenNewTab(router: RouterNavigator, event: ModifierCli
 
 /**
  * Modifier-aware replacement for `useNavigate` on click handlers that cannot be real `<a>` links
- * (rows whose click may open an inline editor instead of navigating, MUI components with
- * conflicting Link typings). Pass `undefined` as the event for programmatic navigations that
+ * (rows whose click may open an inline editor instead of navigating). Pass `undefined` as the event for programmatic navigations that
  * should always stay in-tab.
  */
 export function useNewTabAwareNavigate() {

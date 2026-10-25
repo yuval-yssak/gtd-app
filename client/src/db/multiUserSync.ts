@@ -472,22 +472,28 @@ async function pullOrBootstrap(db: IDBPDatabase<MyDB>, userId: string): Promise<
 }
 
 /**
- * Restores the active session the user had before the orchestrator ran. Best-effort: if the
- * previously-active account or its server-side session is no longer available, we leave the
- * cookie pointing at whichever account ended the loop — the boot effect's `loadAll` will
- * re-converge IDB with whatever session the cookie now references.
+ * Restores the active account the user had before the orchestrator ran: IDB always, the cookie
+ * best-effort. If the cookie pivot fails (offline, or the session is gone) the cookie stays on
+ * whichever account ended the loop until `reconcileActiveSessionCookie` re-aligns it to IDB.
  */
 async function restorePreviouslyActiveSession(
     db: IDBPDatabase<MyDB>,
     previousUserId: string | undefined,
     previouslyActiveSession: DeviceSession | undefined,
 ): Promise<void> {
-    if (!previousUserId || !previouslyActiveSession) {
+    if (!previousUserId) {
+        return;
+    }
+    // IDB first, unconditionally: it is the user's choice and needs no network. Restored only after
+    // a successful cookie pivot, a dropped connection — or an account whose session is gone — left
+    // the app on whichever account synced last: a silent account switch that persisted across reloads.
+    await setActiveAccount(previousUserId, db);
+    if (!previouslyActiveSession) {
+        // Nothing to pivot back to: the pass's dead-session probe flags it for re-login; the next reconcile re-raises it.
         return;
     }
     try {
         await authClient.multiSession.setActive({ sessionToken: previouslyActiveSession.sessionToken });
-        await setActiveAccount(previousUserId, db);
     } catch (err) {
         console.warn('[multi-sync] failed to restore previously-active session', err);
     }

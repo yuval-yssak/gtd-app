@@ -19,12 +19,10 @@ export const MODAL_POPUP_ATTR = 'data-modal-popup';
 
 /**
  * An open modal popup. Base UI stamps `data-open` while open (and `data-closed` through the exit
- * animation), and the design system never keep-mounts a closed popup. The MUI half covers the
- * screens not yet migrated: its keep-mounted modals (AppNav's mobile drawer) stay in the DOM and
- * are marked aria-hidden while closed, so bare presence ≠ open.
+ * animation), and the design system never keep-mounts a closed popup.
  */
 export function isModalOpen(): boolean {
-    return document.querySelector(`[${MODAL_POPUP_ATTR}][data-open], .MuiModal-root:not([aria-hidden="true"])`) !== null;
+    return document.querySelector(`[${MODAL_POPUP_ATTR}][data-open]`) !== null;
 }
 
 /**
