@@ -2,6 +2,8 @@ import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { resetServerForEmails, withTwoAccountsOnOneDevice } from './helpers/context';
 import { API_URL, CLIENT_URL } from './helpers/env';
+import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Regression for: opening the item editor on a calendar-linked item, switching the AccountPicker
 // to the secondary account, and finding no calendar selector — only the validation error
@@ -72,7 +74,7 @@ test.describe('Item editor cross-account calendar picker', () => {
     // Each test scopes its /dev/reset to its unique stamped emails so concurrent specs in
     // other workers keep their session/user data.
     test('switching AccountPicker to a target account with one calendar shows the picker pre-filled with that calendar', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const emailA = `cal-pick-a-${stamp}@example.com`;
         const emailB = `cal-pick-b-${stamp}@example.com`;
         // configIds carry the stamp so parallel workers don't collide on _id.
@@ -95,10 +97,9 @@ test.describe('Item editor cross-account calendar picker', () => {
             await seedCalendarItemOnServer(active.userId, seedA.integrationId, cfgAPrimary, 'Cross-account picker test');
 
             await page.goto(INBOX_URL);
-            // Force a server pull so the seeded item shows up under the active account.
-            await page.evaluate(async () => {
-                await (window as unknown as { __gtd: { pull(): Promise<void> } }).__gtd.pull();
-            });
+            // Force a server pull so the seeded item shows up under the active account. Through the
+            // gtd helper, which waits for the harness: goto resolves at "load", before it mounts.
+            await gtd.pull(page);
             await page.goto(`${CLIENT_URL}/calendar`);
             await expect(page.getByText('Cross-account picker test')).toBeVisible({ timeout: 10_000 });
 

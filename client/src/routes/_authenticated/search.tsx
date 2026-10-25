@@ -1,11 +1,13 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { LayoutGrid, LayoutList, Rows3, Table2 } from 'lucide-react';
 import { type ReactNode, useCallback, useMemo, useState } from 'react';
+import { ListEmptyMessage } from '../../components/ListEmptyMessage';
+import { ListPageHeader } from '../../components/ListPageHeader';
 import { SearchFilters } from '../../components/search/SearchFilters';
 import { SearchResultsList } from '../../components/search/SearchResultsList';
 import { SearchResultsTable } from '../../components/search/SearchResultsTable';
 import { useAppData } from '../../contexts/AppDataProvider';
-import { Chip, Text, ToggleGroup, Tooltip } from '../../designSystem';
+import { ToggleGroup, Tooltip } from '../../designSystem';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useEntityUsage } from '../../hooks/useEntityUsage';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
@@ -119,10 +121,7 @@ function SearchPage() {
 
     return (
         <div>
-            <Text variant="title" className={styles.title}>
-                Search
-                {filtered.length > 0 && <Chip label={filtered.length} tone="accent" className={styles.countChip} />}
-            </Text>
+            <ListPageHeader title="Search" count={filtered.length} countTone="accent" />
             <SearchFilters
                 urlState={urlState}
                 queryInput={queryInput}
@@ -140,9 +139,7 @@ function SearchPage() {
                 <ToggleGroup value={urlState.view} onValueChange={(view) => updateUrlState({ view })} options={VIEW_OPTIONS} aria-label="Results view" />
             </div>
             {filtered.length === 0 ? (
-                <Text tone="secondary" className={styles.emptyMessage}>
-                    {hasNoInputs ? 'Type to search or use the filters above.' : 'No items match your filters.'}
-                </Text>
+                <ListEmptyMessage>{hasNoInputs ? 'Type to search or use the filters above.' : 'No items match your filters.'}</ListEmptyMessage>
             ) : urlState.view === 'table' ? (
                 <SearchResultsTable
                     items={filtered}

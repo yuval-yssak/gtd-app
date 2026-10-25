@@ -42,5 +42,5 @@ export function rowActionButtonProps(action: RowActionName) {
     return { [ROW_ACTION_ATTR]: action, 'aria-keyshortcuts': ROW_ACTION_KEYS[action].toUpperCase() };
 }
 
-/** Spread on a list row (the ListItem) so the generic handler finds its buttons. */
+/** Spread on a list row (its outer element) so the generic handler finds its buttons. */
 export const SHORTCUT_ROW_PROPS = { [SHORTCUT_ROW_ATTR]: '' } as const;

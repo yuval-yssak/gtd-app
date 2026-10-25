@@ -26,8 +26,8 @@ export const Route = createFileRoute('/auth/callback')({
 function CallbackPage() {
     useDocumentTitle('Signing in…');
     return (
-        <div className={styles.callbackPage}>
+        <main className={styles.callbackPage}>
             <Spinner size={40} label="Signing in" />
-        </div>
+        </main>
     );
 }

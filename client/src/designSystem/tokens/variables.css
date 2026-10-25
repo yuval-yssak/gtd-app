@@ -65,9 +65,15 @@
         --color-scrollbar: #b4b9c2;
         --color-sheet-handle: #00000033;
 
-        /* The one elevation in a flat design: floating popups (menus, popovers, toasts, drag
-           ghosts). Cards and dialogs separate from the page with a hairline border instead. */
+        /* Elevation in a flat design: floating popups (menus, popovers, toasts, drag ghosts), and
+           a hairline lift for a control part that sits on its own track (the switch thumb, the
+           pressed toggle segment). Cards and dialogs separate from the page with a border instead. */
         --shadow-popup: 0 4px 16px 0 #0f172a1f, 0 1px 3px 0 #0f172a14;
+        --shadow-control: 0 1px 2px 0 #0f172a33;
+
+        /* A row that is parked or inactive (archived person, paused routine, unused context): still
+           readable, visibly set aside. */
+        --opacity-parked: 0.55;
 
         /* Typography. Sizes follow the old MUI ramp (caption 12, body2 14, body1 16, h6 20, h5 24,
            h4 34, h3 48) and line heights match it to the pixel so rows keep their height. */
@@ -79,6 +85,10 @@
         --type-sm-line: 1.25rem;
         --type-md-size: 1rem;
         --type-md-line: 1.5rem;
+        /* MUI subtitle1 / subtitle2 line heights (1.75 / 1.57), kept so list group headers keep
+           their height. */
+        --type-md-line-relaxed: 1.75rem;
+        --type-sm-line-relaxed: 1.375rem;
         --type-lg-size: 1.25rem;
         --type-lg-line: 2rem;
         --type-xl-size: 1.5rem;
@@ -126,15 +136,22 @@
         /* Focus ring — one look everywhere: solid 2px accent at 2px offset. */
         --focus-ring-width: 2px;
         --focus-ring-offset: 2px;
+        /* Inside a tightly padded container (a toggle group's segments), where 2px would collide
+           with the neighbouring segment. */
+        --focus-ring-offset-tight: 1px;
         --focus-ring-color: var(--color-accent);
 
         /* Motion */
         --duration-fast: 120ms;
         --duration-normal: 200ms;
+        /* A whole panel crossing the screen (the drawer). */
+        --duration-slow: 400ms;
         --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+        /* Fast out, long settle — the iOS sheet curve Base UI's drawer is tuned for. */
+        --ease-sheet: cubic-bezier(0.32, 0.72, 0, 1);
 
-        /* z-index scale — the old MUI values, so anything still on MUI during the migration stacks
-           consistently with the design system. */
+        /* z-index scale — MUI's old values, kept so the stacking order the app was built against
+           did not move in the migration. */
         --z-raised: 1;
         --z-sticky: 10;
         /* The quick-capture FAB: above page content, below the app bar and every modal. */
@@ -197,5 +214,6 @@
         --color-sheet-handle: #ffffff4d;
 
         --shadow-popup: 0 6px 20px 0 #00000080, 0 1px 3px 0 #00000066;
+        --shadow-control: 0 1px 2px 0 #00000099;
     }
 }

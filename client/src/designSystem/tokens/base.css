@@ -35,6 +35,8 @@
     }
 
     html {
+        /* The root size the whole rem ramp scales from — the one place a literal belongs. */
+        /* stylelint-disable-next-line declaration-property-value-allowed-list */
         font-size: 100%;
 
         /* Native scrollbars and form controls follow the stamped scheme, not the OS preference:

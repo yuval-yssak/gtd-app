@@ -6,15 +6,6 @@
     padding: var(--space-6);
 }
 
-.notFound {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: var(--space-4);
-    margin-block-start: var(--space-8);
-    text-align: center;
-}
-
 .nextItemLink {
     margin-block-end: var(--space-4);
 }

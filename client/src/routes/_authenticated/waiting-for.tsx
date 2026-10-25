@@ -6,6 +6,8 @@ import { AccountChip } from '../../components/AccountChip';
 import { AccountSyncChip } from '../../components/AccountSyncChip';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { useItemEditor } from '../../components/itemEditor/useItemEditor';
+import { ListEmptyMessage } from '../../components/ListEmptyMessage';
+import { ListPageHeader } from '../../components/ListPageHeader';
 import { ListRowShell } from '../../components/ListRowShell';
 import { ListSkeleton } from '../../components/ListSkeleton';
 import { ListRow, ListRowButton, ListRowText } from '../../components/listRow/ListRow';
@@ -13,7 +15,7 @@ import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { RowActionButton } from '../../components/RowActionButton';
 import { RankedListChrome } from '../../components/rankedList/RankedListChrome';
 import { RankedRowHandle } from '../../components/rankedList/RankedRowHandle';
-import { rankedHeaderClassName, rankedRowButtonProps, rankedRowProps } from '../../components/rankedList/rankedRowProps';
+import { rankedHeaderProps, rankedRowButtonProps, rankedRowProps } from '../../components/rankedList/rankedRowProps';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone } from '../../db/itemMutations';
 import { Chip, IconButton, Text, Toast, ToggleGroup, Tooltip } from '../../designSystem';
@@ -201,9 +203,8 @@ function WaitingForPage() {
                     row.kind === 'header' ? (
                         <Text
                             key={`header-${row.section.key}`}
-                            as="div"
                             variant="subtitleSm"
-                            className={rankedHeaderClassName(ranked, row.section)}
+                            {...rankedHeaderProps(ranked, row.section)}
                             data-testid="waitingForSectionHeader"
                         >
                             {row.section.label}
@@ -223,33 +224,22 @@ function WaitingForPage() {
     if (waitingItems.length === 0) {
         return (
             <div>
-                <div className={styles.header}>
-                    <Text variant="title">Waiting For</Text>
+                <ListPageHeader title="Waiting For">
                     {/* "Syncing account…" while a newly-added account bootstraps; surfaces even when the list already has items. */}
                     <AccountSyncChip />
-                </div>
+                </ListPageHeader>
                 {/* First-launch bootstrap: show skeleton, not the "empty" copy, while IDB is still loading. */}
-                {isInitialSyncing ? (
-                    <ListSkeleton />
-                ) : (
-                    <Text tone="secondary" className={styles.emptyMessage}>
-                        Nothing pending.
-                    </Text>
-                )}
+                {isInitialSyncing ? <ListSkeleton /> : <ListEmptyMessage>Nothing pending.</ListEmptyMessage>}
             </div>
         );
     }
 
     return (
         <div>
-            <div className={styles.header}>
-                <Text variant="title">
-                    Waiting For
-                    {liveWaitingCount > 0 && <Chip label={liveWaitingCount} tone="accent" className={styles.countChip} />}
-                </Text>
+            <ListPageHeader title="Waiting For" count={liveWaitingCount} countTone="accent">
                 {/* "Syncing account…" while a newly-added account bootstraps; surfaces even when the list already has items. */}
                 <AccountSyncChip />
-            </div>
+            </ListPageHeader>
             <div className={styles.sortRow}>
                 <ToggleGroup value={sortBy} onValueChange={onSortByChanged} aria-label="Sort waiting-for items" options={SORT_OPTIONS} />
             </div>

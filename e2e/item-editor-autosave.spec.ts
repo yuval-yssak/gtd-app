@@ -104,7 +104,7 @@ test.describe('item editor — save undo snackbar', () => {
 
             // Close dismisses immediately (it hides action buttons underneath) but keeps the save.
             await page.getByTestId('undoSnackbarCloseButton').click();
-            // Well under UNDO_SNACKBAR_DURATION_MS (6s) so the auto-hide timer cannot be what dismissed it.
+            // Well under UNDO_TOAST_DURATION_MS (6s) so the auto-hide timer cannot be what dismissed it.
             await expect(page.getByTestId('undoSnackbar')).toHaveCount(0, { timeout: 1500 });
             const titles = (await gtd.listItems(page)).map((i) => i.title);
             expect(titles).toContain('Close me — renamed');

@@ -15,7 +15,6 @@ export type ButtonAppearance = {
     tone?: ButtonTone | undefined;
     size?: ButtonSize | undefined;
     startIcon?: ReactNode | undefined;
-    endIcon?: ReactNode | undefined;
     fullWidth?: boolean | undefined;
 };
 
@@ -32,7 +31,6 @@ export function Button({
     tone = 'accent',
     size = 'md',
     startIcon,
-    endIcon,
     loading,
     fullWidth,
     disabled,
@@ -49,9 +47,7 @@ export function Button({
             {...rest}
             className={clsx(styles.button, className)}
         >
-            <ButtonContent startIcon={loading ? <Spinner size={16} tone="inherit" aria-hidden="true" /> : startIcon} endIcon={endIcon}>
-                {children}
-            </ButtonContent>
+            <ButtonContent startIcon={loading ? <Spinner size={16} tone="inherit" aria-hidden="true" /> : startIcon}>{children}</ButtonContent>
         </BaseButton>
     );
 }
@@ -61,18 +57,19 @@ export function appearanceAttributes({ variant = 'ghost', tone = 'accent', size 
     return { 'data-variant': variant, 'data-tone': tone, 'data-size': size, 'data-full-width': fullWidth || undefined };
 }
 
-export function ButtonContent({ startIcon, endIcon, children }: Pick<ButtonAppearance, 'startIcon' | 'endIcon'> & { children?: ReactNode }) {
+export function ButtonContent({ startIcon, children }: Pick<ButtonAppearance, 'startIcon'> & { children?: ReactNode }) {
     return (
         <>
             <IconSlot>{startIcon}</IconSlot>
             {children}
-            <IconSlot>{endIcon}</IconSlot>
         </>
     );
 }
 
 function IconSlot({ children }: { children: ReactNode }) {
-    if (children === undefined || children === null || children === false) return null;
+    if (children === undefined || children === null || children === false) {
+        return null;
+    }
     return (
         <span className={styles.iconSlot} aria-hidden="true">
             {children}

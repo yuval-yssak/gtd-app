@@ -2,6 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { isModalOpen } from '../../lib/keyboardRegionDom';
 import { Select, type SelectOption } from './Select';
 
 afterEach(cleanup);
@@ -44,5 +45,46 @@ describe('Select', () => {
         // A full pointer sequence: Base UI commits a pick on pointer release, not on a bare click event.
         await userEvent.click(within(listbox).getByRole('option', { name: 'Team' }));
         expect(onValueChange).toHaveBeenCalledWith('b-team');
+    });
+});
+
+describe('Select popup', () => {
+    it('is a combobox named by its label with option roles (e2e: combobox { name: "Calendar" })', async () => {
+        const onValueChange = vi.fn();
+        render(
+            <Select
+                label="Calendar"
+                value="work"
+                onValueChange={onValueChange}
+                options={[
+                    { value: 'work', label: 'Work' },
+                    { value: 'home', label: 'Home' },
+                ]}
+            />,
+        );
+        const trigger = screen.getByRole('combobox', { name: 'Calendar' });
+        expect(trigger.textContent).toContain('Work');
+        await userEvent.click(trigger);
+        await userEvent.click(await screen.findByRole('option', { name: 'Home' }));
+        expect(onValueChange).toHaveBeenCalledWith('home');
+    });
+
+    it('counts as an open modal while its list is open, and closes on Escape', async () => {
+        render(
+            <Select
+                label="Calendar"
+                value="work"
+                onValueChange={vi.fn()}
+                options={[
+                    { value: 'work', label: 'Work' },
+                    { value: 'home', label: 'Home' },
+                ]}
+            />,
+        );
+        await userEvent.click(screen.getByRole('combobox', { name: 'Calendar' }));
+        await screen.findByRole('listbox');
+        expect(isModalOpen()).toBe(true);
+        await userEvent.keyboard('{Escape}');
+        await vi.waitFor(() => expect(isModalOpen()).toBe(false));
     });
 });

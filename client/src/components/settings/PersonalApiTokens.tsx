@@ -259,7 +259,7 @@ function TokenRow({ token, onRevoke, isRevoking }: TokenRowProps) {
                 </Text>
             </div>
             {!isRevoked && (
-                <Button size="sm" tone="warning" onClick={() => onRevoke(token)} disabled={isRevoking} data-testid="revokeTokenButton">
+                <Button size="sm" tone="danger" onClick={() => onRevoke(token)} disabled={isRevoking} data-testid="revokeTokenButton">
                     {isRevoking ? 'Revoking…' : 'Revoke'}
                 </Button>
             )}
@@ -469,7 +469,7 @@ function RevokeDialog({ state, onCancel, onConfirm, isRevoking }: RevokeDialogPr
             </DialogDescription>
             <DialogActions>
                 <Button onClick={onCancel}>Cancel</Button>
-                <Button variant="solid" tone="warning" onClick={onConfirm} disabled={isRevoking} data-testid="confirmRevokeTokenButton">
+                <Button variant="solid" tone="danger" onClick={onConfirm} disabled={isRevoking} data-testid="confirmRevokeTokenButton">
                     {isRevoking ? 'Revoking…' : 'Revoke'}
                 </Button>
             </DialogActions>

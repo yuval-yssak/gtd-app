@@ -54,6 +54,23 @@ describe('ListRowButton', () => {
         expect(onActivate).toHaveBeenCalledTimes(2);
     });
 
+    it('lets a keydown handler that claims Enter suppress the activation, as on a native button', () => {
+        const onActivate = vi.fn();
+        render(
+            <ListRowButton
+                onActivate={onActivate}
+                onKeyDown={(e) => {
+                    if (e.key === 'Enter') e.preventDefault();
+                }}
+                data-testid="claimedRow"
+            >
+                Buy milk
+            </ListRowButton>,
+        );
+        fireEvent.keyDown(screen.getByTestId('claimedRow'), { key: 'Enter' });
+        expect(onActivate).not.toHaveBeenCalled();
+    });
+
     it('lets a keyup handler that claims Space (grab mode) suppress the activation', () => {
         const onActivate = renderRow(vi.fn(), (e) => {
             if (e.key === ' ') e.preventDefault();

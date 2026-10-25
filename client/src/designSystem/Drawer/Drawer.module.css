@@ -5,7 +5,7 @@
         z-index: var(--z-drawer);
         background-color: var(--color-backdrop);
         opacity: calc(1 - var(--drawer-swipe-progress, 0));
-        transition: opacity 400ms var(--ease-standard);
+        transition: opacity var(--duration-slow) var(--ease-standard);
 
         @supports (-webkit-touch-callout: none) {
             position: absolute;
@@ -44,7 +44,7 @@
         color: var(--color-text-primary);
         outline: 0;
         overscroll-behavior: contain;
-        transition: transform 400ms cubic-bezier(0.32, 0.72, 0, 1);
+        transition: transform var(--duration-slow) var(--ease-sheet);
         will-change: transform;
 
         &[data-swiping] {

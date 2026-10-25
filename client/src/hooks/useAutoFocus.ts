@@ -1,9 +1,8 @@
 import { useEffect, useRef } from 'react';
 
 /**
- * Imperatively focuses an input on mount. MUI's `autoFocus` prop relies on the native HTML
- * `autofocus` attribute, which the browser only honors for elements present at initial document
- * parse — it never fires for a TextField a route mounts into an already-interactive page.
+ * Focuses the referenced input once, after it mounts — for a field that should take focus when
+ * its page or panel appears.
  */
 export function useAutoFocus() {
     const ref = useRef<HTMLInputElement>(null);

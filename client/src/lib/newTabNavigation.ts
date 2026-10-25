@@ -41,8 +41,8 @@ export function navigateOrOpenNewTab(router: RouterNavigator, event: ModifierCli
 
 /**
  * Modifier-aware replacement for `useNavigate` on click handlers that cannot be real `<a>` links
- * (rows whose click may open an inline editor instead of navigating). Pass `undefined` as the event for programmatic navigations that
- * should always stay in-tab.
+ * (role="button" list rows, whose own buttons an <a> could not contain). Pass `undefined` as the
+ * event for programmatic navigations that should always stay in-tab.
  */
 export function useNewTabAwareNavigate() {
     const router = useRouter();

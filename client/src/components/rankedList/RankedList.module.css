@@ -10,7 +10,7 @@
 }
 
 /* D3: every past date is its own section, flagged in the error colour. */
-.sectionHeaderOverdue {
+.sectionHeader[data-overdue] {
     color: var(--color-status-error);
 }
 
@@ -49,11 +49,11 @@
     transform: translateY(var(--drag-shift, 0));
 }
 
-.shifted {
+.rowShell[data-shifted] {
     transition: transform 0.12s ease;
 }
 
-.dragging {
+.rowShell[data-dragging] {
     position: relative;
     z-index: var(--z-sticky);
     cursor: grabbing;
@@ -63,7 +63,8 @@
 }
 
 /* Section wall: everything outside the active section dims while dragging. */
-.dimmedSection {
+.rowShell[data-dimmed],
+.sectionHeader[data-dimmed] {
     opacity: 0.45;
     transition: opacity 0.15s ease;
 }

@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from '@tanstack/react-router';
 import type { IDBPDatabase } from 'idb';
-import { type ReactNode, Suspense, useCallback, useEffect, useId, useState, useTransition } from 'react';
+import { Suspense, useCallback, useEffect, useState, useTransition } from 'react';
 import { getPushStatus } from '../../api/pushApi';
 import { AppErrorBoundary } from '../../components/AppErrorBoundary';
 import { AccountDataSection } from '../../components/settings/AccountDataSection';
@@ -9,10 +9,11 @@ import { CalendarIntegrationsSkeleton } from '../../components/settings/Calendar
 import { ConnectClaude } from '../../components/settings/ConnectClaude';
 import { ConnectedDevices } from '../../components/settings/ConnectedDevices';
 import { PersonalApiTokens } from '../../components/settings/PersonalApiTokens';
+import { SettingsSection } from '../../components/settings/SettingsSection';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { getOrCreateDeviceId } from '../../db/deviceId';
 import { requestAndRegisterPushSubscription } from '../../db/pushSubscription';
-import { Button, Card, RadioGroup, type RadioOption, Select, Separator, Switch, Text } from '../../designSystem';
+import { Button, RadioGroup, type RadioOption, Select, Switch, Text } from '../../designSystem';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { APP_NAME, METHOD_NAME } from '../../lib/appName';
 import { setShowBriefs, useShowBriefs } from '../../lib/briefPreference';
@@ -42,36 +43,6 @@ export const Route = createFileRoute('/_authenticated/settings')({
     component: SettingsPage,
 });
 
-interface SettingsSectionProps {
-    title: string;
-    /** The grey line under the title. */
-    description?: ReactNode | undefined;
-    /** Rules a separator between the description and the section's controls. */
-    isDivided?: boolean | undefined;
-    children?: ReactNode | undefined;
-}
-
-/** One settings card: a heading, an optional description, then the section's own controls. */
-function SettingsSection({ title, description, isDivided = false, children }: SettingsSectionProps) {
-    const headingId = useId();
-    return (
-        <Card padding="none" className={styles.section}>
-            <section className={styles.sectionContent} aria-labelledby={headingId}>
-                <Text variant="subtitle" weight="semibold" id={headingId} className={styles.sectionHeading}>
-                    {title}
-                </Text>
-                {description !== undefined && (
-                    <Text variant="bodySm" tone="secondary" className={styles.sectionDescription}>
-                        {description}
-                    </Text>
-                )}
-                {isDivided && <Separator className={styles.divider} />}
-                {children}
-            </section>
-        </Card>
-    );
-}
-
 function SettingsPage() {
     useDocumentTitle('Settings');
     const { db } = Route.useRouteContext();
@@ -79,7 +50,7 @@ function SettingsPage() {
 
     return (
         <div className={styles.pageWrapper}>
-            <Text variant="title" weight="semibold" className={styles.pageTitle}>
+            <Text variant="title" className={styles.pageTitle}>
                 Settings
             </Text>
             <SettingsSection title="Account" description={`${account?.name ?? '—'} · ${account?.email ?? '—'}`} />

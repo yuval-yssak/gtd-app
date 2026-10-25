@@ -102,7 +102,7 @@ test.describe('cmd/ctrl+click opens entity pages in a new tab', () => {
             await newTab.waitForURL(`**/item/${item._id}*`);
 
             // The origin tab stays on the inbox and the undo offer survives — asserted immediately,
-            // well under UNDO_SNACKBAR_DURATION_MS (6s), so auto-hide can't mask a broken handler.
+            // well under UNDO_TOAST_DURATION_MS (6s), so auto-hide can't mask a broken handler.
             expect(page.url()).toContain('/inbox');
             await expect(page.getByTestId('undoSnackbar')).toBeVisible();
             await newTab.close();

@@ -1,0 +1,4 @@
+.message {
+    margin-block-start: var(--space-12);
+    text-align: center;
+}

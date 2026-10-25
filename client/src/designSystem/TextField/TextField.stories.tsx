@@ -30,7 +30,6 @@ export const MultilineGrown: Story = {
         label: 'Notes',
         multiline: true,
         minRows: 2,
-        maxRows: 6,
         fullWidth: true,
         defaultValue: 'Line 1\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6\nLine 7\nLine 8',
     },

@@ -5,13 +5,13 @@ import { isNewTabClick, useNewTabAwareNavigate } from '../lib/newTabNavigation';
 import { dismissCurrentUndo, getCurrentUndo, runCurrentUndo, subscribeToUndo } from '../lib/undoStore';
 
 /** How long the Undo affordance stays available after a save. */
-export const UNDO_SNACKBAR_DURATION_MS = 6000;
+export const UNDO_TOAST_DURATION_MS = 6000;
 
 /**
  * Global "Saved — UNDO" snackbar. Mounted once in the authenticated layout; any editor that
  * autosaves (or commits an explicit save) surfaces its undo through the module-level undoStore.
  */
-export function UndoSnackbar() {
+export function UndoToast() {
     const entry = useSyncExternalStore(subscribeToUndo, getCurrentUndo);
     const [isUndoing, startUndo] = useTransition();
     const navigateOrNewTab = useNewTabAwareNavigate();
@@ -44,7 +44,7 @@ export function UndoSnackbar() {
             // Remount per offer so a burst refresh (same key, new offerId) restarts the auto-hide timer.
             key={entry.offerId}
             open
-            autoHideDuration={UNDO_SNACKBAR_DURATION_MS}
+            autoHideDuration={UNDO_TOAST_DURATION_MS}
             // The toast never closes on a click elsewhere: the user is likely just continuing to work.
             onClose={dismissCurrentUndo}
             message={entry.message}

@@ -1,21 +1,3 @@
-/* Title row: the count, sync and search affordances stay vertically centred on the title. */
-.header {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    margin-block-end: var(--space-4);
-}
-
-.countChip {
-    margin-inline-start: var(--space-3);
-    vertical-align: middle;
-}
-
-.emptyMessage {
-    margin-block-start: var(--space-12);
-    text-align: center;
-}
-
 .filterBar {
     margin-block-end: var(--space-4);
 }
@@ -70,5 +52,5 @@
 
 /* Tag chip whose referenced context/person is archived — present but visually parked. */
 .archivedTag {
-    opacity: 0.55;
+    opacity: var(--opacity-parked);
 }

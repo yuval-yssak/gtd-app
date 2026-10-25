@@ -126,6 +126,8 @@ export function AccountSwitcher({ db }: Props) {
                 autoHideDuration={6000}
                 onClose={dismissActionError}
                 message={actionError}
+                // Centred: at the start edge it would sit on the sidebar footer's account controls.
+                placement="center"
                 data-testid="accountActionError"
             />
         </>

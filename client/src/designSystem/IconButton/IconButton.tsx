@@ -18,15 +18,13 @@ export type IconButtonProps = Omit<ComponentProps<'button'>, 'className' | 'aria
         tone?: 'neutral' | 'accent' | 'danger' | 'warning' | 'success' | 'inherit' | undefined;
         /** Pull the button into the container's padding so the glyph, not the hit area, aligns. */
         edge?: 'start' | 'end' | undefined;
-        /** Pressed/active look for toggle-style icon buttons. */
-        selected?: boolean | undefined;
     };
 
 /**
  * A square icon-only button. Unknown props (`data-row-action`, `aria-keyshortcuts`, `tabIndex`)
  * pass straight through to the `<button>` — the keyboard regions depend on that.
  */
-export function IconButton({ size = 'md', tone = 'neutral', edge, selected, title, className, ...rest }: IconButtonProps) {
+export function IconButton({ size = 'md', tone = 'neutral', edge, title, className, ...rest }: IconButtonProps) {
     const isInsideTooltip = useIsInsideTooltip();
     const ariaLabel = rest['aria-label'];
     if (import.meta.env.DEV && (ariaLabel ?? title ?? '').trim() === '') {
@@ -37,12 +35,21 @@ export function IconButton({ size = 'md', tone = 'neutral', edge, selected, titl
             data-size={size}
             data-tone={tone}
             data-edge={edge}
-            data-selected={selected || undefined}
-            // Touch devices never show a design-system tooltip, so the native title is the fallback hint.
-            // A title-only name is the button's accessible name, so it always stays.
-            title={ariaLabel === undefined ? title : isInsideTooltip ? undefined : (title ?? ariaLabel)}
+            title={nativeTitleFor({ ariaLabel, title, isInsideTooltip })}
             {...rest}
             className={clsx(styles.iconButton, className)}
         />
     );
+}
+
+/**
+ * Touch devices never show a design-system tooltip, so the native title is the fallback hint —
+ * except inside a Tooltip, where two hints would stack. A title-only name is the button's
+ * accessible name, so it always stays.
+ */
+function nativeTitleFor({ ariaLabel, title, isInsideTooltip }: { ariaLabel: string | undefined; title: string | undefined; isInsideTooltip: boolean }) {
+    if (ariaLabel === undefined) {
+        return title;
+    }
+    return isInsideTooltip ? undefined : (title ?? ariaLabel);
 }

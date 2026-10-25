@@ -16,7 +16,6 @@ export const Medium: Story = {};
 export const Small: Story = { args: { size: 'sm' } };
 export const Accent: Story = { args: { tone: 'accent' } };
 export const Danger: Story = { args: { tone: 'danger', 'aria-label': 'Delete', children: <Trash2 /> } };
-export const Selected: Story = { args: { selected: true } };
 export const Disabled: Story = { args: { disabled: true } };
 
 export const Focused: Story = {

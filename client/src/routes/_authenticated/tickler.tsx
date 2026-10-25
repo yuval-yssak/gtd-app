@@ -4,6 +4,8 @@ import { AccountChip } from '../../components/AccountChip';
 import { AccountSyncChip } from '../../components/AccountSyncChip';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { useItemEditor } from '../../components/itemEditor/useItemEditor';
+import { ListEmptyMessage } from '../../components/ListEmptyMessage';
+import { ListPageHeader } from '../../components/ListPageHeader';
 import { ListRowShell } from '../../components/ListRowShell';
 import { ListSkeleton } from '../../components/ListSkeleton';
 import { ListRow, ListRowButton, ListRowText } from '../../components/listRow/ListRow';
@@ -11,7 +13,7 @@ import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { RowActionButton } from '../../components/RowActionButton';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { releaseFromTickler } from '../../db/itemMutations';
-import { Chip, IconButton, Text, Toast, Tooltip } from '../../designSystem';
+import { IconButton, Text, Toast, Tooltip } from '../../designSystem';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useListGhosts } from '../../hooks/useListGhosts';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
@@ -58,14 +60,10 @@ function TicklerPage() {
     }
 
     const header = (
-        <div className={styles.header}>
-            <Text variant="title">
-                Tickler
-                {liveTicklerCount > 0 && <Chip label={liveTicklerCount} className={styles.countChip} />}
-            </Text>
+        <ListPageHeader title="Tickler" count={liveTicklerCount}>
             {/* "Syncing account…" while a newly-added account bootstraps; surfaces even when the list already has items. */}
             <AccountSyncChip />
-        </div>
+        </ListPageHeader>
     );
 
     if (ticklerItems.length === 0) {
@@ -76,9 +74,7 @@ function TicklerPage() {
                 {isInitialSyncing ? (
                     <ListSkeleton />
                 ) : (
-                    <Text tone="secondary" className={styles.emptyMessage}>
-                        No items are snoozed. Items hidden with "ignore before" will appear here.
-                    </Text>
+                    <ListEmptyMessage>No items are snoozed. Items hidden with "ignore before" will appear here.</ListEmptyMessage>
                 )}
             </div>
         );

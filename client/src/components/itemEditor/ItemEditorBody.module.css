@@ -8,7 +8,7 @@
 /* Weekly review: ~10 stacked sections turn the 1rem gap into ~160px of pure whitespace inside a
  * card whose visible height is only about 100dvh - 13.6rem. Halving it is the single biggest
  * vertical saving available without touching any content. */
-.bodyReview {
+.body[data-review] {
     gap: var(--space-2);
 
     /* The global 60vh ceiling is sized for the item PAGE, where notes own the viewport. In the
@@ -63,16 +63,16 @@
     overflow-y: auto;
 }
 
-/* Review: the 7.5rem floor is a comfortable editing target but pure waste when scanning — a
- * 3-line note should occupy 3 lines. The review's 30vh scroll cap (set on .bodyReview) still
- * applies above. */
-.bodyReview .pagePreview {
-    min-block-size: 0;
-}
-
 .pagePreview:focus-visible {
     outline: var(--focus-ring-width) solid var(--focus-ring-color);
     outline-offset: 1px;
+}
+
+/* Review: the 7.5rem floor is a comfortable editing target but pure waste when scanning — a
+ * 3-line note should occupy 3 lines. The review's 30vh scroll cap (set on .body[data-review]) still
+ * applies above. */
+.body[data-review] .pagePreview {
+    min-block-size: 0;
 }
 
 /* Same uppercase-caption style as the Status section, but kept under its own class so renaming
@@ -101,14 +101,9 @@
 
 /* Portaled variant: fills the host bar's content slot so `margin-inline-end: auto` children (the
  * weekly review's nav arrows) anchor to the slot's start edge while the buttons keep to the end. */
-.stretchedActions {
+.inlineActions[data-stretched] {
     flex: 1;
     min-inline-size: 0;
-}
-
-/* The disabled Save button's tooltip anchor — inline so it sizes to the button. */
-.tooltipAnchor {
-    display: inline-flex;
 }
 
 /* Bottom meta row: created timestamp at the start, the copiable item id pushed to the end. */

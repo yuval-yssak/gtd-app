@@ -3,7 +3,8 @@
  *
  * Colours come from tokens, geometry is RTL-safe (logical properties only), component modules
  * never style elements, no `!important` (the `@layer gtd.*` order makes it unnecessary), and
- * z-index only through the shared `--z-*` scale. Ported from realtime-app's gate.
+ * z-index and font-size only through the shared `--z-*` scale and `--type-*` ramp. Ported from
+ * realtime-app's gate.
  *
  * Deliberate exceptions use `stylelint-disable-next-line <rule>` with a comment saying why.
  */
@@ -42,9 +43,11 @@ const tokenDisciplineRules = {
 
     'declaration-no-important': true,
 
-    // z-index must come from the shared scale.
+    // z-index from the shared scale; font-size from the type ramp (`inherit` and `calc()` for a
+    // size derived from a token — a glyph scaled to its row).
     'declaration-property-value-allowed-list': {
         'z-index': ['/^var\\(--z-/', 'auto'],
+        'font-size': ['/^var\\(--type-/', 'inherit', '/^calc\\(/'],
     },
 
     // Repo convention: camelCase classes (`styles.editIcon`).
@@ -65,8 +68,7 @@ export default {
             },
         },
         {
-            // App CSS (pages and app components): same rules, plus the type ramp is mandatory, and type
-            // selectors are allowed below a class only — app surfaces style markup they don't author
+            // App CSS (pages and app components): same rules, but type selectors are allowed below a class only — app surfaces style markup they don't author
             // (rendered markdown, svg icons, a DS list's <ul>).
             files: ['src/**/*.module.css', '!src/designSystem/**'],
             extends: ['stylelint-config-standard'],
@@ -77,10 +79,6 @@ export default {
                 'property-no-unknown': [true, { ignoreProperties: ['composes'] }],
                 // CodeMirror's own `cm-*` classes, reached through :global().
                 'selector-class-pattern': ['^([a-z][a-zA-Z0-9]*|cm-[a-zA-Z-]+)$', { message: 'Expected class selector to be camelCase' }],
-                'declaration-property-value-allowed-list': {
-                    ...tokenDisciplineRules['declaration-property-value-allowed-list'],
-                    'font-size': ['/^var\\(--type-/', 'inherit', '/^calc\\(/'],
-                },
             },
         },
         {

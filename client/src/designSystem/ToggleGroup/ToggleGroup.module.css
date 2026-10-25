@@ -33,12 +33,12 @@
         &[data-pressed] {
             background-color: var(--color-bg-surface);
             color: var(--color-text-primary);
-            box-shadow: 0 1px 2px var(--color-state-pressed);
+            box-shadow: var(--shadow-control);
         }
 
         &:focus-visible {
             outline: var(--focus-ring-width) solid var(--focus-ring-color);
-            outline-offset: 1px;
+            outline-offset: var(--focus-ring-offset-tight);
         }
 
         &[data-disabled] {

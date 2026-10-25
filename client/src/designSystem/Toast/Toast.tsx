@@ -34,7 +34,9 @@ type ToastProps = {
 export function ensureToastRegion(placement: ToastPlacement = 'start') {
     const id = `gtd-toast-region-${placement}`;
     const existing = document.getElementById(id);
-    if (existing) return existing;
+    if (existing) {
+        return existing;
+    }
     const region = document.createElement('div');
     region.id = id;
     region.setAttribute('role', 'status');

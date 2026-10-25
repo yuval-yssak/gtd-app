@@ -2,11 +2,12 @@ import { createFileRoute } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import { ArrowRight, CircleCheck } from 'lucide-react';
 import { useState, useTransition } from 'react';
+import { DetailNotFound } from '../../components/DetailNotFound';
+import { DetailPageHeader } from '../../components/DetailPageHeader';
 import { RoutineEditorBody } from '../../components/routineEditor/RoutineEditorBody';
-import { RoutinePageHeader } from '../../components/routineEditor/RoutinePageHeader';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone, FROM_GMAIL_READONLY_MESSAGE } from '../../db/itemMutations';
-import { Button, Card, Chip, Text, Toast } from '../../designSystem';
+import { Button, Card, Chip, Toast } from '../../designSystem';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useScrollToTopOnMount } from '../../hooks/useListScrollRestoration';
 import { useNavigateBack } from '../../hooks/useNavigateBack';
@@ -102,11 +103,8 @@ function RoutinePage() {
     if (!routine || !account) {
         return (
             <div className={styles.page} data-testid="routinePageWrapper">
-                <RoutinePageHeader title="Edit routine" onBack={goBack} />
-                <div className={styles.notFound}>
-                    <Text tone="secondary">Routine not found — it may have been deleted.</Text>
-                    <Button onClick={goBack}>Go back</Button>
-                </div>
+                <DetailPageHeader title="Edit routine" onBack={goBack} />
+                <DetailNotFound message="Routine not found — it may have been deleted." actionLabel="Back to Routines" onAction={goBack} />
             </div>
         );
     }
@@ -118,7 +116,7 @@ function RoutinePage() {
 
     return (
         <div className={styles.page} data-testid="routinePageWrapper">
-            <RoutinePageHeader title="Edit routine" onBack={goBack} idForCopy={routine._id} />
+            <DetailPageHeader title="Edit routine" onBack={goBack} idForCopy={routine._id} />
             <NextItemLink routine={routine} items={allItems} />
             <Card padding="none" className={styles.card}>
                 <RoutineEditorBody

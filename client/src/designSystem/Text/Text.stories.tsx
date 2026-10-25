@@ -26,11 +26,4 @@ export const Ramp: Story = {
 
 export const Secondary: Story = { args: { variant: 'bodySm', tone: 'secondary' } };
 export const ErrorTone: Story = { args: { variant: 'caption', tone: 'error', children: 'Could not save' } };
-export const Truncated: Story = {
-    args: { truncate: true, children: 'A very long title that would otherwise wrap onto several lines in a narrow column' },
-    render: (args) => (
-        <div style={{ inlineSize: '14rem' }}>
-            <Text {...args} />
-        </div>
-    ),
-};
+export const DisabledTone: Story = { args: { variant: 'bodySm', tone: 'disabled', children: 'Not connected' } };

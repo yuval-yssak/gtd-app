@@ -5,17 +5,16 @@ import { type ComponentProps, type ReactNode, type RefObject, useRef } from 'rea
 import { MODAL_POPUP_ATTR } from '../../lib/keyboardRegionDom';
 import styles from './Dialog.module.css';
 
-export type DialogCloseReason = 'escapeKey' | 'backdropClick' | 'closeButton' | 'other';
+export type DialogCloseReason = 'escapeKey' | 'backdropClick' | 'other';
 
 const REASON_BY_BASE_UI: Record<string, DialogCloseReason> = {
     'escape-key': 'escapeKey',
     'outside-press': 'backdropClick',
-    'close-press': 'closeButton',
 };
 
 type SharedDialogProps = {
     open: boolean;
-    /** Escape, backdrop press (Dialog only) or a `DialogClose` part asked to close. */
+    /** Escape or a backdrop press (Dialog only) asked to close; the caller's own buttons close it by state. */
     onClose?: ((reason: DialogCloseReason) => void) | undefined;
     /** Max width: xs ≈ 28rem, sm ≈ 37.5rem, md ≈ 56rem — MUI's maxWidth steps. */
     size?: 'xs' | 'sm' | 'md' | undefined;
@@ -111,9 +110,4 @@ export function DialogContent({ className, ...rest }: ComponentProps<'div'>) {
 
 export function DialogActions({ className, ...rest }: ComponentProps<'div'>) {
     return <div {...rest} className={clsx(styles.actions, className)} />;
-}
-
-/** Wraps a button so pressing it closes the dialog through `onClose('closeButton')`. */
-export function DialogClose({ render }: { render: ComponentProps<typeof BaseDialog.Close>['render'] }) {
-    return <BaseDialog.Close render={render} />;
 }

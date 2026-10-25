@@ -17,7 +17,6 @@ type TooltipProps = {
      */
     children: TriggerElement;
     placement?: 'top' | 'bottom' | 'left' | 'right' | undefined;
-    disabled?: boolean | undefined;
 };
 
 /**
@@ -25,14 +24,23 @@ type TooltipProps = {
  * `title` becomes the trigger's `aria-label` unless the trigger already has one. Tooltips never
  * open on touch — information a phone user needs must not live only here.
  */
-export function Tooltip({ title, children, placement = 'bottom', disabled }: TooltipProps) {
-    const [isOpen, setIsOpen] = useState(false);
+export function Tooltip({ title, children, placement = 'bottom' }: TooltipProps) {
     if (title === '' || title === null || title === undefined) {
         return children;
     }
+    // A separate component so its open state unmounts with the title: an emptied title that comes
+    // back must not find the tooltip still latched open from a hover that has since ended.
+    return (
+        <TitledTooltip title={title} placement={placement}>
+            {children}
+        </TitledTooltip>
+    );
+}
+
+function TitledTooltip({ title, children, placement }: Required<TooltipProps>) {
+    const [isOpen, setIsOpen] = useState(false);
     return (
         <BaseTooltip.Root
-            disabled={disabled ?? false}
             open={isOpen}
             onOpenChange={(next, details) => {
                 letEscapeReachPage(next, details);

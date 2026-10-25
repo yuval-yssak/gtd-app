@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { buildClarifyToDoneOpts, decideSavePath } from '../components/editItemDialogLogic';
+import { buildClarifyToDoneOpts, decideSavePath } from '../components/itemEditor/itemEditorLogic';
 
 // Locks in the item editor Save invariants that fix the cross-account corruption bug:
 // - ownerChanged && statusChanged → block (the server's reassign path doesn't run the

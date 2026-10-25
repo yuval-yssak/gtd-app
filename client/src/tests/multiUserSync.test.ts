@@ -591,6 +591,23 @@ describe('syncAllLoggedInUsers', () => {
         expect(active?.userId).toBe('user-a');
     });
 
+    it('does not restore an account that was removed from the device while the pass ran', async () => {
+        await seedAccount(db, 'user-a', 'a@example.com');
+        await seedAccount(db, 'user-b', 'b@example.com');
+        await db.put('activeAccount', { userId: 'user-a' }, 'active');
+        // A goes away mid-pass (signed out / evaporated) and B becomes the device's active account.
+        vi.mocked(fetchSyncOps).mockImplementationOnce(async () => {
+            await db.delete('accounts', 'user-a');
+            await db.put('activeAccount', { userId: 'user-b' }, 'active');
+            return { ops: [], serverTs: '2025-01-02T00:00:00.000Z', serverId: '' };
+        });
+
+        await syncAllLoggedInUsers(db);
+
+        const active = await db.get('activeAccount', 'active');
+        expect(active?.userId).toBe('user-b');
+    });
+
     it('keeps the IDB active account when it has no live session to pivot back to (it needs re-login, not a silent switch)', async () => {
         await seedAccount(db, 'user-a', 'a@example.com');
         await seedAccount(db, 'user-b', 'b@example.com');

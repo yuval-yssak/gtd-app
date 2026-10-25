@@ -1,0 +1,4 @@
+/* Sized to the button it wraps. */
+.anchor {
+    display: inline-flex;
+}

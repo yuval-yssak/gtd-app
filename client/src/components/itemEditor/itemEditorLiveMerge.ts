@@ -1,7 +1,7 @@
 import dayjs from 'dayjs';
 import type { StoredItem, StoredItemBrief } from '../../types/MyDB';
 import { type CalendarFormState, emptyCalendar, type NextActionFormState, type SomedayMaybeFormState, type WaitingForFormState } from '../clarify/types';
-import type { ClarifyDestination, EditableStatus } from '../editItemDialogLogic';
+import type { ClarifyDestination, EditableStatus } from './itemEditorLogic';
 
 /**
  * Live-merge support for the item editor: while the editor is open, sync can update the item

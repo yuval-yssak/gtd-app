@@ -6,31 +6,8 @@
     border-radius: var(--radius-sm);
 }
 
-.countChip {
-    margin-inline-start: var(--space-3);
-    vertical-align: middle;
-}
-
-.pageHeader {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-block-end: var(--space-6);
-}
-
-.titleGroup {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-}
-
 .searchField {
     margin-block-end: var(--space-4);
-}
-
-.emptyState {
-    margin-block-start: var(--space-12);
-    text-align: center;
 }
 
 .bucketLabel {
@@ -79,5 +56,5 @@
 
 /* Paused (archived) routines read as background noise until deliberately expanded. */
 .pausedRow {
-    opacity: 0.6;
+    opacity: var(--opacity-parked);
 }

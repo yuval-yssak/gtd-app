@@ -1,13 +1,10 @@
 declare const styles: {
     readonly capture: string;
     readonly captureNotes: string;
-    readonly countChip: string;
-    readonly emptyMessage: string;
     readonly list: string;
     readonly mobileRow: string;
     readonly notesEmpty: string;
     readonly notesPreview: string;
-    readonly pageHeader: string;
     readonly revealLeft: string;
     readonly revealRight: string;
     readonly sheetAction: string;
@@ -17,6 +14,5 @@ declare const styles: {
     readonly swipeItem: string;
     readonly swipeWrapper: string;
     readonly tabs: string;
-    readonly titleGroup: string;
 };
 export = styles;

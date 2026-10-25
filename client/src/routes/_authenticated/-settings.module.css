@@ -6,36 +6,6 @@
     margin-block-end: var(--space-6);
 }
 
-.section {
-    margin-block-end: var(--space-6);
-}
-
-/* The page's last card has nothing below it to keep apart from. */
-.section:last-child {
-    margin-block-end: 0;
-}
-
-.sectionContent {
-    padding: var(--space-4) var(--space-5);
-}
-
-.sectionHeading {
-    margin-block-end: var(--space-1);
-}
-
-.sectionDescription {
-    margin-block-end: var(--space-4);
-}
-
-/* A description-only card (Account) has no controls under it. */
-.sectionDescription:last-child {
-    margin-block-end: 0;
-}
-
-.divider {
-    margin-block: var(--space-3);
-}
-
 .horizonSelect {
     inline-size: 10rem;
 }

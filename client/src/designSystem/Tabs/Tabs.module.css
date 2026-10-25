@@ -49,4 +49,10 @@
             inset-inline-start var(--duration-normal) var(--ease-standard),
             inline-size var(--duration-normal) var(--ease-standard);
     }
+
+    @media (prefers-reduced-motion: reduce) {
+        .indicator {
+            transition: none;
+        }
+    }
 }

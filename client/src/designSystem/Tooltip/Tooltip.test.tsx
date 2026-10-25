@@ -186,6 +186,29 @@ describe('Tooltip', () => {
         expect(screen.queryByRole('tooltip')).toBeNull();
     });
 
+    // A title that empties while the tooltip shows (a hint that only applies in some states) must
+    // not leave it latched open: when the title returns, nothing is hovering any more.
+    it('does not reopen by itself when an emptied title comes back', async () => {
+        const user = userEvent.setup();
+        const withTitle = (title: string) => (
+            <Tooltip title={title}>
+                <IconButton aria-label="Edit">
+                    <svg />
+                </IconButton>
+            </Tooltip>
+        );
+        const { rerender } = render(withTitle('Edit (e)'));
+        await user.hover(screen.getByRole('button'));
+        await screen.findByRole('tooltip');
+
+        rerender(withTitle(''));
+        await user.unhover(screen.getByRole('button'));
+        rerender(withTitle('Edit (e)'));
+
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        expect(screen.queryByRole('tooltip')).toBeNull();
+    });
+
     it('renders the bare child when the title is empty', () => {
         render(
             <Tooltip title="">

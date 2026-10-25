@@ -45,10 +45,9 @@ The server is never the source of truth during a session — IndexedDB is. The s
 src/
 ├── main.tsx                         # Opens IDB, mounts dev tools, renders App
 ├── App.tsx                          # Module-level TanStack Router singleton, injects db context
-├── index.css                        # Global CSS: variables, scrollbar, responsive font scaling
 ├── serviceWorker.ts                 # SW: precaching, background sync, Web Push handler
 ├── routes/
-│   ├── __root.tsx                   # Root layout: MUI theme, CssVarsProvider
+│   ├── __root.tsx                   # Root route: Outlet + router devtools
 │   ├── _authenticated.tsx           # Protected layout: session guard, data boot, SSE, sync
 │   ├── -authenticatedRouteGuard.tsx # beforeLoad: checks cached account, verifies session
 │   ├── login.tsx                    # OAuth sign-in page
@@ -56,9 +55,9 @@ src/
 │   └── _authenticated/             # 13 app screens (inbox, next-actions, calendar, etc.)
 ├── contexts/
 │   └── AppDataProvider.tsx          # Shared state: account, items, workContexts, people, routines
+├── designSystem/                    # Base UI + CSS Modules components, tokens/ (variables + reset)
 ├── components/                      # 30+ components with .stories.tsx companions
-│   ├── AppNav.tsx                   # Desktop sidebar + mobile bottom nav
-│   ├── ClarifyDialog.tsx            # GTD inbox clarification dialog
+│   ├── AppNav.tsx                   # Desktop: permanent sidebar. Mobile: bottom nav (4 pages + More) + the full nav in a slide-in Drawer
 │   ├── StatusBar.tsx                # Sync status indicator
 │   ├── clarify/                     # Clarification form field components
 │   ├── routines/                    # Routine management components
@@ -246,22 +245,23 @@ The app is a PWA using `vite-plugin-pwa` with the `injectManifest` strategy (Wor
 
 ## Styling
 
+- **Design system** in `src/designSystem/`: Base UI components styled by typed CSS Modules, one token file (`tokens/variables.css`) and a layered reset (`tokens/base.css`). Its [`CLAUDE.md`](src/designSystem/CLAUDE.md) holds the layer order, token rules and component contracts. MUI, Emotion and `classnames` imports are banned by Biome.
 - **CSS Modules** for all custom styling. Auto-generated `.d.ts` types via `generate-typed-css-modules`.
-- **MUI theme** (`extendTheme` with light + dark color schemes) in `__root.tsx`. Attribute-based selector: `[data-color-scheme="dark"]`.
-- **`sx` prop** only for layout-specific overrides on wrapper elements, never for component appearance.
-- **No** inline styles, styled-components, Tailwind, or CSS-in-JS.
+- **Colour scheme:** `lib/colorScheme.ts` stamps `<html data-theme="light|dark">` (System follows the OS); the tokens switch on it.
+- **No** styled-components, Tailwind or CSS-in-JS; inline `style` only for genuinely dynamic values, preferably as a custom property.
+- `npm run lint:css` (stylelint) enforces token colours, logical properties, the `--z-*` scale and the `--type-*` ramp (no literal `font-size`) in every CSS file under `src/` — design-system and app modules alike.
 
 **CSS Module rules:**
 - Always dot notation: `styles.navLink` (never `styles["navLink"]`)
-- Use the `classnames` package for combining classes (never `.join(" ")`)
+- Use `clsx` for combining classes (never `.join(" ")`)
 
 **Responsive breakpoints:**
-- `56.25rem` (900px) — desktop/mobile layout switch
-- Smaller breakpoints for tiny screens (font scaling in `index.css`)
+- `900px` — desktop/mobile layout switch (`hooks/useIsMobile.ts` in JS, a literal `@media (width >= 900px)` in CSS)
+- Smaller breakpoints for tiny screens (rem downscaling in `designSystem/tokens/base.css`)
 
 ## Storybook
 
-Every component has a `.stories.tsx` companion file.
+Every component has a `.stories.tsx` companion file; design-system components have one story per state.
 
 ```bash
 npm run storybook        # dev server on port 6006
@@ -270,7 +270,9 @@ npm run build-storybook  # static build
 
 **Config (`.storybook/main.ts`):**
 - Filters out TanStackRouter and VitePWA plugins (not needed in Storybook context)
-- Forces `#api/syncClient` to real implementation to avoid Vitest context leaking into browser
+- Forces every `#api/*` alias (`syncClient`, `syncApi`, `accountApi` — read from `package.json`'s `imports` map, so a new seam is covered automatically) to its real implementation, so the `test`-condition `.mock.ts` (which imports Vitest) never reaches the browser
+
+**Preview (`.storybook/preview.tsx`):** loads the design-system reset and Inter, and adds a **Theme** toolbar (Light / Dark) that stamps `data-theme` on `<html>` the way `lib/colorScheme.ts` does in the app, so every story renders in both palettes.
 
 **Addons:** `@storybook/addon-a11y` for accessibility testing.
 

@@ -1,6 +1,6 @@
 import { ArrowLeft, ArrowRight } from 'lucide-react';
 import { IconButton } from '../../designSystem';
-import { DisabledCapableTooltip } from './DisabledCapableTooltip';
+import { DisabledCapableTooltip } from '../DisabledCapableTooltip';
 import styles from './stageLayout.module.css';
 
 /** The forward arrow's meaning is contextual (live queue: "skip"; revisit view: "toward the live queue"), so the caller names it. */

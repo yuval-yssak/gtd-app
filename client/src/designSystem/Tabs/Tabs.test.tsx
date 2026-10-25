@@ -3,7 +3,6 @@ import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ToggleGroup } from '../ToggleGroup/ToggleGroup';
 import { Tabs } from './Tabs';
 
 afterEach(cleanup);
@@ -45,27 +44,5 @@ describe('Tabs', () => {
         screen.getByRole('tab', { name: 'Edit' }).focus();
         await userEvent.keyboard('{ArrowRight}');
         expect(document.activeElement).toBe(screen.getByRole('tab', { name: 'Preview' }));
-    });
-});
-
-describe('ToggleGroup', () => {
-    const OPTIONS = [
-        { value: 'never', label: 'Never' },
-        { value: 'after', label: 'After' },
-    ] as const;
-
-    it('reports the pressed segment', async () => {
-        const onValueChange = vi.fn();
-        render(<ToggleGroup aria-label="Ends" value="never" onValueChange={onValueChange} options={OPTIONS} />);
-        await userEvent.click(screen.getByRole('button', { name: 'After' }));
-        expect(onValueChange).toHaveBeenCalledWith('after');
-    });
-
-    it('keeps the current choice when its own segment is pressed again (never empty)', async () => {
-        const onValueChange = vi.fn();
-        render(<ToggleGroup aria-label="Ends" value="never" onValueChange={onValueChange} options={OPTIONS} />);
-        await userEvent.click(screen.getByRole('button', { name: 'Never' }));
-        expect(onValueChange).not.toHaveBeenCalled();
-        expect(screen.getByRole('button', { name: 'Never' }).getAttribute('aria-pressed')).toBe('true');
     });
 });

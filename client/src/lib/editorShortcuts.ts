@@ -1,4 +1,4 @@
-import type { ClarifyDestination } from '../components/editItemDialogLogic';
+import type { ClarifyDestination } from '../components/itemEditor/itemEditorLogic';
 
 /**
  * Keyboard shortcuts inside the item editor, as a pure resolver (unit-tested): Cmd/Ctrl+Enter

@@ -37,10 +37,10 @@ import {
     Spinner,
     Switch,
     Text,
-    Tooltip,
 } from '../../designSystem';
 import { hasAtLeastOne, type NonEmptyArray } from '../../lib/typeUtils';
 import type { StoredAccount } from '../../types/MyDB';
+import { DisabledCapableTooltip } from '../DisabledCapableTooltip';
 import styles from './CalendarIntegrations.module.css';
 import { buildCalendarPickerRows, defaultCalendarId } from './calendarPickerOrder';
 
@@ -651,22 +651,17 @@ function IntegrationActions({ isSyncing, isRepairing, hasAvailableCalendars, act
                     Add calendar
                 </Button>
             )}
-            {/* Tooltip children are wrapped in <span> so the tooltip keeps working while the button is disabled.
-                `loading` swaps the start icon for a spinner and disables the button. */}
-            <Tooltip title="Fetch the latest changes from Google Calendar right now, without waiting for automatic sync. Also pushes app-created items that haven't reached Google yet.">
-                <span>
-                    <Button variant="outline" size="sm" onClick={actions.onSyncNow} loading={isSyncing}>
-                        {isSyncing ? 'Syncing…' : 'Sync now'}
-                    </Button>
-                </span>
-            </Tooltip>
-            <Tooltip title="Reconnect items and routines that lost their link to Google Calendar — for example after disconnecting and reconnecting an account. Runs for every signed-in account; safe to use any time.">
-                <span>
-                    <Button variant="outline" size="sm" onClick={actions.onRepair} loading={isRepairing} data-testid="repairSyncButton">
-                        {isRepairing ? 'Repairing…' : 'Repair sync'}
-                    </Button>
-                </span>
-            </Tooltip>
+            {/* `loading` disables the button, so the tooltip anchors to a wrapper that still gets pointer events. */}
+            <DisabledCapableTooltip title="Fetch the latest changes from Google Calendar right now, without waiting for automatic sync. Also pushes app-created items that haven't reached Google yet.">
+                <Button variant="outline" size="sm" onClick={actions.onSyncNow} loading={isSyncing}>
+                    {isSyncing ? 'Syncing…' : 'Sync now'}
+                </Button>
+            </DisabledCapableTooltip>
+            <DisabledCapableTooltip title="Reconnect items and routines that lost their link to Google Calendar — for example after disconnecting and reconnecting an account. Runs for every signed-in account; safe to use any time.">
+                <Button variant="outline" size="sm" onClick={actions.onRepair} loading={isRepairing} data-testid="repairSyncButton">
+                    {isRepairing ? 'Repairing…' : 'Repair sync'}
+                </Button>
+            </DisabledCapableTooltip>
             <Button variant="outline" size="sm" tone="danger" onClick={actions.onDisconnect}>
                 Disconnect
             </Button>
@@ -976,6 +971,8 @@ function DisconnectDialog({ open, integrationId, onClose, onDisconnected, withAc
     }
 
     return (
+        // A Dialog, not an AlertDialog: this asks a keep-or-remove question (the radio group) before
+        // its confirm, so focus belongs on the first choice rather than on the dialog itself.
         <Dialog open={open} onClose={onClose} size="sm" fullWidth>
             <DialogTitle>Disconnect Google Calendar</DialogTitle>
             <DialogContent>

@@ -1,3 +1,4 @@
+import dayjs from 'dayjs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { closeSseConnections, getConnectedSseUserIds, getOpenSseUserIds, openSseConnections, reopenSseConnections } from '../db/sseClient';
 
@@ -104,14 +105,35 @@ describe('openSseConnections', () => {
         expect(onUpdate).not.toHaveBeenCalled();
     });
 
-    it('reports again after an automatic reconnect, which also opens a gap', () => {
-        const onConnected = vi.fn();
-        openSseConnections({ onUpdate: () => {}, onConnected, localDeviceId: 'dev-1' }, ['user-a']);
-        created[0]?.onopen?.();
-        created[0]?.onerror?.(new Event('error'));
-        created[0]?.onopen?.();
+    describe('reconnects', () => {
+        beforeEach(() => {
+            vi.useFakeTimers();
+            vi.setSystemTime(dayjs('2026-10-25T10:00:00Z').valueOf());
+        });
+        afterEach(() => {
+            vi.useRealTimers();
+        });
 
-        expect(onConnected).toHaveBeenCalledTimes(2);
+        /** Opens one channel, lets it drop, and reopens it `downForMs` later. */
+        function reconnectAfter(downForMs: number) {
+            const onConnected = vi.fn();
+            openSseConnections({ onUpdate: () => {}, onConnected, localDeviceId: 'dev-1' }, ['user-a']);
+            created[0]?.onopen?.();
+            created[0]?.onerror?.(new Event('error'));
+            vi.advanceTimersByTime(downForMs);
+            created[0]?.onopen?.();
+            return onConnected;
+        }
+
+        // The server ends every stream after 2 minutes and EventSource reconnects ~3s later. A full
+        // multi-account catch-up on each of those would multiply billed Worker requests per tab.
+        it('does not catch up again after a scheduled stream rotation', () => {
+            expect(reconnectAfter(3_000)).toHaveBeenCalledTimes(1);
+        });
+
+        it('catches up again after an outage longer than a rotation — broadcasts in that gap reached no one', () => {
+            expect(reconnectAfter(30_000)).toHaveBeenCalledTimes(2);
+        });
     });
 
     it('ignores echoed events (sourceDeviceId matches localDeviceId)', () => {

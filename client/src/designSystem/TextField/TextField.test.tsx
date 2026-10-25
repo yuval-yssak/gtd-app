@@ -66,6 +66,16 @@ describe('TextField', () => {
         expect(ref.current).toBe(input);
     });
 
+    // The textarea itself has no border (the shell draws it), so the only slack is one pixel for
+    // scrollHeight's integer rounding of a fractional line box.
+    it('sizes a multiline field to its content plus one pixel of rounding slack', async () => {
+        render(<TextField label="Notes" multiline />);
+        const notes = screen.getByRole('textbox', { name: 'Notes' });
+        Object.defineProperty(notes, 'scrollHeight', { configurable: true, value: 48 });
+        await userEvent.type(notes, 'a');
+        expect(notes.style.blockSize).toBe('49px');
+    });
+
     it('puts data-testid on the field root, as MUI did', () => {
         render(<TextField label="Title" data-testid="titleField" />);
         expect(screen.getByTestId('titleField').contains(screen.getByRole('textbox'))).toBe(true);

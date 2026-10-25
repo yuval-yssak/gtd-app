@@ -66,9 +66,9 @@ function revalidateInBackground(): void {
 }
 
 /**
- * Suspends until /calendar/all-sync-configs returns. Wrap call sites in a small Suspense boundary
- * (typically a CircularProgress in place of the calendar dropdown) so the rest of the dialog
- * renders immediately. Result is module-cached so reopening a dialog reuses the resolved options.
+ * Suspends until /calendar/all-sync-configs returns; a Suspense boundary around the call site
+ * decides what shows meanwhile. Result is module-cached so reopening an editor reuses the
+ * resolved options.
  */
 export function useCalendarOptions(): { options: CalendarOption[] } {
     const options = use(loadCalendarOptions());
@@ -76,9 +76,9 @@ export function useCalendarOptions(): { options: CalendarOption[] } {
 }
 
 /**
- * Kicks the network round-trip off in the background so dialogs that later call
+ * Kicks the network round-trip off in the background so editors that later call
  * useCalendarOptions() find the cache warm. Called from the auth-layer boot effect — by the
- * time the user opens a clarify or edit dialog, the options are usually already resolved.
+ * time the user opens an item or routine editor, the options are usually already resolved.
  * Safe to call multiple times; subsequent calls return the cached promise.
  */
 export function prefetchCalendarOptions(): void {

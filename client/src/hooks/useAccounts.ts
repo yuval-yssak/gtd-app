@@ -55,6 +55,28 @@ export async function performLocalAccountSwitch(db: IDBPDatabase<MyDB>, userId: 
 }
 
 /**
+ * Signs every account out of this device and wipes their local rows. Inside the session gate, like
+ * the switch: a sync pass in flight would otherwise write pulled rows back after the wipe and
+ * re-point the active account and cookie when it ends. The gate's hard timeout runs from when this
+ * is queued, so a slow pass plus slow sign-out requests can still outlast it (the gate's known limit).
+ */
+export function performSignOutAll(db: IDBPDatabase<MyDB>) {
+    return withSessionGate(async () => {
+        // Best-effort: drop the (deviceId, activeUserId) join row before Better Auth tears down
+        // every session on this device. Other accounts' join rows fall through to the
+        // 410-on-push and stale-device cleanup paths.
+        const deviceId = await getOrCreateDeviceId(db);
+        await signOutDevice(deviceId);
+        await authClient.signOut();
+        // Wipe each account's IDB rows before clearing the account directory itself —
+        // accounts read first so userIds are in hand, then per-user wipe, then the directory.
+        const accounts = await getAllAccounts(db);
+        await Promise.all(accounts.map((a) => wipeUserData(a.id, db)));
+        await clearAllAccounts(db);
+    });
+}
+
+/**
  * Pure core of `reauthForUserId`, extracted so it's testable without a DOM. Looks up the account by
  * id and, if found, invokes `startSignIn` with it — returning whether a re-auth was kicked off. The
  * `startSignIn` callback is injected so tests can assert the target account without driving a real
@@ -252,44 +274,38 @@ export function useAccounts(db: IDBPDatabase<MyDB>): AccountsState {
     }, [db, activeAccount]);
 
     const signOutCurrent = useCallback(async () => {
-        await withPending('signingOut', async () => {
-            const { currentSessionToken, sessions } = await revokeCurrentFromIDB();
+        // Inside the session gate for the same reason as performSignOutAll: a pass in flight would
+        // write the removed account's rows back and re-point the active account when it ends.
+        await withPending('signingOut', () =>
+            withSessionGate(async () => {
+                const { currentSessionToken, sessions } = await revokeCurrentFromIDB();
 
-            const remaining = await getAllAccounts(db);
-            const next = remaining[0];
+                const remaining = await getAllAccounts(db);
+                const next = remaining[0];
 
-            if (!next) {
-                // Drop the (deviceId, currentUserId) join row before authClient.signOut — the
-                // signoutDevice endpoint authenticates via the still-active current session.
-                const deviceId = await getOrCreateDeviceId(db);
-                await signOutDevice(deviceId);
-                await authClient.signOut();
-                window.location.href = '/login';
-                return;
-            }
+                if (!next) {
+                    // Drop the (deviceId, currentUserId) join row before authClient.signOut — the
+                    // signoutDevice endpoint authenticates via the still-active current session.
+                    const deviceId = await getOrCreateDeviceId(db);
+                    await signOutDevice(deviceId);
+                    await authClient.signOut();
+                    window.location.href = '/login';
+                    return;
+                }
 
-            const targetSession = sessions?.find((s) => s.user.id === next.id);
-            if (targetSession) {
-                await switchToNextAndRevoke(next, currentSessionToken, targetSession.session.token);
-            } else {
-                reauthAsNext(next);
-            }
-        });
+                const targetSession = sessions?.find((s) => s.user.id === next.id);
+                if (targetSession) {
+                    await switchToNextAndRevoke(next, currentSessionToken, targetSession.session.token);
+                } else {
+                    reauthAsNext(next);
+                }
+            }),
+        );
     }, [db, revokeCurrentFromIDB, switchToNextAndRevoke, reauthAsNext, withPending]);
 
     const signOutAll = useCallback(async () => {
         await withPending('signingOutAll', async () => {
-            // Best-effort: drop the (deviceId, activeUserId) join row before Better Auth tears down
-            // every session on this device. Other accounts' join rows fall through to the
-            // 410-on-push and stale-device cleanup paths.
-            const deviceId = await getOrCreateDeviceId(db);
-            await signOutDevice(deviceId);
-            await authClient.signOut();
-            // Wipe each account's IDB rows before clearing the account directory itself —
-            // accounts read first so userIds are in hand, then per-user wipe, then the directory.
-            const accounts = await getAllAccounts(db);
-            await Promise.all(accounts.map((a) => wipeUserData(a.id, db)));
-            await clearAllAccounts(db);
+            await performSignOutAll(db);
             window.location.href = '/login';
         });
     }, [db, withPending]);

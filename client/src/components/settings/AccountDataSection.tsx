@@ -3,12 +3,12 @@ import { useState } from 'react';
 import { AccountApiError, deleteMyAccount, downloadMyData, SESSION_MISMATCH_CODE } from '#api/accountApi';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { evaporateUserAndRecoverGated } from '../../db/evaporateUser';
-import { Button, Card, Dialog, DialogActions, DialogContent, DialogDescription, DialogTitle, Separator, Text, TextField } from '../../designSystem';
+import { Button, Dialog, DialogActions, DialogContent, DialogDescription, DialogTitle, Separator, Text, TextField } from '../../designSystem';
 import { APP_NAME } from '../../lib/appName';
-import styles from '../../routes/_authenticated/-settings.module.css';
 import type { MyDB, StoredAccount } from '../../types/MyDB';
 import sectionStyles from './AccountDataSection.module.css';
 import { describeError, isDeleteConfirmationValid, runAccountDeletion, SESSION_MISMATCH_MESSAGE } from './accountDataSectionLogic';
+import { SettingsSection } from './SettingsSection';
 
 interface Props {
     db: IDBPDatabase<MyDB>;
@@ -39,40 +39,28 @@ export function AccountDataSection({ db, account }: Props) {
     }
 
     return (
-        <Card padding="none" className={styles.section}>
-            <div className={styles.sectionContent}>
-                <Text variant="subtitle" weight="semibold" className={sectionStyles.heading}>
-                    Your data
+        <SettingsSection
+            title="Your data"
+            description={`Download a copy of everything ${APP_NAME} stores for this account as a JSON file, or delete the account and all of its data.`}
+        >
+            <Button variant="outline" size="sm" onClick={onDownloadClicked} disabled={isDownloading || !account} data-testid="downloadMyDataButton">
+                {isDownloading ? 'Preparing…' : 'Download my data'}
+            </Button>
+            {downloadError && (
+                <Text variant="bodySm" tone="error" className={sectionStyles.error} data-testid="downloadMyDataError">
+                    {downloadError}
                 </Text>
-                <Text variant="bodySm" tone="secondary" className={sectionStyles.intro}>
-                    Download a copy of everything {APP_NAME} stores for this account as a JSON file, or delete the account and all of its data.
-                </Text>
-                <Button variant="outline" size="sm" onClick={onDownloadClicked} disabled={isDownloading || !account} data-testid="downloadMyDataButton">
-                    {isDownloading ? 'Preparing…' : 'Download my data'}
-                </Button>
-                {downloadError && (
-                    <Text variant="bodySm" tone="error" className={sectionStyles.error} data-testid="downloadMyDataError">
-                        {downloadError}
-                    </Text>
-                )}
-                <Separator className={styles.divider} />
-                <Text variant="bodySm" tone="secondary" className={sectionStyles.deleteIntro}>
-                    Deleting your account removes your items, routines, people, calendar connections, devices and API tokens from our servers immediately and
-                    permanently. Other accounts signed in on this device are not affected.
-                </Text>
-                <Button
-                    variant="outline"
-                    tone="danger"
-                    size="sm"
-                    onClick={() => setIsDeleteDialogOpen(true)}
-                    disabled={!account}
-                    data-testid="deleteAccountButton"
-                >
-                    Delete my account
-                </Button>
-                {account && <DeleteAccountDialog db={db} account={account} open={isDeleteDialogOpen} onClose={() => setIsDeleteDialogOpen(false)} />}
-            </div>
-        </Card>
+            )}
+            <Separator className={sectionStyles.divider} />
+            <Text variant="bodySm" tone="secondary" className={sectionStyles.deleteIntro}>
+                Deleting your account removes your items, routines, people, calendar connections, devices and API tokens from our servers immediately and
+                permanently. Other accounts signed in on this device are not affected.
+            </Text>
+            <Button variant="outline" tone="danger" size="sm" onClick={() => setIsDeleteDialogOpen(true)} disabled={!account} data-testid="deleteAccountButton">
+                Delete my account
+            </Button>
+            {account && <DeleteAccountDialog db={db} account={account} open={isDeleteDialogOpen} onClose={() => setIsDeleteDialogOpen(false)} />}
+        </SettingsSection>
     );
 }
 

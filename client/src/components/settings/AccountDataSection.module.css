@@ -1,9 +1,5 @@
-.heading {
-    margin-block-end: var(--space-1);
-}
-
-.intro {
-    margin-block-end: var(--space-4);
+.divider {
+    margin-block: var(--space-3);
 }
 
 .deleteIntro {

@@ -22,7 +22,6 @@ import type { AnchorHTMLAttributes, Ref } from 'react';
 import { Badge, Drawer, Text } from '../designSystem';
 import { type RovingRegionApi, useRovingRegion } from '../hooks/useRovingRegion';
 import { APP_NAME } from '../lib/appName';
-import { useNewTabAwareNavigate } from '../lib/newTabNavigation';
 import type { FileRouteTypes } from '../routeTree.gen';
 import type { MyDB } from '../types/MyDB';
 import { AccountSwitcher } from './AccountSwitcher';
@@ -183,7 +182,6 @@ export function AppNav({ isMobileDrawerOpen, setIsMobileDrawerOpen, db }: AppNav
 /** The phone tab bar: the four daily lists plus "More", which opens the drawer. */
 function BottomNav({ onMoreClick }: { onMoreClick: () => void }) {
     const { pathname } = useLocation();
-    const navigateOrNewTab = useNewTabAwareNavigate();
     // "More" is highlighted when the current page is outside the 4 bottom-nav items
     const isBottomNavRoute = bottomNavItems.some((item) => item.to === pathname);
 
@@ -192,18 +190,12 @@ function BottomNav({ onMoreClick }: { onMoreClick: () => void }) {
             {bottomNavItems.map((item) => {
                 const Icon = item.icon;
                 return (
-                    <button
-                        key={item.to}
-                        type="button"
-                        className={styles.bottomNavAction}
-                        data-selected={pathname === item.to || undefined}
-                        aria-current={pathname === item.to ? 'page' : undefined}
-                        // navigateOrNewTab keeps cmd/ctrl-click opening a new tab, like the sidebar links.
-                        onClick={(event) => navigateOrNewTab(event, { to: item.to as never })}
-                    >
+                    // A real link, like the sidebar's: cmd/ctrl-click and "Open in new tab" work natively,
+                    // and TanStack stamps aria-current="page" on the active one.
+                    <NavLink key={item.to} to={item.to} className={styles.bottomNavAction} data-selected={pathname === item.to || undefined}>
                         <Icon size={20} aria-hidden="true" />
                         <span className={styles.bottomNavLabel}>{item.label}</span>
-                    </button>
+                    </NavLink>
                 );
             })}
             <button type="button" className={styles.bottomNavAction} data-selected={!isBottomNavRoute || undefined} onClick={onMoreClick}>

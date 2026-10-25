@@ -2,7 +2,7 @@
  * Single-level undo store for the autosave/save snackbar ("Saved — UNDO").
  *
  * Module-level (not React state) so db-layer callers and editor components can offer undos without
- * a context dependency; the UndoSnackbar component subscribes via useSyncExternalStore.
+ * a context dependency; the UndoToast component subscribes via useSyncExternalStore.
  *
  * Semantics:
  * - At most one offer is live at a time. Offering with the SAME `key` replaces the entry silently —

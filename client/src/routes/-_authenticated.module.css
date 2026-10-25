@@ -13,13 +13,13 @@
     align-items: center;
     gap: var(--space-2);
     min-block-size: 3.5rem;
-    padding: env(safe-area-inset-top, 0) var(--space-4) 0;
+    padding: 0 var(--space-4);
     border-block-end: 1px solid var(--color-border-default);
     background-color: var(--color-bg-surface);
     color: var(--color-text-primary);
 }
 
-/* MUI's md breakpoint (900px) — see hooks/useIsMobile.ts. */
+/* The md breakpoint (900px) — see hooks/useIsMobile.ts. */
 @media (width >= 900px) {
     .mobileAppBar {
         display: none;

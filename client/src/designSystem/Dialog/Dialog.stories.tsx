@@ -32,6 +32,46 @@ export const ShortForm: Story = {
     },
 };
 
+/** The narrowest step (≈28rem): short forms and confirmations. */
+export const SizeXs: Story = {
+    args: {
+        size: 'xs',
+        fullWidth: true,
+        children: (
+            <>
+                <DialogTitle>Sign out?</DialogTitle>
+                <DialogContent>
+                    <DialogDescription>Unsynced changes on this device stay queued until you sign back in.</DialogDescription>
+                </DialogContent>
+                <DialogActions>
+                    <Button tone="neutral">Cancel</Button>
+                    <Button variant="solid">Sign out</Button>
+                </DialogActions>
+            </>
+        ),
+    },
+};
+
+/** The widest step (≈56rem): side-by-side content such as the routine editor. */
+export const SizeMd: Story = {
+    args: {
+        size: 'md',
+        fullWidth: true,
+        children: (
+            <>
+                <DialogTitle>Edit routine</DialogTitle>
+                <DialogContent>
+                    <TextField label="Title" defaultValue="Weekly review" fullWidth />
+                </DialogContent>
+                <DialogActions>
+                    <Button tone="neutral">Cancel</Button>
+                    <Button variant="solid">Save</Button>
+                </DialogActions>
+            </>
+        ),
+    },
+};
+
 export const SystemNotice: Story = {
     args: {
         children: (

@@ -4,6 +4,8 @@ import { useCallback, useMemo, useState } from 'react';
 import { AccountChip } from '../../components/AccountChip';
 import { AccountPicker } from '../../components/AccountPicker';
 import { AccountSyncChip } from '../../components/AccountSyncChip';
+import { ListEmptyMessage } from '../../components/ListEmptyMessage';
+import { ListPageHeader } from '../../components/ListPageHeader';
 import { ListSearchButton, ListSearchField } from '../../components/ListSearch';
 import { ListSkeleton } from '../../components/ListSkeleton';
 import { ListRow, ListRowButton, ListRowText } from '../../components/listRow/ListRow';
@@ -11,7 +13,7 @@ import { PersonEditDialog } from '../../components/people/PersonEditDialog';
 import { RowActionButton } from '../../components/RowActionButton';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { createPerson, removePerson, updatePerson } from '../../db/personMutations';
-import { Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, Text, TextField, Tooltip } from '../../designSystem';
+import { Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, TextField, Tooltip } from '../../designSystem';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useEntityUsage } from '../../hooks/useEntityUsage';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
@@ -181,20 +183,19 @@ function PeoplePage() {
 
     return (
         <div>
-            <div className={styles.pageHeader}>
-                <div className={styles.titleGroup}>
-                    <Text variant="title">
-                        People
-                        {people.length > 0 && <Chip label={people.length} className={styles.countChip} />}
-                    </Text>
-                    {/* "Syncing account…" while a newly-added account bootstraps; surfaces even when the list already has items. */}
-                    <AccountSyncChip />
-                    {people.length > 0 && <ListSearchButton onToggle={search.toggleSearch} testId="peopleSearchButton" />}
-                </div>
-                <Button startIcon={<Plus />} variant="solid" size="sm" onClick={openCreate}>
-                    Add person
-                </Button>
-            </div>
+            <ListPageHeader
+                title="People"
+                count={people.length}
+                action={
+                    <Button startIcon={<Plus />} variant="solid" size="sm" onClick={openCreate}>
+                        Add person
+                    </Button>
+                }
+            >
+                {/* "Syncing account…" while a newly-added account bootstraps; surfaces even when the list already has items. */}
+                <AccountSyncChip />
+                {people.length > 0 && <ListSearchButton onToggle={search.toggleSearch} testId="peopleSearchButton" />}
+            </ListPageHeader>
             {people.length > 0 && search.isOpen && (
                 <ListSearchField
                     value={search.queryInput}
@@ -209,14 +210,10 @@ function PeoplePage() {
                 isInitialSyncing ? (
                     <ListSkeleton />
                 ) : (
-                    <Text tone="secondary" className={styles.emptyState}>
-                        No people yet. Add contacts to reference in Waiting For and items.
-                    </Text>
+                    <ListEmptyMessage>No people yet. Add contacts to reference in Waiting For and items.</ListEmptyMessage>
                 )
             ) : orderedPeople.length === 0 ? (
-                <Text tone="secondary" className={styles.emptyState} data-testid="peopleSearchEmpty">
-                    No people match your search.
-                </Text>
+                <ListEmptyMessage data-testid="peopleSearchEmpty">No people match your search.</ListEmptyMessage>
             ) : (
                 <ul className={styles.list}>
                     {orderedPeople.map((person, idx) => (

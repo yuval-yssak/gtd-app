@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react';
 import { FROM_GMAIL_READONLY_MESSAGE } from '../../db/itemMutations';
 import { type ModifierClickSource, useNewTabAwareNavigate } from '../../lib/newTabNavigation';
 import type { StoredItem } from '../../types/MyDB';
-import type { EditableStatus } from '../editItemDialogLogic';
+import type { EditableStatus } from './itemEditorLogic';
 
 export interface OpenEditorArgs {
     item: StoredItem;

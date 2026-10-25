@@ -93,4 +93,11 @@
         gap: var(--space-2);
         padding: var(--space-3) var(--space-4) var(--space-4);
     }
+
+    @media (prefers-reduced-motion: reduce) {
+        .backdrop,
+        .popup {
+            transition: none;
+        }
+    }
 }

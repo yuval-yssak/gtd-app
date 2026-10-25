@@ -13,7 +13,7 @@ import { NotificationNudge } from '../components/NotificationNudge';
 import { QuickCaptureFab } from '../components/quickCapture/QuickCaptureFab';
 import { RouteFallback } from '../components/RouteFallback';
 import { SyncRecoveryDialog } from '../components/SyncRecoveryDialog';
-import { UndoSnackbar } from '../components/UndoSnackbar';
+import { UndoToast } from '../components/UndoToast';
 import { AppDataProvider } from '../contexts/AppDataProvider';
 import { PendingReassignProvider } from '../contexts/PendingReassignProvider';
 import { IconButton, Text } from '../designSystem';
@@ -68,7 +68,7 @@ export function AuthenticatedLayout() {
                                 <Outlet />
                                 <NotificationNudge db={db} />
                                 {/* Global "Saved — UNDO" surface for autosaving editors; fed by lib/undoStore. */}
-                                <UndoSnackbar />
+                                <UndoToast />
                             </Suspense>
                             {/* App-wide quick capture: FAB + the "c" shortcut on every page. Outside the
                                 route Suspense so a route-level suspend can't unmount it mid-capture

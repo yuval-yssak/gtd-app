@@ -11,8 +11,6 @@ type SwitchProps = {
     label?: ReactNode | undefined;
     description?: ReactNode | undefined;
     disabled?: boolean | undefined;
-    /** Put the switch after the text (settings rows). */
-    placement?: 'start' | 'end' | undefined;
     'aria-label'?: string | undefined;
     /** Lands on the focusable switch itself — e.g. a keyboard region's `tabIndex: -1` and item marker. */
     controlProps?: ({ tabIndex?: number | undefined } & Record<`data-${string}`, string>) | undefined;
@@ -21,18 +19,7 @@ type SwitchProps = {
 };
 
 /** On/off toggle with `role="switch"`. */
-export function Switch({
-    checked,
-    onCheckedChange,
-    label,
-    description,
-    disabled,
-    placement,
-    controlProps,
-    className,
-    'data-testid': testId,
-    ...rest
-}: SwitchProps) {
+export function Switch({ checked, onCheckedChange, label, description, disabled, controlProps, className, 'data-testid': testId, ...rest }: SwitchProps) {
     const control = (
         <BaseSwitch.Root
             checked={checked}
@@ -46,16 +33,8 @@ export function Switch({
             <BaseSwitch.Thumb className={styles.thumb} />
         </BaseSwitch.Root>
     );
-    if (label === undefined) return control;
-    return (
-        <ChoiceLabel
-            control={control}
-            label={label}
-            description={description}
-            disabled={disabled ?? false}
-            placement={placement ?? 'start'}
-            className={className}
-            data-testid={testId}
-        />
-    );
+    if (label === undefined) {
+        return control;
+    }
+    return <ChoiceLabel control={control} label={label} description={description} disabled={disabled ?? false} className={className} data-testid={testId} />;
 }

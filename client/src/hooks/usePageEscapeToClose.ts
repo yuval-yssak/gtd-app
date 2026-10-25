@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { shouldHandlePageEscape } from '../components/editItemDialogLogic';
+import { shouldHandlePageEscape } from '../components/itemEditor/itemEditorLogic';
 import { isModalOpen } from '../lib/keyboardRegionDom';
 
 interface PageEscapeToCloseOptions {

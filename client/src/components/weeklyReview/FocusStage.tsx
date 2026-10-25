@@ -131,7 +131,7 @@ export function FocusStage({ stage, queue, db, onQueueChange, onStageFinished, t
         <>
             <StageNavButtons {...nav.liveNavProps(api.isSaving)} />
             {stage.id === 'somedayMaybe' ? (
-                <Button tone="warning" disabled={api.isSaving} onClick={() => void onTrash()} data-testid="focusTrash">
+                <Button tone="danger" disabled={api.isSaving} onClick={() => void onTrash()} data-testid="focusTrash">
                     Trash
                 </Button>
             ) : (

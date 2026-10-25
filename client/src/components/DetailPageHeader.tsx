@@ -1,17 +1,17 @@
 import { ArrowLeft } from 'lucide-react';
-import { IconButton, Text } from '../../designSystem';
-import { CopyIdButton } from '../itemEditor/CopyIdButton';
-import styles from './RoutinePageHeader.module.css';
+import { IconButton, Text } from '../designSystem';
+import styles from './DetailPageHeader.module.css';
+import { CopyIdButton } from './itemEditor/CopyIdButton';
 
-interface RoutinePageHeaderProps {
+interface DetailPageHeaderProps {
     title: string;
     onBack: () => void;
-    /** The routine's id, when there is one to copy — the create page has none yet. */
+    /** The entity's id, when there is one to copy — a create page has none yet. */
     idForCopy?: string | undefined;
 }
 
-/** Back arrow, page title and copy-id button shared by the routine create and edit pages. */
-export function RoutinePageHeader({ title, onBack, idForCopy }: RoutinePageHeaderProps) {
+/** Back arrow, page title and copy-id button shared by the item, person and routine pages. */
+export function DetailPageHeader({ title, onBack, idForCopy }: DetailPageHeaderProps) {
     return (
         <div className={styles.header}>
             <IconButton size="sm" onClick={onBack} aria-label="Go back">

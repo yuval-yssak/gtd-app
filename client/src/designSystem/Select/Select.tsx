@@ -16,16 +16,21 @@ export type SelectOption<V extends string> = {
 type OptionSection<V extends string> = { group: string | undefined; options: NonEmptyArray<SelectOption<V>> };
 
 /** Consecutive options with the same `group` form one section; ungrouped options stay unlabelled. */
-export function sectionsOf<V extends string>(options: readonly SelectOption<V>[]): OptionSection<V>[] {
-    return options.reduce<OptionSection<V>[]>((sections, option) => {
-        const last = sections.at(-1);
-        if (last && last.group === option.group) {
-            last.options.push(option);
-        } else {
-            sections.push({ group: option.group, options: [option] });
+function sectionsOf<V extends string>(options: readonly SelectOption<V>[]) {
+    return options.flatMap<OptionSection<V>>((option, index) => {
+        const startsSection = index === 0 || options[index - 1]?.group !== option.group;
+        if (!startsSection) {
+            return [];
         }
-        return sections;
-    }, []);
+        return [{ group: option.group, options: [option, ...options.slice(index + 1, endOfGroupRun(options, index))] }];
+    });
+}
+
+/** The index just past the run of consecutive options sharing `options[start]`'s group. */
+function endOfGroupRun<V extends string>(options: readonly SelectOption<V>[], start: number) {
+    const group = options[start]?.group;
+    const offset = options.slice(start).findIndex((option) => option.group !== group);
+    return offset === -1 ? options.length : start + offset;
 }
 
 type SelectProps<V extends string> = {

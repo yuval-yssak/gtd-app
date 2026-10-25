@@ -4,6 +4,8 @@ import relativeTime from 'dayjs/plugin/relativeTime';
 import { BookmarkPlus, EllipsisVertical, Pencil } from 'lucide-react';
 import { useCallback, useMemo } from 'react';
 import { WindowVirtualizer } from 'virtua';
+import { ListEmptyMessage } from '../../components/ListEmptyMessage';
+import { ListPageHeader } from '../../components/ListPageHeader';
 import { RankedListChrome } from '../../components/rankedList/RankedListChrome';
 import { RankedRowHandle } from '../../components/rankedList/RankedRowHandle';
 import { rankedRowButtonProps, rankedRowProps } from '../../components/rankedList/rankedRowProps';
@@ -26,7 +28,7 @@ import { ListRow, ListRowButton, ListRowText } from '../../components/listRow/Li
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { RowActionButton } from '../../components/RowActionButton';
 import { useAppData } from '../../contexts/AppDataProvider';
-import { Card, Chip, Text, Toast } from '../../designSystem';
+import { Card, Text, Toast } from '../../designSystem';
 import { useListGhosts } from '../../hooks/useListGhosts';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import { useListSearch } from '../../hooks/useListSearch';
@@ -108,11 +110,7 @@ function SomedayPage() {
             );
         }
         if (somedayItems.length === 0) {
-            return (
-                <Text tone="secondary" className={styles.noMatches}>
-                    No parked items match your search.
-                </Text>
-            );
+            return <ListEmptyMessage>No parked items match your search.</ListEmptyMessage>;
         }
         return (
             // Windowed rendering — only rows near the viewport mount, so a large someday/maybe backlog
@@ -195,16 +193,12 @@ function SomedayPage() {
 
     return (
         <div>
-            <div className={styles.header}>
-                <Text variant="title">
-                    Someday / Maybe
-                    {liveSomedayCount > 0 && <Chip label={liveSomedayCount} className={styles.countChip} />}
-                </Text>
+            <ListPageHeader title="Someday / Maybe" count={liveSomedayCount}>
                 {/* "Syncing account…" while a newly-added account bootstraps; surfaces even when the list already has items. */}
                 <AccountSyncChip />
                 {/* Hidden while the archive is truly empty — same convention as done/trash. */}
                 {parkedItems.length > 0 && <ListSearchButton onToggle={search.toggleSearch} testId="somedaySearchButton" />}
-            </div>
+            </ListPageHeader>
             {parkedItems.length > 0 && search.isOpen && (
                 <ListSearchField
                     value={search.queryInput}

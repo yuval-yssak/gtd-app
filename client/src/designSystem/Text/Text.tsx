@@ -34,23 +34,12 @@ type TextProps = HTMLAttributes<HTMLElement> & {
     variant?: TextVariant | undefined;
     tone?: TextTone | undefined;
     weight?: 'regular' | 'medium' | 'semibold' | 'bold' | undefined;
-    /** One line, ellipsis on overflow. */
-    truncate?: boolean | undefined;
     /** Only meaningful with `as="label"`. */
     htmlFor?: string | undefined;
     'data-testid'?: string | undefined;
 };
 
-export function Text({ as, variant = 'body', tone = 'primary', weight, truncate, className, ...rest }: TextProps) {
+export function Text({ as, variant = 'body', tone = 'primary', weight, className, ...rest }: TextProps) {
     const Element = as ?? DEFAULT_ELEMENT[variant];
-    return (
-        <Element
-            data-variant={variant}
-            data-tone={tone}
-            data-weight={weight}
-            data-truncate={truncate || undefined}
-            {...rest}
-            className={clsx(styles.text, className)}
-        />
-    );
+    return <Element data-variant={variant} data-tone={tone} data-weight={weight} {...rest} className={clsx(styles.text, className)} />;
 }

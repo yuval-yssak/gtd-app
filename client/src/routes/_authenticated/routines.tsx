@@ -6,6 +6,8 @@ import { WindowVirtualizer } from 'virtua';
 import { AccountChip } from '../../components/AccountChip';
 import { AccountSyncChip } from '../../components/AccountSyncChip';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
+import { ListEmptyMessage } from '../../components/ListEmptyMessage';
+import { ListPageHeader } from '../../components/ListPageHeader';
 import { ListSkeleton } from '../../components/ListSkeleton';
 import { ListRow, ListRowButton, ListRowText } from '../../components/listRow/ListRow';
 import { RowActionButton } from '../../components/RowActionButton';
@@ -18,7 +20,6 @@ import { pauseRoutine, removeRoutine } from '../../db/routineMutations';
 import {
     AlertDialog,
     Button,
-    Chip,
     Collapsible,
     DialogActions,
     DialogDescription,
@@ -220,11 +221,7 @@ function RoutinesPage() {
     }
 
     function renderEmptyState() {
-        return (
-            <Text tone="secondary" className={styles.emptyState} data-testid="routinesEmptyState">
-                {emptyStateMessage()}
-            </Text>
-        );
+        return <ListEmptyMessage data-testid="routinesEmptyState">{emptyStateMessage()}</ListEmptyMessage>;
     }
 
     function renderPausedSection() {
@@ -310,24 +307,21 @@ function RoutinesPage() {
 
     return (
         <div>
-            <div className={styles.pageHeader}>
-                {/* Title + sync chip grouped so the chip stays beside the title; the parent's
-                    space-between keeps the create button on the right. */}
-                <div className={styles.titleGroup}>
-                    <Text variant="title">
-                        Routines
-                        {routines.length > 0 && <Chip label={routines.length} className={styles.countChip} />}
-                    </Text>
-                    {/* Routines surface GCal-linked recurring series, so a calendar sync can change them. */}
-                    {isCalendarSyncing && <SyncingChip label="Syncing calendar…" />}
-                    <AccountSyncChip />
-                </div>
-                <Tooltip title="Create routine">
-                    <IconButton aria-label="Create routine" onClick={(e) => editor.openEditor({ event: e })} data-testid="newRoutineButton">
-                        <Plus />
-                    </IconButton>
-                </Tooltip>
-            </div>
+            <ListPageHeader
+                title="Routines"
+                count={routines.length}
+                action={
+                    <Tooltip title="Create routine">
+                        <IconButton aria-label="Create routine" onClick={(e) => editor.openEditor({ event: e })} data-testid="newRoutineButton">
+                            <Plus />
+                        </IconButton>
+                    </Tooltip>
+                }
+            >
+                {/* Routines surface GCal-linked recurring series, so a calendar sync can change them. */}
+                {isCalendarSyncing && <SyncingChip label="Syncing calendar…" />}
+                <AccountSyncChip />
+            </ListPageHeader>
             {hasAnyRoutines && (
                 <TextField
                     size="sm"
@@ -369,7 +363,7 @@ function RoutinesPage() {
                 </DialogDescription>
                 <DialogActions>
                     <Button onClick={() => setRoutineToDelete(null)}>Cancel</Button>
-                    <Button tone="danger" onClick={() => void onConfirmDelete()} data-testid="deleteRoutineConfirm">
+                    <Button variant="solid" tone="danger" onClick={() => void onConfirmDelete()} data-testid="deleteRoutineConfirm">
                         Delete
                     </Button>
                 </DialogActions>

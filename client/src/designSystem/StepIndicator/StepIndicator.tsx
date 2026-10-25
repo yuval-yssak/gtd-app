@@ -26,7 +26,7 @@ type StepIndicatorProps = {
 
 /**
  * A wizard's progress strip (MUI Stepper). An ordered list; the current step carries
- * `aria-current="step"`, completed ones `data-complete`.
+ * `aria-current="step"` (on its button when steps are selectable), completed ones `data-complete`.
  */
 export function StepIndicator({ steps, activeIndex, onStepSelected, stepTestId, labelPlacement = 'inline', className, ...rest }: StepIndicatorProps) {
     return (
@@ -37,9 +37,10 @@ export function StepIndicator({ steps, activeIndex, onStepSelected, stepTestId, 
                     className={styles.step}
                     data-complete={(step.isComplete ?? index < activeIndex) || undefined}
                     data-active={index === activeIndex || undefined}
-                    aria-current={index === activeIndex ? 'step' : undefined}
+                    // Announced on the element that takes focus: the button when steps are selectable.
+                    aria-current={index === activeIndex && !onStepSelected ? 'step' : undefined}
                 >
-                    <StepContent index={index} label={step.label} onStepSelected={onStepSelected} testId={stepTestId} />
+                    <StepContent index={index} label={step.label} isCurrent={index === activeIndex} onStepSelected={onStepSelected} testId={stepTestId} />
                 </li>
             ))}
         </ol>
@@ -49,11 +50,12 @@ export function StepIndicator({ steps, activeIndex, onStepSelected, stepTestId, 
 type StepContentProps = {
     index: number;
     label: ReactNode;
+    isCurrent: boolean;
     onStepSelected: StepIndicatorProps['onStepSelected'];
     testId: string | undefined;
 };
 
-function StepContent({ index, label, onStepSelected, testId }: StepContentProps) {
+function StepContent({ index, label, isCurrent, onStepSelected, testId }: StepContentProps) {
     const content = (
         <>
             <span className={styles.marker} aria-hidden="true">
@@ -66,7 +68,14 @@ function StepContent({ index, label, onStepSelected, testId }: StepContentProps)
         return <span className={styles.content}>{content}</span>;
     }
     return (
-        <button type="button" data-interactive="" className={styles.content} onClick={() => onStepSelected(index)} data-testid={testId}>
+        <button
+            type="button"
+            data-interactive=""
+            aria-current={isCurrent ? 'step' : undefined}
+            className={styles.content}
+            onClick={() => onStepSelected(index)}
+            data-testid={testId}
+        >
             {content}
         </button>
     );

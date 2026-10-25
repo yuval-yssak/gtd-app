@@ -253,7 +253,7 @@ function DeviceRow({ device, isCurrentDevice, isRemoving, onRemove, onRename }: 
                 {/* No Remove for the device you're on: removing it would only force this very
                     browser through a full re-download on its next sync — never what's meant here. */}
                 {!isCurrentDevice && (
-                    <Button size="sm" tone="warning" onClick={() => onRemove(device)} disabled={isRemoving} data-testid="removeDeviceButton">
+                    <Button size="sm" tone="danger" onClick={() => onRemove(device)} disabled={isRemoving} data-testid="removeDeviceButton">
                         {isRemoving ? 'Removing…' : 'Remove'}
                     </Button>
                 )}
@@ -287,7 +287,7 @@ function RemoveDeviceDialog({ state, onCancel, onConfirm, isRemoving }: RemoveDe
             </Text>
             <DialogActions>
                 <Button onClick={onCancel}>Cancel</Button>
-                <Button variant="solid" tone="warning" onClick={onConfirm} disabled={isRemoving} data-testid="confirmRemoveDeviceButton">
+                <Button variant="solid" tone="danger" onClick={onConfirm} disabled={isRemoving} data-testid="confirmRemoveDeviceButton">
                     {isRemoving ? 'Removing…' : 'Remove'}
                 </Button>
             </DialogActions>

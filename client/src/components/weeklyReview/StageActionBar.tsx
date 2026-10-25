@@ -1,6 +1,6 @@
 import { ChevronsLeft, ChevronsRight } from 'lucide-react';
 import { Card, IconButton } from '../../designSystem';
-import { DisabledCapableTooltip } from './DisabledCapableTooltip';
+import { DisabledCapableTooltip } from '../DisabledCapableTooltip';
 import styles from './stageLayout.module.css';
 
 /**

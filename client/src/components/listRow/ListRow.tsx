@@ -64,7 +64,10 @@ export function ListRowButton({ onActivate, onKeyDown, onKeyUp, className, tabIn
 const isOwnKey = (e: KeyboardEvent<HTMLDivElement>) => e.target === e.currentTarget;
 
 function activateOnKeyDown(e: KeyboardEvent<HTMLDivElement>, onActivate: (event: ActivationEvent) => void) {
-    if (!isOwnKey(e)) return;
+    // A keydown handler that claimed the key cancels the activation, as on a native button.
+    if (!isOwnKey(e) || e.defaultPrevented) {
+        return;
+    }
     if (e.key === ' ') {
         e.preventDefault(); // Space must not scroll the page; it activates on keyup.
     } else if (e.key === 'Enter') {

@@ -1,9 +1,10 @@
 import { Check, Pencil, Sparkles, X } from 'lucide-react';
 import { type KeyboardEvent, type Ref, useEffect, useId, useRef, useState } from 'react';
-import { Button, Callout, IconButton, Spinner, Text, TextField, Toast, Tooltip } from '../../designSystem';
+import { Button, Callout, IconButton, Spinner, Text, TextField, Toast } from '../../designSystem';
 import type { BriefState } from '../../lib/briefSource';
 import { collapseToSingleLine } from '../../lib/singleLineText';
 import type { BriefOrigin } from '../../types/MyDB';
+import { DisabledCapableTooltip } from '../DisabledCapableTooltip';
 import {
     BRIEF_EDITOR_LABEL,
     BRIEF_LABEL,
@@ -288,20 +289,17 @@ function BriefClearButton({ onClear }: { onClear: () => void }) {
 function GenerateBriefButton({ generation, isRegenerate, fieldValue }: { generation: BriefGeneration; isRegenerate: boolean; fieldValue: string }) {
     const { label, tooltip, isDisabled } = describeGenerateButton({ isRegenerate, isOnline: generation.isOnline, phase: generation.phase });
     return (
-        <Tooltip title={tooltip}>
-            {/* A disabled button fires no pointer events, so the tooltip needs a live wrapper to anchor to. */}
-            <span>
-                <IconButton
-                    size="sm"
-                    aria-label={label}
-                    disabled={isDisabled}
-                    onClick={() => generation.requestGenerate(fieldValue)}
-                    data-testid="briefGenerateButton"
-                >
-                    {generation.phase === 'loading' ? <Spinner size={16} aria-hidden="true" /> : <Sparkles />}
-                </IconButton>
-            </span>
-        </Tooltip>
+        <DisabledCapableTooltip title={tooltip}>
+            <IconButton
+                size="sm"
+                aria-label={label}
+                disabled={isDisabled}
+                onClick={() => generation.requestGenerate(fieldValue)}
+                data-testid="briefGenerateButton"
+            >
+                {generation.phase === 'loading' ? <Spinner size={16} aria-hidden="true" /> : <Sparkles />}
+            </IconButton>
+        </DisabledCapableTooltip>
     );
 }
 

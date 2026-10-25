@@ -449,7 +449,8 @@ test.describe('weekly review', () => {
             await expect(page.getByTestId('reviewStageTitle')).toHaveText('Clear all inboxes');
 
             const steps = page.getByTestId('reviewStepper').getByRole('listitem');
-            await expect(steps.nth(0)).toHaveAttribute('aria-current', 'step');
+            // The steps here are buttons, so the current marker sits on the focusable button.
+            await expect(page.getByTestId('reviewStepperStep').nth(0)).toHaveAttribute('aria-current', 'step');
             await expect(steps.nth(0)).not.toHaveAttribute('data-complete');
             await expect(steps.nth(1)).toHaveAttribute('data-complete');
             await expect(steps.nth(2)).not.toHaveAttribute('data-complete');

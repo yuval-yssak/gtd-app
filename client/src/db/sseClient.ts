@@ -1,3 +1,4 @@
+import dayjs from 'dayjs';
 import { API_SERVER } from '../constants/globals';
 
 // Module-level registry — at most one EventSource per logged-in user. Multi-account devices
@@ -97,26 +98,58 @@ function openSingleChannel(userId: string, handlers: ChannelHandlers): void {
     const url = `${API_SERVER}/sync/events?userId=${encodeURIComponent(userId)}`;
     const source = new EventSource(url, { withCredentials: true });
 
+    const gap = trackConnectionGap();
     source.onmessage = (event) => handleMessage(event, userId, handlers);
-    // Catch up on every (re)connect: a change broadcast while the channel was connecting or between
-    // reconnects reached no one, and nothing else would pull it until the next sync trigger (a
+    // Catch up on the first connect and after a real outage: a change broadcast while the channel was
+    // connecting or down reached no one, and nothing else would pull it until the next sync trigger (a
     // server write right after page load — the review-start brief sweep — was lost exactly so).
     source.onopen = () => {
         console.log(`[debug-gcal-sync][client] sse open | userId=${userId}`);
-        handlers.onConnected?.();
+        if (gap.shouldCatchUpOnOpen()) {
+            handlers.onConnected?.();
+        }
     };
     // EventSource auto-reconnects on transient errors; we only log so we can spot a wedged connection.
-    source.onerror = (err) => console.warn(`[debug-gcal-sync][client] sse error | userId=${userId} readyState=${source.readyState}`, err);
+    source.onerror = (err) => {
+        gap.markDown();
+        console.warn(`[debug-gcal-sync][client] sse error | userId=${userId} readyState=${source.readyState}`, err);
+    };
 
     eventSources.set(userId, source);
+}
+
+/**
+ * A reconnect within this long of the drop is the server's scheduled stream rotation (every 2
+ * minutes, reconnecting after the advertised 3s `retry:`), not an outage. A full multi-account
+ * catch-up on each rotation would multiply billed Cloudflare Worker requests per open tab; the
+ * few seconds a rotation leaves uncovered are the cost the server's lifetime cap already accepts.
+ */
+const ROTATION_RECONNECT_WINDOW_MS = 10_000;
+
+/** Per-channel memory of when it went down, deciding whether an open warrants a catch-up. */
+function trackConnectionGap() {
+    const state: { hasOpened: boolean; downSinceMs: number | null } = { hasOpened: false, downSinceMs: null };
+    return {
+        markDown: () => {
+            state.downSinceMs ??= dayjs().valueOf();
+        },
+        shouldCatchUpOnOpen: () => {
+            const isFirstOpen = !state.hasOpened;
+            const wasOutage = state.downSinceMs !== null && dayjs().valueOf() - state.downSinceMs > ROTATION_RECONNECT_WINDOW_MS;
+            state.hasOpened = true;
+            state.downSinceMs = null;
+            return isFirstOpen || wasOutage;
+        },
+    };
 }
 
 /** What a channel does with each server message. One object shared by every channel of a device. */
 export interface ChannelHandlers {
     onUpdate: OnUpdateCallback;
     /**
-     * A channel finished (re)connecting. The device may have missed broadcasts while it was down,
-     * so the host runs a catch-up — one coalesced pass for all channels, not one sync per channel.
+     * A channel connected for the first time, or came back from an outage (not a scheduled stream
+     * rotation). It may have missed broadcasts, so the host runs a catch-up — one coalesced pass for
+     * all channels, not one sync per channel.
      */
     onConnected?: (() => void) | undefined;
     /** This device's id, so the channel can ignore echoes of its own writes. */

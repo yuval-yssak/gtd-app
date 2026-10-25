@@ -49,6 +49,8 @@ export function Checkbox({
             </BaseCheckbox.Indicator>
         </BaseCheckbox.Root>
     );
-    if (label === undefined) return control;
+    if (label === undefined) {
+        return control;
+    }
     return <ChoiceLabel control={control} label={label} description={description} disabled={disabled ?? false} className={className} data-testid={testId} />;
 }

@@ -155,4 +155,10 @@
         display: inline-flex;
         color: var(--color-accent);
     }
+
+    @media (prefers-reduced-motion: reduce) {
+        .popup {
+            transition: none;
+        }
+    }
 }

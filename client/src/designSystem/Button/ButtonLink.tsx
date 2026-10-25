@@ -17,7 +17,7 @@ type ButtonLinkProps = Omit<ComponentProps<'a'>, 'className'> &
  * "open in new tab" work) — Base UI's Button with `nativeButton={false}` would stamp `role="button"`
  * on the anchor instead.
  */
-export function ButtonLink({ render, variant, tone, size, startIcon, endIcon, fullWidth, className, children, ...rest }: ButtonLinkProps) {
+export function ButtonLink({ render, variant, tone, size, startIcon, fullWidth, className, children, ...rest }: ButtonLinkProps) {
     return useRender({
         defaultTagName: 'a',
         render,
@@ -25,11 +25,7 @@ export function ButtonLink({ render, variant, tone, size, startIcon, endIcon, fu
             {
                 ...appearanceAttributes({ variant, tone, size, fullWidth }),
                 className: clsx(styles.button, className),
-                children: (
-                    <ButtonContent startIcon={startIcon} endIcon={endIcon}>
-                        {children}
-                    </ButtonContent>
-                ),
+                children: <ButtonContent startIcon={startIcon}>{children}</ButtonContent>,
             },
             rest,
         ),

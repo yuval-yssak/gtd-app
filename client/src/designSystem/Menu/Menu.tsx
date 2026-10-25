@@ -9,7 +9,7 @@ import styles from './Menu.module.css';
  * `MenuPopup` (portal + positioner + popup) › `MenuItem` / `MenuCheckboxItem` / `MenuSeparator` /
  * `MenuGroupLabel`.
  */
-export function MenuRoot(props: Pick<ComponentProps<typeof BaseMenu.Root>, 'open' | 'onOpenChange' | 'children' | 'modal'>) {
+export function MenuRoot(props: Pick<ComponentProps<typeof BaseMenu.Root>, 'open' | 'onOpenChange' | 'children'>) {
     return <BaseMenu.Root {...props} />;
 }
 

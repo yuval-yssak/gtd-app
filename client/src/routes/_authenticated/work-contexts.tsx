@@ -4,13 +4,15 @@ import { useMemo, useState } from 'react';
 import { AccountChip } from '../../components/AccountChip';
 import { AccountPicker } from '../../components/AccountPicker';
 import { AccountSyncChip } from '../../components/AccountSyncChip';
+import { ListEmptyMessage } from '../../components/ListEmptyMessage';
+import { ListPageHeader } from '../../components/ListPageHeader';
 import { ListSkeleton } from '../../components/ListSkeleton';
 import { ListRow, ListRowText } from '../../components/listRow/ListRow';
 import { RowActionButton } from '../../components/RowActionButton';
 import { WorkContextEditDialog } from '../../components/workContexts/WorkContextEditDialog';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { createWorkContext, removeWorkContext, updateWorkContext } from '../../db/workContextMutations';
-import { Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, Text, TextField, Tooltip } from '../../designSystem';
+import { Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, TextField, Tooltip } from '../../designSystem';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useEntityUsage } from '../../hooks/useEntityUsage';
 import { SHORTCUT_ROW_PROPS } from '../../lib/rowShortcuts';
@@ -124,27 +126,24 @@ function WorkContextsPage() {
 
     return (
         <div>
-            <div className={styles.pageHeader}>
-                <div className={styles.titleGroup}>
-                    <Text variant="title">
-                        Work Contexts
-                        {workContexts.length > 0 && <Chip label={workContexts.length} className={styles.countChip} />}
-                    </Text>
-                    {/* "Syncing account…" while a newly-added account bootstraps; surfaces even when the list already has items. */}
-                    <AccountSyncChip />
-                </div>
-                <Button startIcon={<Plus />} variant="solid" size="sm" onClick={openCreate}>
-                    Add context
-                </Button>
-            </div>
+            <ListPageHeader
+                title="Work Contexts"
+                count={workContexts.length}
+                action={
+                    <Button startIcon={<Plus />} variant="solid" size="sm" onClick={openCreate}>
+                        Add context
+                    </Button>
+                }
+            >
+                {/* "Syncing account…" while a newly-added account bootstraps; surfaces even when the list already has items. */}
+                <AccountSyncChip />
+            </ListPageHeader>
             {workContexts.length === 0 ? (
                 // First-launch bootstrap: show skeleton, not the "empty" copy, while IDB is still loading.
                 isInitialSyncing ? (
                     <ListSkeleton />
                 ) : (
-                    <Text tone="secondary" className={styles.emptyState}>
-                        No work contexts yet. Examples: @office, @phone, @computer, @errands.
-                    </Text>
+                    <ListEmptyMessage>No work contexts yet. Examples: @office, @phone, @computer, @errands.</ListEmptyMessage>
                 )
             ) : (
                 <ul className={styles.list}>

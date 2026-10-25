@@ -52,9 +52,9 @@ function LoginPage() {
     const isPending = pendingProvider !== null;
 
     return (
-        <div className={styles.page}>
+        <main className={styles.page}>
             <Card padding="none" className={styles.card}>
-                <Text variant="title" weight="semibold" className={styles.appName}>
+                <Text as="h1" variant="title" className={styles.appName}>
                     {APP_NAME}
                 </Text>
                 {/* A one-line description so the sign-in card is self-explanatory; the public homepage
@@ -97,6 +97,6 @@ function LoginPage() {
                     </Link>
                 </Text>
             </Card>
-        </div>
+        </main>
     );
 }

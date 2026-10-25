@@ -2,10 +2,10 @@ import { Check, ChevronDown, Pencil } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
 import { Button, IconButton, Text } from '../../designSystem';
 import { enterNotesEdit, exitNotesEdit, initialNotesEditMode } from '../../lib/notesEditMode';
-import { notesAreEmpty } from '../editItemDialogLogic';
 import { MarkdownNotesEditor, NOTES_EDITOR_LABEL, NOTES_PLACEHOLDER } from '../markdown/MarkdownNotesEditor';
 import { MarkdownPreview } from '../markdown/MarkdownPreview';
 import styles from './ItemEditorBody.module.css';
+import { notesAreEmpty } from './itemEditorLogic';
 
 interface NotesSectionProps {
     notes: string;
@@ -35,10 +35,10 @@ export function NotesSection({ notes, onNotesChange, collapsible = false }: Note
             </div>
         );
     }
-    return <PageNotesSection notes={notes} onNotesChange={onNotesChange} />;
+    return <ExpandedNotes notes={notes} onNotesChange={onNotesChange} />;
 }
 
-function PageNotesSection({ notes, onNotesChange }: { notes: string; onNotesChange: (n: string) => void }) {
+function ExpandedNotes({ notes, onNotesChange }: { notes: string; onNotesChange: (n: string) => void }) {
     // Empty notes start in the editor so the user sees a clear writing surface; non-empty notes
     // start in preview so the page reads like a document. Only the pencil asks for editor focus —
     // a freshly opened item with empty notes must not yank focus (see notesEditMode).

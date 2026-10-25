@@ -10,8 +10,6 @@ type ChoiceLabelProps = {
     /** Secondary line under the label. */
     description?: ReactNode | undefined;
     disabled?: boolean | undefined;
-    /** Put the control after the text (settings rows). */
-    placement?: 'start' | 'end' | undefined;
     /**
      * field = a standalone switch/checkbox (its own Field.Root); item = one radio inside a group
      * (a Field.Item, so each option keeps its own label).
@@ -25,9 +23,9 @@ type ChoiceLabelProps = {
  * MUI FormControlLabel: a label that wraps, names and toggles its control — Base UI's documented
  * `Field.Label` pattern.
  */
-export function ChoiceLabel({ control, label, description, disabled, placement = 'start', scope = 'field', className, ...rest }: ChoiceLabelProps) {
+export function ChoiceLabel({ control, label, description, disabled, scope = 'field', className, ...rest }: ChoiceLabelProps) {
     const labelElement = (
-        <Field.Label data-disabled={disabled || undefined} data-placement={placement} {...rest} className={clsx(styles.choiceLabel, className)}>
+        <Field.Label data-disabled={disabled || undefined} {...rest} className={clsx(styles.choiceLabel, className)}>
             {control}
             <span className={styles.text}>
                 <span className={styles.label}>{label}</span>
@@ -35,7 +33,9 @@ export function ChoiceLabel({ control, label, description, disabled, placement =
             </span>
         </Field.Label>
     );
-    if (scope === 'item') return <Field.Item>{labelElement}</Field.Item>;
+    if (scope === 'item') {
+        return <Field.Item>{labelElement}</Field.Item>;
+    }
     return (
         <Field.Root disabled={disabled ?? false} className={styles.field}>
             {labelElement}

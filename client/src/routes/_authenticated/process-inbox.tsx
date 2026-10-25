@@ -19,7 +19,7 @@ export const Route = createFileRoute('/_authenticated/process-inbox')({
  * The batch wizard, reached from the inbox's "Process Inbox" button: Skip / Save & next over each
  * inbox item, ending on "Inbox clear".
  *
- * Inbox items are snapshotted once on mount (`useMemo([])`) so saves that move an item out of
+ * Inbox items are snapshotted once on mount (a lazy `useState` initialiser) so saves that move an item out of
  * the inbox don't shrink the source array mid-walk and skew the index.
  */
 function ProcessInboxPage() {

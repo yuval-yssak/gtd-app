@@ -1,5 +1,5 @@
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
-import type { ClarifyDestination } from '../components/editItemDialogLogic';
+import type { ClarifyDestination } from '../components/itemEditor/itemEditorLogic';
 import { isEditableEventTarget } from '../components/quickCapture/quickCaptureLogic';
 import { type EditorKeyAction, type PositionMove, resolveEditorKey } from '../lib/editorShortcuts';
 

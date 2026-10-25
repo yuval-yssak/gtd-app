@@ -6,11 +6,6 @@
         background-color: var(--color-bg-surface);
         color: var(--color-text-primary);
 
-        &[data-variant="sunken"] {
-            border-color: transparent;
-            background-color: var(--color-bg-sunken);
-        }
-
         &[data-padding="sm"] {
             padding: var(--space-3);
         }

@@ -27,10 +27,9 @@ export type TextFieldProps = {
     readOnly?: boolean | undefined;
     autoFocus?: boolean | undefined;
     autoComplete?: string | undefined;
-    /** Grows with its content between minRows and maxRows. */
+    /** Grows with its content, never shorter than minRows. */
     multiline?: boolean | undefined;
     minRows?: number | undefined;
-    maxRows?: number | undefined;
     /** Text under the control; turns red with `error`. */
     helperText?: ReactNode | undefined;
     error?: boolean | undefined;
@@ -102,15 +101,15 @@ type ControlProps = Omit<
     'label' | 'helperText' | 'error' | 'fullWidth' | 'size' | 'startAdornment' | 'endAdornment' | 'className' | 'data-testid' | 'disabled'
 >;
 
-function InputControl({ inputProps, inputRef, multiline: _multiline, minRows: _minRows, maxRows: _maxRows, ...rest }: ControlProps) {
+function InputControl({ inputProps, inputRef, multiline: _multiline, minRows: _minRows, ...rest }: ControlProps) {
     return <Field.Control {...inputProps} {...rest} ref={(node) => assignRef(inputRef, node)} className={styles.control} />;
 }
 
-function TextareaControl({ inputProps, inputRef, multiline: _multiline, minRows = 1, maxRows, value, ...rest }: ControlProps) {
+function TextareaControl({ inputProps, inputRef, multiline: _multiline, minRows = 1, value, ...rest }: ControlProps) {
     const textareaRef = useRef<HTMLTextAreaElement | null>(null);
     const fitOnInput = useAutosizeTextarea(textareaRef);
-    // Row bounds are per-call numbers, handed to the stylesheet as custom properties.
-    const rowStyle = { '--textarea-min-rows': minRows, '--textarea-max-rows': maxRows ?? 'none' };
+    // The row bound is a per-call number, handed to the stylesheet as a custom property.
+    const rowStyle = { '--textarea-min-rows': minRows };
     return (
         <Field.Control
             {...inputProps}
@@ -131,7 +130,6 @@ function TextareaControl({ inputProps, inputRef, multiline: _multiline, minRows 
                 />
             }
             className={styles.control}
-            data-has-max-rows={maxRows === undefined ? undefined : ''}
         />
     );
 }

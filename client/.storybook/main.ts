@@ -1,11 +1,24 @@
+import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { StorybookConfig } from '@storybook/react-vite';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// The modules behind package.json's `#api/*` import aliases (each has a `.mock.ts` test seam).
-const API_SEAM_MODULES = ['syncClient', 'syncApi', 'accountApi'];
+type ConditionalImport = { test?: string; default: string };
+
+/**
+ * package.json's `imports` map — the `#api/*` test seams — resolved to their real (`default`)
+ * modules. Read from the manifest so a new seam is covered without touching this file.
+ */
+function realImportAliases() {
+    const manifest = JSON.parse(readFileSync(resolve(__dirname, '../package.json'), 'utf8')) as { imports?: Record<string, string | ConditionalImport> };
+    return Object.entries(manifest.imports ?? {}).map(([find, target]) => ({
+        find,
+        // An unconditional entry is a plain path; a conditional one maps `default` to the real module.
+        replacement: resolve(__dirname, '..', typeof target === 'string' ? target : target.default),
+    }));
+}
 
 const config: StorybookConfig = {
     stories: ['../src/**/*.stories.tsx'],
@@ -30,7 +43,7 @@ const config: StorybookConfig = {
         // companion (`*.mock.ts`), which imports `vi` from vitest. Vitest's chai
         // initialisation then crashes because the vitest runner context doesn't exist in
         // the browser. Force each alias to the real implementation to prevent this.
-        const realApiAliases = API_SEAM_MODULES.map((name) => ({ find: `#api/${name}`, replacement: resolve(__dirname, `../src/api/${name}.ts`) }));
+        const realApiAliases = realImportAliases();
         config.resolve ??= {};
         if (Array.isArray(config.resolve.alias)) {
             config.resolve.alias.push(...realApiAliases);

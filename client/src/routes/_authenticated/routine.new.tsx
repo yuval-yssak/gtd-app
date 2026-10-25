@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
+import { DetailPageHeader } from '../../components/DetailPageHeader';
 import { RoutineEditorBody } from '../../components/routineEditor/RoutineEditorBody';
-import { RoutinePageHeader } from '../../components/routineEditor/RoutinePageHeader';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { Card } from '../../designSystem';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
@@ -36,7 +36,7 @@ function NewRoutinePage() {
 
     return (
         <div className={styles.page} data-testid="newRoutinePage">
-            <RoutinePageHeader title="New routine" onBack={goBack} />
+            <DetailPageHeader title="New routine" onBack={goBack} />
             {/* No active account yet means no owner to create the routine under. */}
             {account && (
                 <Card className={styles.card}>

@@ -6,9 +6,11 @@ import { type KeyboardEvent, type MouseEvent, type ReactNode, type TouchEvent, u
 import { WindowVirtualizer } from 'virtua';
 import { AccountChip } from '../../components/AccountChip';
 import { AccountSyncChip } from '../../components/AccountSyncChip';
-import type { EditableStatus } from '../../components/editItemDialogLogic';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
+import type { EditableStatus } from '../../components/itemEditor/itemEditorLogic';
 import { useItemEditor } from '../../components/itemEditor/useItemEditor';
+import { ListEmptyMessage } from '../../components/ListEmptyMessage';
+import { ListPageHeader } from '../../components/ListPageHeader';
 import { ListRowShell } from '../../components/ListRowShell';
 import { ListSearchButton, ListSearchField } from '../../components/ListSearch';
 import { ListSkeleton } from '../../components/ListSkeleton';
@@ -23,7 +25,7 @@ import { type ItemRow, rankedRowButtonProps, rankedRowProps } from '../../compon
 import { useAppData } from '../../contexts/AppDataProvider';
 import { deleteInboxCaptureDraft, getInboxCaptureDraft, saveInboxCaptureDraft } from '../../db/draftHelpers';
 import { clarifyToDone, clarifyToTrash, collectItem } from '../../db/itemMutations';
-import { Button, Card, Chip, Drawer, IconButton, Tabs, Text, TextField, Toast, Tooltip } from '../../designSystem';
+import { Button, Card, Drawer, IconButton, Tabs, Text, TextField, Toast, Tooltip } from '../../designSystem';
 import { useAutoFocus } from '../../hooks/useAutoFocus';
 import { useAutosave } from '../../hooks/useAutosave';
 import { useCaptureNotesPanel } from '../../hooks/useCaptureNotesPanel';
@@ -119,8 +121,10 @@ function InboxSwipeItem({ item, routineTitle, onTap, onMore, onSwipeNextAction, 
             <ListRow
                 className={styles.swipeItem}
                 data-testid="inboxSwipeRow"
-                // The finger's live offset — measured geometry, so an inline value.
-                style={{ transform: `translateX(${translateX}px)`, transition: translateX === 0 ? 'transform 0.2s ease' : 'none' }}
+                // The finger's live offset — measured geometry, so an inline value. At rest the row
+                // animates back (the module's [data-resting] transition); mid-swipe it tracks the finger.
+                style={{ transform: `translateX(${translateX}px)` }}
+                data-resting={translateX === 0 || undefined}
                 onTouchStart={unlessOnHandle(touchHandlers.onTouchStart)}
                 onTouchMove={unlessOnHandle(touchHandlers.onTouchMove)}
                 onTouchEnd={unlessOnHandle(touchHandlers.onTouchEnd)}
@@ -232,7 +236,7 @@ function InboxPage() {
     const [draft, setDraft] = useState('');
     const [notes, setNotes] = useState('');
     const notesPanel = useCaptureNotesPanel();
-    // Shared "captured into a hidden account" snackbar — same surface the quick-capture FAB uses.
+    // Shared "captured into a hidden account" toast — same surface the quick-capture FAB uses.
     const { noticeCaptureIfHidden, hiddenAccountNotice } = useHiddenAccountCaptureNotice();
 
     // Capture-field draft persistence: half-typed title/notes survive reloads and navigation.
@@ -358,20 +362,19 @@ function InboxPage() {
 
     return (
         <div>
-            <div className={styles.pageHeader}>
-                {/* Title + sync chip grouped so the chip stays beside the title; pageHeader's space-between keeps the button right. */}
-                <div className={styles.titleGroup}>
-                    <Text variant="title">
-                        Inbox
-                        {liveInboxItems.length > 0 && <Chip label={liveInboxItems.length} tone="accent" className={styles.countChip} />}
-                    </Text>
-                    <AccountSyncChip />
-                    <ListSearchButton onToggle={search.toggleSearch} testId="inboxSearchButton" />
-                </div>
-                <Button variant="outline" size="sm" disabled={liveInboxItems.length === 0} onClick={startProcessInbox} data-testid="processInboxButton">
-                    Process Inbox ({liveInboxItems.length})
-                </Button>
-            </div>
+            <ListPageHeader
+                title="Inbox"
+                count={liveInboxItems.length}
+                countTone="accent"
+                action={
+                    <Button variant="outline" size="sm" disabled={liveInboxItems.length === 0} onClick={startProcessInbox} data-testid="processInboxButton">
+                        Process Inbox ({liveInboxItems.length})
+                    </Button>
+                }
+            >
+                <AccountSyncChip />
+                <ListSearchButton onToggle={search.toggleSearch} testId="inboxSearchButton" />
+            </ListPageHeader>
             {search.isOpen && (
                 <ListSearchField
                     value={search.queryInput}
@@ -432,10 +435,10 @@ function InboxPage() {
                 isInitialSyncing ? (
                     <ListSkeleton />
                 ) : (
-                    <Text tone="secondary" className={styles.emptyMessage}>
+                    <ListEmptyMessage>
                         {/* An active search that matches nothing is "no results", not inbox zero. */}
                         {deferredQuery.trim() ? 'No inbox items match your search.' : 'Inbox zero — well done.'}
-                    </Text>
+                    </ListEmptyMessage>
                 )
             ) : (
                 // Windowed rendering — only rows near the viewport mount, so a large inbox doesn't block

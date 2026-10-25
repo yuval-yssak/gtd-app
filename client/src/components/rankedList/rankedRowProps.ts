@@ -9,7 +9,7 @@ import styles from './RankedList.module.css';
 export type ItemRow = Extract<FlatRow<StoredItem>, { kind: 'item' }>;
 
 /**
- * Props for a ranked row's ListItem: the drag classes, the measured displacement, and the data
+ * Props for a ranked row's outer element: the drag state flags, the measured displacement, and the data
  * attributes the drag and the roving focus find rows through. The displacement is measured
  * geometry (the dragged row's own height), so it travels as a CSS variable the module's
  * `transform` reads; the pointer-dragged row itself is moved imperatively by the hook every frame,
@@ -22,27 +22,31 @@ export function rankedRowProps(ranked: RankedListApi, row: ItemRow, className?: 
     const isDragged = drag.drag?.itemId === item._id;
     const isPointerDragged = isDragged && !drag.drag?.isKeyboard;
     return {
-        className: clsx(className, styles.rowShell, {
-            [styles.dragging]: isDragged,
-            [styles.shifted]: !isDragged && drag.drag !== null,
-            [styles.dimmedSection]: drag.drag !== null && drag.drag.sectionKey !== section.key,
-        }),
+        className: clsx(className, styles.rowShell),
+        'data-dragging': isDragged || undefined,
+        'data-shifted': (!isDragged && drag.drag !== null) || undefined,
+        'data-dimmed': isOutsideActiveSection(ranked, section) || undefined,
         style: isPointerDragged ? undefined : { '--drag-shift': `${drag.shiftFor(item._id)}px` },
         [ROW_SECTION_ATTR]: section.key,
         [ROW_ITEM_ATTR]: item._id,
     };
 }
 
-/** Props for a ranked row's button (the ListItemButton): its roving-focus wiring and its short screen-reader hint. */
+/** Props for a ranked row's button (its ListRowButton body): its roving-focus wiring and its short screen-reader hint. */
 export function rankedRowButtonProps(ranked: RankedListApi) {
     return { 'aria-describedby': ranked.hintIds.row, [ROW_BUTTON_ATTR]: '', ...ranked.roving.rowButtonProps };
 }
 
 /** Props for a section header row: flagged when overdue, dimmed while a drag is live in another section. */
-export function rankedHeaderClassName(ranked: RankedListApi, section: NextActionSection<StoredItem>) {
-    const { drag } = ranked;
-    return clsx(styles.sectionHeader, {
-        [styles.sectionHeaderOverdue]: section.isOverdue,
-        [styles.dimmedSection]: drag.drag !== null && drag.drag.sectionKey !== section.key,
-    });
+export function rankedHeaderProps(ranked: RankedListApi, section: NextActionSection<StoredItem>) {
+    return {
+        className: styles.sectionHeader,
+        'data-overdue': section.isOverdue || undefined,
+        'data-dimmed': isOutsideActiveSection(ranked, section) || undefined,
+    };
+}
+
+/** A drag is live in another section — the section wall dims this one. */
+function isOutsideActiveSection({ drag }: RankedListApi, section: NextActionSection<StoredItem>) {
+    return drag.drag !== null && drag.drag.sectionKey !== section.key;
 }

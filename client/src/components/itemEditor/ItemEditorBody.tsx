@@ -61,21 +61,7 @@ import {
     type WaitingForFormState,
 } from '../clarify/types';
 import { WaitingForFields } from '../clarify/WaitingForFields';
-import {
-    applyCalendarPatch,
-    buildClarifyToDoneOpts,
-    buildEditPatch,
-    type ClarifyDestination,
-    decideSavePath,
-    type EditableStatus,
-    type EditorForms,
-    isSaveDisabled,
-    mergeFormsIntoItem,
-    normalizeTitleAndNotes,
-    pickDefaultConfigForUser,
-    shouldDetachFromRoutine,
-    stripRoutineId,
-} from '../editItemDialogLogic';
+import { DisabledCapableTooltip } from '../DisabledCapableTooltip';
 import { NextActionPositionRow } from '../nextActions/NextActionPositionRow';
 import { RoutineIndicator } from '../RoutineIndicator';
 import { RoutineScheduleFields } from '../routineEditor/RoutineScheduleFields';
@@ -99,6 +85,21 @@ import {
     itemToWaitingForForm,
     mergeItemForms,
 } from './itemEditorLiveMerge';
+import {
+    applyCalendarPatch,
+    buildClarifyToDoneOpts,
+    buildEditPatch,
+    type ClarifyDestination,
+    decideSavePath,
+    type EditableStatus,
+    type EditorForms,
+    isSaveDisabled,
+    mergeFormsIntoItem,
+    normalizeTitleAndNotes,
+    pickDefaultConfigForUser,
+    shouldDetachFromRoutine,
+    stripRoutineId,
+} from './itemEditorLogic';
 import { MeetingDetails, type RsvpStatus } from './MeetingDetails';
 import { applyOptimisticRsvp, findSelfAttendee } from './meetingDetailsLogic';
 import { NotesSection } from './NotesSection';
@@ -236,10 +237,10 @@ function mergeKeyOf(itemTs: string, briefTs: string | undefined): string {
     return `${itemTs}|${briefTs ?? ''}`;
 }
 
-/** Resolves the body class. The review presentation adds a density modifier on top of the bare
+/** Resolves the body's props. The review presentation flags a density modifier on top of the bare
  *  flex column (tighter section gap, no notes-preview height floor). */
-export function bodyClassFor(presentation: EditorPresentation): string {
-    return clsx(styles.body, { [styles.bodyReview]: presentation === 'review' });
+export function bodyPropsFor(presentation: EditorPresentation) {
+    return { className: styles.body, 'data-review': presentation === 'review' || undefined };
 }
 
 /**
@@ -1028,7 +1029,7 @@ export function ItemEditorBody({
 
     if (reassignInFlight) {
         return (
-            <div className={bodyClassFor(presentation)}>
+            <div {...bodyPropsFor(presentation)}>
                 <ReassignInFlightInline onClose={closeEditor} />
             </div>
         );
@@ -1042,25 +1043,33 @@ export function ItemEditorBody({
     ) : (
         <>
             <Button onClick={closeEditor}>Cancel</Button>
-            <Tooltip title={`Save changes (${chordLabel(['mod', 'enter'], isApple)})`}>
-                {/* A disabled button gets no pointer events — the span keeps the tooltip; the button keeps its own name. */}
-                <span className={styles.tooltipAnchor}>
-                    <Button variant="solid" disabled={saveDisabled} onClick={() => onSave()} aria-keyshortcuts={isApple ? 'Meta+Enter' : 'Control+Enter'}>
-                        Save changes
-                    </Button>
-                </span>
-            </Tooltip>
+            <DisabledCapableTooltip title={`Save changes (${chordLabel(['mod', 'enter'], isApple)})`}>
+                <Button variant="solid" disabled={saveDisabled} onClick={() => onSave()} aria-keyshortcuts={isApple ? 'Meta+Enter' : 'Control+Enter'}>
+                    Save changes
+                </Button>
+            </DisabledCapableTooltip>
         </>
     );
     const actionsPlacement = resolveActionsPlacement(actionsContainer);
-    // Portaled rows stretch across the host bar's content slot — see .stretchedActions.
-    const actionsRow = <div className={clsx(styles.inlineActions, { [styles.stretchedActions]: actionsPlacement.kind === 'portal' })}>{actionButtons}</div>;
+    // Portaled rows stretch across the host bar's content slot — see .inlineActions[data-stretched].
+    const actionsRow = (
+        <div className={styles.inlineActions} data-stretched={actionsPlacement.kind === 'portal' || undefined}>
+            {actionButtons}
+        </div>
+    );
 
+    const bodyProps = bodyPropsFor(presentation);
     return (
         // tabIndex -1: a click on the editor's empty space focuses the editor itself (not the page body), so its
         // letter and Alt+arrow shortcuts keep working; it is never a Tab stop.
         // biome-ignore lint/a11y/noStaticElementInteractions: a key-delegation scope, not a control — it hears the shortcuts its children's keys bubble up, and must stay a React handler so a child's stopPropagation (the brief field's Escape) is honoured
-        <div className={clsx(bodyClassFor(presentation), styles.keyScope)} tabIndex={-1} {...{ [EDITOR_KEY_SCOPE_ATTR]: '' }} onKeyDown={onEditorKeyDown}>
+        <div
+            {...bodyProps}
+            className={clsx(bodyProps.className, styles.keyScope)}
+            tabIndex={-1}
+            {...{ [EDITOR_KEY_SCOPE_ATTR]: '' }}
+            onKeyDown={onEditorKeyDown}
+        >
             {conflictFields.length > 0 && (
                 <Callout
                     tone="info"

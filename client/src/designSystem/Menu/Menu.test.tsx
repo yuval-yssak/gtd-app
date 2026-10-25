@@ -6,8 +6,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { isModalOpen } from '../../lib/keyboardRegionDom';
 import { Button } from '../Button/Button';
 import { IconButton } from '../IconButton/IconButton';
-import { Popover } from '../Popover/Popover';
-import { Select } from '../Select/Select';
 import { MenuCheckboxItem, MenuItem, MenuPopup, MenuRoot, MenuTrigger } from './Menu';
 
 afterEach(cleanup);
@@ -68,69 +66,5 @@ describe('Menu', () => {
         await userEvent.click(item);
         expect(item.getAttribute('aria-checked')).toBe('true');
         expect(screen.getByRole('menu')).toBeDefined();
-    });
-});
-
-describe('Popover', () => {
-    it('hangs off an anchor element, is an open modal, and closes on Escape', async () => {
-        const onClose = vi.fn();
-        function Harness() {
-            const [anchor, setAnchor] = useState<HTMLElement | null>(null);
-            return (
-                <>
-                    <Button onClick={(event) => setAnchor(event.currentTarget)}>Pick date</Button>
-                    <Popover open={anchor !== null} anchor={anchor} onClose={onClose} aria-label="Date picker">
-                        <button type="button">Today</button>
-                    </Popover>
-                </>
-            );
-        }
-        render(<Harness />);
-        await userEvent.click(screen.getByRole('button', { name: 'Pick date' }));
-        expect(await screen.findByRole('button', { name: 'Today' })).toBeDefined();
-        expect(isModalOpen()).toBe(true);
-        await userEvent.keyboard('{Escape}');
-        expect(onClose).toHaveBeenCalledTimes(1);
-    });
-});
-
-describe('Select', () => {
-    it('is a combobox named by its label with option roles (e2e: combobox { name: "Calendar" })', async () => {
-        const onValueChange = vi.fn();
-        render(
-            <Select
-                label="Calendar"
-                value="work"
-                onValueChange={onValueChange}
-                options={[
-                    { value: 'work', label: 'Work' },
-                    { value: 'home', label: 'Home' },
-                ]}
-            />,
-        );
-        const trigger = screen.getByRole('combobox', { name: 'Calendar' });
-        expect(trigger.textContent).toContain('Work');
-        await userEvent.click(trigger);
-        await userEvent.click(await screen.findByRole('option', { name: 'Home' }));
-        expect(onValueChange).toHaveBeenCalledWith('home');
-    });
-
-    it('counts as an open modal while its list is open, and closes on Escape', async () => {
-        render(
-            <Select
-                label="Calendar"
-                value="work"
-                onValueChange={vi.fn()}
-                options={[
-                    { value: 'work', label: 'Work' },
-                    { value: 'home', label: 'Home' },
-                ]}
-            />,
-        );
-        await userEvent.click(screen.getByRole('combobox', { name: 'Calendar' }));
-        await screen.findByRole('listbox');
-        expect(isModalOpen()).toBe(true);
-        await userEvent.keyboard('{Escape}');
-        await vi.waitFor(() => expect(isModalOpen()).toBe(false));
     });
 });

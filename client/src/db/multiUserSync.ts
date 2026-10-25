@@ -481,7 +481,9 @@ async function restorePreviouslyActiveSession(
     previousUserId: string | undefined,
     previouslyActiveSession: DeviceSession | undefined,
 ): Promise<void> {
-    if (!previousUserId) {
+    // An account removed while the pass ran (signed out, evaporated) is no one's choice any more;
+    // restoring it would point the device at an account with no rows and no session.
+    if (!previousUserId || !(await db.get('accounts', previousUserId))) {
         return;
     }
     // IDB first, unconditionally: it is the user's choice and needs no network. Restored only after

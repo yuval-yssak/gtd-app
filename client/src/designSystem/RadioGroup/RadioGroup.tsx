@@ -21,13 +21,12 @@ type RadioGroupProps<V extends string> = {
     /** Names the group (`role="radiogroup"`). */
     'aria-label'?: string | undefined;
     'aria-labelledby'?: string | undefined;
-    direction?: 'column' | 'row' | undefined;
     disabled?: boolean | undefined;
     className?: string | undefined;
     'data-testid'?: string | undefined;
 };
 
-export function RadioGroup<V extends string>({ value, onValueChange, options, direction = 'column', disabled, className, ...rest }: RadioGroupProps<V>) {
+export function RadioGroup<V extends string>({ value, onValueChange, options, disabled, className, ...rest }: RadioGroupProps<V>) {
     return (
         // Base UI scopes each option's Field.Item label to a surrounding Field.Root.
         <Field.Root className={styles.field}>
@@ -35,7 +34,6 @@ export function RadioGroup<V extends string>({ value, onValueChange, options, di
                 value={value}
                 onValueChange={(next) => onValueChange(next)}
                 disabled={disabled ?? false}
-                data-direction={direction}
                 {...rest}
                 className={clsx(styles.group, className)}
             >

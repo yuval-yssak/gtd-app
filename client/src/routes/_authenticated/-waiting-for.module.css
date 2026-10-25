@@ -1,21 +1,3 @@
-/* Title row: the count and sync chips stay vertically centred on the title. */
-.header {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    margin-block-end: var(--space-6);
-}
-
-.countChip {
-    margin-inline-start: var(--space-3);
-    vertical-align: middle;
-}
-
-.emptyMessage {
-    margin-block-start: var(--space-12);
-    text-align: center;
-}
-
 .sortRow {
     display: flex;
     justify-content: flex-end;

@@ -2,27 +2,6 @@
     max-inline-size: 36rem;
 }
 
-.header {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    margin-block-end: var(--space-6);
-}
-
-/* Title is the flexible center; copy-id button hugs the end edge */
-.headerTitle {
-    flex: 1;
-}
-
 .card {
     padding: var(--space-6);
-}
-
-.notFound {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: var(--space-4);
-    margin-block-start: var(--space-8);
-    text-align: center;
 }

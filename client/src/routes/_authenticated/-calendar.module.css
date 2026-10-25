@@ -1,16 +1,3 @@
-/* Title row: the syncing, sync and search affordances stay vertically centred on the title. */
-.header {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    margin-block-end: var(--space-6);
-}
-
-.emptyMessage {
-    margin-block-start: var(--space-12);
-    text-align: center;
-}
-
 .day {
     padding-block-end: var(--space-6);
 }

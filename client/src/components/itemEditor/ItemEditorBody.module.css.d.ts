@@ -1,7 +1,6 @@
 declare const styles: {
     readonly accountHint: string;
     readonly body: string;
-    readonly bodyReview: string;
     readonly briefCaption: string;
     readonly briefEditor: string;
     readonly briefField: string;
@@ -19,7 +18,5 @@ declare const styles: {
     readonly statusChips: string;
     readonly statusFields: string;
     readonly statusLabel: string;
-    readonly stretchedActions: string;
-    readonly tooltipAnchor: string;
 };
 export = styles;

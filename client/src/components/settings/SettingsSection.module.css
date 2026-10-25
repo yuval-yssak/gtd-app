@@ -1,0 +1,29 @@
+.section {
+    margin-block-end: var(--space-6);
+}
+
+/* The page's last card has nothing below it to keep apart from. */
+.section:last-child {
+    margin-block-end: 0;
+}
+
+.content {
+    padding: var(--space-4) var(--space-5);
+}
+
+.heading {
+    margin-block-end: var(--space-1);
+}
+
+.description {
+    margin-block-end: var(--space-4);
+}
+
+/* A description-only card (Account) has no controls under it. */
+.description:last-child {
+    margin-block-end: 0;
+}
+
+.divider {
+    margin-block: var(--space-3);
+}

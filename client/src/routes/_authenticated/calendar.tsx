@@ -9,6 +9,8 @@ import { CalendarRowMeta } from '../../components/CalendarRowMeta';
 import { groupCalendarItemsByDay, isMultiDayAllDay, NO_DATE_KEY } from '../../components/calendarRouteSort';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { useItemEditor } from '../../components/itemEditor/useItemEditor';
+import { ListEmptyMessage } from '../../components/ListEmptyMessage';
+import { ListPageHeader } from '../../components/ListPageHeader';
 import { ListSearchButton, ListSearchField } from '../../components/ListSearch';
 import { ListSkeleton } from '../../components/ListSkeleton';
 import { ListRow, ListRowButton, ListRowText } from '../../components/listRow/ListRow';
@@ -159,12 +161,11 @@ function CalendarPage() {
 
     return (
         <div>
-            <div className={styles.header}>
-                <Text variant="title">Calendar</Text>
+            <ListPageHeader title="Calendar">
                 {isCalendarSyncing && <SyncingChip label="Syncing calendar…" />}
                 <AccountSyncChip />
                 <ListSearchButton onToggle={search.toggleSearch} testId="calendarSearchButton" />
-            </div>
+            </ListPageHeader>
             {search.isOpen && (
                 <ListSearchField
                     value={search.queryInput}
@@ -181,11 +182,7 @@ function CalendarPage() {
 }
 
 function EmptyMessage({ text }: { text: string }) {
-    return (
-        <Text tone="secondary" className={styles.emptyMessage}>
-            {text}
-        </Text>
-    );
+    return <ListEmptyMessage>{text}</ListEmptyMessage>;
 }
 
 interface TimeColumnProps {

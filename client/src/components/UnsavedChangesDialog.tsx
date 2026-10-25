@@ -17,7 +17,7 @@ export function UnsavedChangesDialog({ blocker }: { blocker: UnsavedChangesBlock
                 <Button ref={stayButtonRef} onClick={blocker.stay} data-testid="unsavedChangesStay">
                     Keep editing
                 </Button>
-                <Button tone="danger" onClick={blocker.discard} data-testid="unsavedChangesDiscard">
+                <Button variant="solid" tone="danger" onClick={blocker.discard} data-testid="unsavedChangesDiscard">
                     Discard and leave
                 </Button>
             </DialogActions>

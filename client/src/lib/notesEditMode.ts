@@ -1,4 +1,4 @@
-import { notesAreEmpty } from '../components/editItemDialogLogic';
+import { notesAreEmpty } from '../components/itemEditor/itemEditorLogic';
 
 /**
  * The editor's notes: preview vs editor, plus whether the editor should take focus when it mounts.

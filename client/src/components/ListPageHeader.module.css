@@ -1,0 +1,23 @@
+.header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    margin-block-end: var(--space-6);
+
+    &[data-compact] {
+        margin-block-end: var(--space-4);
+    }
+}
+
+/* Title, count and adornments stay together; the header's space-between keeps the action at the end. */
+.titleGroup {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.countChip {
+    margin-inline-start: var(--space-3);
+    vertical-align: middle;
+}

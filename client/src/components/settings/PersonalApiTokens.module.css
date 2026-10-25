@@ -60,7 +60,7 @@
     padding-block: var(--space-1-5);
 
     &[data-revoked] {
-        opacity: 0.6;
+        opacity: var(--opacity-parked);
     }
 }
 

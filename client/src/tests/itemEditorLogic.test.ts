@@ -12,6 +12,7 @@ import {
     type SomedayMaybeFormState,
     type WaitingForFormState,
 } from '../components/clarify/types';
+import { itemToWaitingForForm } from '../components/itemEditor/itemEditorLiveMerge';
 import {
     applyCalendarForm,
     applyCalendarPatch,
@@ -25,8 +26,7 @@ import {
     shouldDetachFromRoutine,
     shouldHandlePageEscape,
     stripRoutineId,
-} from '../components/editItemDialogLogic';
-import { itemToWaitingForForm } from '../components/itemEditor/itemEditorLiveMerge';
+} from '../components/itemEditor/itemEditorLogic';
 import type { CalendarOption } from '../hooks/useCalendarOptions';
 import type { StoredItem } from '../types/MyDB';
 

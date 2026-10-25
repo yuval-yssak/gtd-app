@@ -1,4 +1,4 @@
-/* Shared surface for every anchored list (Menu, Select, Combobox) lives in each component; the
+/* Shared surface for every anchored list (Menu, Select, Autocomplete) lives in each component; the
    values match so they read as one family. */
 @layer gtd.composites {
     .positioner {
@@ -121,5 +121,11 @@
         color: var(--color-text-secondary);
         font-size: var(--type-xs-size);
         line-height: var(--type-xs-line);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .popup {
+            transition: none;
+        }
     }
 }

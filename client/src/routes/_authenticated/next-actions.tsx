@@ -7,6 +7,8 @@ import { AccountChip } from '../../components/AccountChip';
 import { AccountSyncChip } from '../../components/AccountSyncChip';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { useItemEditor } from '../../components/itemEditor/useItemEditor';
+import { ListEmptyMessage } from '../../components/ListEmptyMessage';
+import { ListPageHeader } from '../../components/ListPageHeader';
 import { ListRowShell } from '../../components/ListRowShell';
 import { ListSearchButton, ListSearchField } from '../../components/ListSearch';
 import { ListSkeleton } from '../../components/ListSkeleton';
@@ -16,7 +18,7 @@ import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { RowActionButton } from '../../components/RowActionButton';
 import { RankedListChrome } from '../../components/rankedList/RankedListChrome';
 import { RankedRowHandle } from '../../components/rankedList/RankedRowHandle';
-import { rankedHeaderClassName, rankedRowButtonProps, rankedRowProps } from '../../components/rankedList/rankedRowProps';
+import { rankedHeaderProps, rankedRowButtonProps, rankedRowProps } from '../../components/rankedList/rankedRowProps';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone } from '../../db/itemMutations';
 import { Chip, type ChipTone, Switch, Text, Toast, Tooltip } from '../../designSystem';
@@ -382,15 +384,11 @@ function NextActionsPage() {
 
     return (
         <div>
-            <div className={styles.header}>
-                <Text variant="title">
-                    Next Actions
-                    {liveNextActionCount > 0 && <Chip label={liveNextActionCount} tone="accent" className={styles.countChip} />}
-                </Text>
+            <ListPageHeader title="Next Actions" count={liveNextActionCount} countTone="accent" isCompact>
                 {/* "Syncing account…" while a newly-added account bootstraps; surfaces even when the list already has items. */}
                 <AccountSyncChip />
                 <ListSearchButton onToggle={search.toggleSearch} testId="nextActionsSearchButton" />
-            </div>
+            </ListPageHeader>
             {search.isOpen && (
                 <ListSearchField
                     value={search.queryInput}
@@ -461,17 +459,17 @@ function NextActionsPage() {
                 isInitialSyncing ? (
                     <ListSkeleton />
                 ) : (
-                    <Text tone="secondary" className={styles.emptyMessage}>
+                    <ListEmptyMessage>
                         {/* Distinguish an unmatched search from unmatched filter chips — same convention as inbox/calendar. */}
                         {deferredQuery.trim() ? 'No next actions match your search.' : 'No next actions match the current filters.'}
-                    </Text>
+                    </ListEmptyMessage>
                 )
             ) : (
                 // Windowed rendering — only rows near the viewport mount, so a large next-actions list
                 // doesn't block the main thread on navigation. Day headers interleave with the rows, so
-                // this is a named section of headers and rows rather than a <ul>. One tab stop for the
-                // whole list (see useNextActionsRovingFocus): the section forwards focus to the
-                // remembered row, the rows and their buttons are tabIndex -1.
+                // this is a named section of day headings (h6, for heading navigation) and rows rather
+                // than a <ul>. One tab stop for the whole list (see useNextActionsRovingFocus): the
+                // section forwards focus to the remembered row, the rows and their buttons are tabIndex -1.
                 <section
                     className={styles.list}
                     aria-label="Next actions"
@@ -485,11 +483,10 @@ function NextActionsPage() {
                                 return (
                                     <Text
                                         key={`header-${row.section.key}`}
-                                        as="div"
                                         // subtitleSm, not overline: overline's text-transform would shout "TODAY" and
                                         // turn the weekday/month casing into noise.
                                         variant="subtitleSm"
-                                        className={rankedHeaderClassName(ranked, row.section)}
+                                        {...rankedHeaderProps(ranked, row.section)}
                                         data-testid="nextActionSectionHeader"
                                         data-section-key={row.section.key}
                                     >
@@ -549,7 +546,7 @@ function NextActionsPage() {
                                         }
                                     >
                                         {/* A real button beside (not inside) the row button — nested interactive content is
-                                            invalid ARIA, and the row's ripple/click would fire on every drop. A ghost (a row
+                                            invalid ARIA, and the row's click would fire on every drop. A ghost (a row
                                             fading out of this list) gets none: it is not a valid drag source. */}
                                         {!rowIsGhost && <RankedRowHandle ranked={ranked} item={item} section={section} testId="nextActionDragHandle" />}
                                         <ListRowButton

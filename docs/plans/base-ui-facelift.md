@@ -355,3 +355,24 @@ After batch 10: `grep -rE "@mui/|--mui-|classnames" client/src` must return noth
     - the Storybook MUI wrapper.
 
     The `mui-mode` localStorage key is still read once, so existing users keep their colour scheme.
+- **Phase 3 (verification):**
+  - **Review:** three `client-code-reviewer` passes, one each for the design system, the routes, and components/hooks/lib/db. All three ended Approved after one round of fixes.
+  - **Bugs found:**
+    - Every 2-minute SSE stream rotation ran a full multi-account catch-up, multiplying billed Worker requests per tab. A catch-up now runs only on a channel's first open or after an outage longer than `ROTATION_RECONNECT_WINDOW_MS`.
+    - Sign-out ran outside the session gate, so a sync pass could write a removed account's rows back. Both sign-out paths are now gated, and the restore skips an account removed mid-pass.
+  - **Consolidation:**
+    - Shared components: `DetailPageHeader`, `DetailNotFound`, `ListPageHeader`, `ListEmptyMessage`, `SettingsSection` and `DisabledCapableTooltip`.
+    - Class-name maps became data attributes; destructive confirms are solid `danger`; the bottom nav uses real links.
+    - Renames: `itemEditorLogic`, `UndoToast`, `ExpandedNotes`.
+  - **Design-system hygiene:**
+    - dead props and exports removed;
+    - fixes for latent bugs in Badge (inline `className`) and Tooltip (reopen without hover);
+    - accessibility fixes in StepIndicator (`aria-current` on the button) and IconButton;
+    - tokens for the remaining literals, reduced motion on every popup, and one test and per-state story file per component.
+  - **Stories:** 70 new app-component stories. None has been rendered in Storybook yet; they type-check and `storybook build` succeeds.
+  - **Results:** full e2e 536/536; client 227 files / 2,420 tests pass.
+  - **Still open:**
+    - The manual device smoke test (iOS PWA, desktop Chrome in both schemes, Android if available), which is the user's.
+    - An h1 page title on every page (changes most heading assertions).
+    - Switch/Checkbox accessible names: label and description currently run together, and fixing that changes names the e2e specs query by.
+    - The non-blocking notes from the components review: `applyPulledOps` deletes queued mid-batch, the `useCalendarOptions` revalidate flash, StageToast keys, the SyncIssuesPanel title name.
