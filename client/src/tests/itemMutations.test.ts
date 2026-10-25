@@ -25,7 +25,7 @@ import { compareRank, isStrictlyIncreasing } from '../lib/itemRank';
 import { getGhostSnapshots, resetGhostStore } from '../lib/listGhosts';
 import type { MyDB, StoredItem, StoredRoutine } from '../types/MyDB';
 import { installQueueingLocks, uninstallLocks } from './fakeWebLocks';
-import { openTestDB } from './openTestDB';
+import { openTestDB, seedAccountOnDevice } from './openTestDB';
 
 // Mock sync API calls so they don't attempt to reach the server during tests
 vi.mock('#api/syncClient', async () => await import('../api/syncClient.mock.ts'));
@@ -501,8 +501,9 @@ describe('clarifyToTrash', () => {
 });
 
 describe('routine item disposal vs the materializer', () => {
-    beforeEach(() => {
+    beforeEach(async () => {
         installQueueingLocks();
+        await seedAccountOnDevice(db, USER_ID);
     });
     afterEach(() => {
         uninstallLocks();

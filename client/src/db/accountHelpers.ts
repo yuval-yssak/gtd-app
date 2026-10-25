@@ -119,6 +119,24 @@ export function removeAccountAndData(userId: string, db: IDBPDatabase<MyDB>): Pr
     });
 }
 
+/**
+ * Runs a background write for an account only while it is still on this device. Under the same
+ * lock as `removeAccountAndData`, so a sign-out lands wholly before the write (which then skips)
+ * or after it (and wipes what it wrote). Without Web Locks only the existence check remains.
+ */
+export function writeIfAccountOnDevice(db: IDBPDatabase<MyDB>, userId: string, write: () => Promise<void>): Promise<void> {
+    return withCrossContextLock(SYNC_APPLY_LOCK, async () => {
+        if (!(await isAccountOnDevice(db, userId))) {
+            return;
+        }
+        await write();
+    });
+}
+
+export async function isAccountOnDevice(db: IDBPDatabase<MyDB>, userId: string) {
+    return (await db.get('accounts', userId)) !== undefined;
+}
+
 /** Every account off this device, under the same lock as `removeAccountAndData`. */
 export function removeAllAccountsAndData(db: IDBPDatabase<MyDB>): Promise<void> {
     return withCrossContextLock(SYNC_APPLY_LOCK, async () => {

@@ -1,5 +1,5 @@
 import type { IDBPDatabase } from 'idb';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
     clearAllAccounts,
     getActiveAccount,
@@ -12,6 +12,7 @@ import {
     setActiveAccount,
     upsertAccount,
     wipeUserData,
+    writeIfAccountOnDevice,
 } from '../db/accountHelpers';
 import { SYNC_APPLY_LOCK } from '../db/crossContextLock';
 import type { MyDB, StoredAccount, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext, SyncOperation } from '../types/MyDB';
@@ -401,5 +402,61 @@ describe('removeAccountAndData / removeAllAccountsAndData', () => {
         expect(await db.getAll('accounts')).toEqual([]);
         expect(await db.getAll('items')).toEqual([]);
         expect(await getActiveAccount(db)).toBeUndefined();
+    });
+});
+
+// Background writers (the routine materialize pass) run late in a sync pass, after a sign-out in the
+// same or another tab may already have wiped the account.
+describe('writeIfAccountOnDevice', () => {
+    afterEach(() => {
+        uninstallLocks();
+    });
+
+    /** A promise the test settles by hand, to hold the write at a chosen point. */
+    function deferred() {
+        // let: the executor is the only place the resolver is handed out (Promise.withResolvers is ES2024).
+        let resolve!: () => void;
+        const promise = new Promise<void>((settle) => {
+            resolve = settle;
+        });
+        return { promise, resolve };
+    }
+
+    it('runs the write under the sync apply lock while the account is on the device', async () => {
+        const lockNames = installQueueingLocks();
+        await upsertAccount(makeAccount('userA', 1), db);
+        const write = vi.fn(async () => {});
+
+        await writeIfAccountOnDevice(db, 'userA', write);
+
+        expect(write).toHaveBeenCalledOnce();
+        expect(lockNames).toContain(SYNC_APPLY_LOCK);
+    });
+
+    it('skips the write for an account no longer on the device', async () => {
+        const write = vi.fn(async () => {});
+
+        await writeIfAccountOnDevice(db, 'userA', write);
+
+        expect(write).not.toHaveBeenCalled();
+    });
+
+    it('holds a removal requested mid-write until the write finishes, so the wipe also takes its rows', async () => {
+        const lockNames = installQueueingLocks();
+        await upsertAccount(makeAccount('userA', 1), db);
+        const { promise: writeMayFinish, resolve: finishWrite } = deferred();
+        const writing = writeIfAccountOnDevice(db, 'userA', async () => {
+            await writeMayFinish;
+            await db.put('items', makeItem('late', 'userA'));
+        });
+
+        const removing = removeAccountAndData('userA', db);
+        // The removal is queued behind the write's hold on the apply lock before the write is let go.
+        await vi.waitFor(() => expect(lockNames.filter((name) => name === SYNC_APPLY_LOCK)).toHaveLength(2));
+        finishWrite();
+        await Promise.all([writing, removing]);
+
+        expect(await db.get('items', 'late')).toBeUndefined();
+        expect(await db.get('accounts', 'userA')).toBeUndefined();
     });
 });

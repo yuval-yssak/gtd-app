@@ -11,7 +11,7 @@ import { createFirstRoutineItem, createNextRoutineItem, generateCalendarItemsToH
 import { waitForPendingFlush } from '../db/syncHelpers';
 import { hasAtLeastOne } from '../lib/typeUtils';
 import type { MyDB, StoredRoutine } from '../types/MyDB';
-import { openTestDB } from './openTestDB';
+import { openTestDB, seedAccountOnDevice } from './openTestDB';
 
 vi.mock('../lib/calendarHorizon', () => ({
     getCalendarHorizonMonths: () => 2,
@@ -196,6 +196,10 @@ describe('generateCalendarItemsToHorizon — startDate & active', () => {
 // ── materializePendingNextActionRoutines ────────────────────────────────────
 
 describe('materializePendingNextActionRoutines', () => {
+    beforeEach(async () => {
+        await seedAccountOnDevice(db, USER_ID);
+    });
+
     it('generates the first item for an active nextAction routine whose startDate has arrived', async () => {
         const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
         const routine = buildRoutine({ _id: 'mat-1', startDate: yesterday });
@@ -293,5 +297,15 @@ describe('materializePendingNextActionRoutines', () => {
         expect(item.routineId).toBe('mat-6');
         const today = dayjs().format('YYYY-MM-DD');
         expect(item.expectedBy).toBe(today);
+    });
+
+    it('writes no item and queues no op for an account signed out of the device', async () => {
+        await db.put('routines', buildRoutine({ _id: 'mat-7' }));
+        await db.delete('accounts', USER_ID);
+
+        await materializePendingNextActionRoutines(db, USER_ID);
+
+        expect(await db.getAllFromIndex('items', 'userId', USER_ID)).toEqual([]);
+        expect(await db.getAll('syncOperations')).toEqual([]);
     });
 });

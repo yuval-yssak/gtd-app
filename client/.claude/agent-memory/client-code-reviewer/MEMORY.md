@@ -64,3 +64,4 @@
 - [use() cache retry re-suspends mounted readers](feedback_use_cache_retry_resuspends_mounted.md) — retry/TTL that swaps a pending promise in render hides mounted editors behind fallback; demand stale-while-revalidate.
 - [New prop makes exclusive states co-occur](feedback_new_prop_makes_exclusive_states_cooccur.md) — DS override prop (StepIndicator isComplete) lets data-active+data-complete co-occur; rule order blanks the marker. Also Snackbar→Toast drops role=alert.
 - [DS whole-slice recurring gaps](feedback_design_system_slice_recurring_gaps.md) — braceless guards in "small" components, tests in sibling files, kitchen-sink stories, dead barrel exports, doc-contract drift
+- [Storybook global fetch stub on docs pages](feedback_storybook_global_fetch_stub_docs_page.md) — per-story window.fetch stubs chain on autodocs pages; last story's config wins, cleanup leaks.

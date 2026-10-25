@@ -19,7 +19,7 @@ import type {
     StoredWorkContext,
     SyncOperation,
 } from '../types/MyDB';
-import { getActiveAccount } from './accountHelpers';
+import { getActiveAccount, isAccountOnDevice } from './accountHelpers';
 import { mergeServerOwnedCalendarFields } from './calendarLinkMerge';
 import { hasWebLocks, SYNC_APPLY_LOCK, SYNC_FLUSH_LOCK, withCrossContextLock } from './crossContextLock';
 import { getOrCreateDeviceId, getSyncCursor, setSyncCursor } from './deviceId';
@@ -609,7 +609,7 @@ async function doPull(db: IDBPDatabase<MyDB>, userId: string): Promise<void> {
  * response is dropped instead of writing rows and a cursor back for an account the wipe removed.
  */
 async function isRemovedFromDevice(db: IDBPDatabase<MyDB>, userId: string) {
-    const isRemoved = (await db.get('accounts', userId)) === undefined;
+    const isRemoved = !(await isAccountOnDevice(db, userId));
     if (isRemoved) {
         console.log('[sync] dropping a response for an account removed from this device', { userId });
     }

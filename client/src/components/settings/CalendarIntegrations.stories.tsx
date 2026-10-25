@@ -1,5 +1,4 @@
 import type { Decorator, Meta, StoryObj } from '@storybook/react';
-import { useEffect, useRef } from 'react';
 import { SettingsRouterDecorator } from '../../../.storybook/RouterDecorator';
 import type { CalendarIntegration } from '../../api/calendarApi';
 import { AppDataContext } from '../../contexts/AppDataProvider';
@@ -16,7 +15,7 @@ const MockAppDataDecorator: Decorator = (Story) => (
     </AppDataContext.Provider>
 );
 
-// ── Fetch mock component ───────────────────────────────────────────────────────
+// ── Fetch stub ──────────────────────────────────────────────────────────────────
 
 interface ApiMockConfig {
     integrations: CalendarIntegration[];
@@ -25,44 +24,30 @@ interface ApiMockConfig {
 }
 
 /**
- * Installs a window.fetch mock for the duration of its lifecycle.
- * The mock intercepts requests to /calendar/integrations so stories don't need a live API.
- * Using a component (instead of synchronous decorator code) ensures the mock is active
- * when React effects fire — plain decorator code runs before React schedules effects.
+ * Answers /calendar/integrations from the story's config and passes every other request to the
+ * fetch it wraps. Installed in `beforeEach` so it is live before the component's first fetch.
  */
-function FetchMockProvider({ config, children }: { config: ApiMockConfig; children: React.ReactNode }) {
-    const originalFetchRef = useRef(window.fetch);
-
-    useEffect(() => {
+function stubCalendarIntegrations(config: ApiMockConfig) {
+    return () => {
+        const wrappedFetch = window.fetch;
         window.fetch = async (input, init) => {
             // input is narrowed to Request by exclusion after the string and URL checks.
             const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-
-            if (url.includes('/calendar/integrations') && !url.includes('/calendars')) {
-                if (config.hang) return new Promise<Response>(() => {});
-                if (config.shouldFail) return new Response('Internal Server Error', { status: 500 });
-                return new Response(JSON.stringify(config.integrations), {
-                    status: 200,
-                    headers: { 'Content-Type': 'application/json' },
-                });
+            if (!url.includes('/calendar/integrations') || url.includes('/calendars')) {
+                return wrappedFetch(input, init);
             }
-
-            return originalFetchRef.current(input, init);
+            if (config.hang) {
+                return new Promise<Response>(() => {});
+            }
+            if (config.shouldFail) {
+                return new Response('Internal Server Error', { status: 500 });
+            }
+            return new Response(JSON.stringify(config.integrations), { status: 200, headers: { 'Content-Type': 'application/json' } });
         };
         return () => {
-            window.fetch = originalFetchRef.current;
+            window.fetch = wrappedFetch;
         };
-    }, [config]);
-
-    return <>{children}</>;
-}
-
-function withFetchMock(config: ApiMockConfig): Decorator {
-    return (Story) => (
-        <FetchMockProvider config={config}>
-            <Story />
-        </FetchMockProvider>
-    );
+    };
 }
 
 // ── Meta ────────────────────────────────────────────────────────────────────────
@@ -71,7 +56,7 @@ const meta = {
     title: 'Components/CalendarIntegrations',
     component: CalendarIntegrations,
     parameters: { layout: 'padded' },
-    tags: ['autodocs'],
+    // No autodocs: the docs page renders every story in one window, where each story's fetch stub would wrap the last.
     decorators: [MockAppDataDecorator, SettingsRouterDecorator],
 } satisfies Meta<typeof CalendarIntegrations>;
 
@@ -82,7 +67,7 @@ type Story = StoryObj<typeof meta>;
  * Loading state — the fetch hangs so the CircularProgress spinner stays visible.
  */
 export const LoadingState: Story = {
-    decorators: [withFetchMock({ integrations: [], shouldFail: false, hang: true })],
+    beforeEach: stubCalendarIntegrations({ integrations: [], shouldFail: false, hang: true }),
 };
 
 /**
@@ -90,34 +75,32 @@ export const LoadingState: Story = {
  * Shows "No calendars connected." and the Connect button.
  */
 export const NoIntegrations: Story = {
-    decorators: [withFetchMock({ integrations: [], shouldFail: false, hang: false })],
+    beforeEach: stubCalendarIntegrations({ integrations: [], shouldFail: false, hang: false }),
 };
 
 /**
  * One integration connected. A secondary fetch to /calendars is triggered per integration row;
- * that fetch is not intercepted so it will show a fetch error within the row (expected in Storybook).
+ * that fetch is not intercepted, so the row shows the Storybook API stub's error (expected).
  */
 export const WithOneIntegration: Story = {
-    decorators: [
-        withFetchMock({
-            integrations: [
-                {
-                    _id: 'int-1',
-                    provider: 'google',
-                    createdTs: '2024-01-15T10:00:00.000Z',
-                    updatedTs: '2024-01-15T10:00:00.000Z',
-                    lastSyncedTs: '2024-03-20T08:30:00.000Z',
-                },
-            ],
-            shouldFail: false,
-            hang: false,
-        }),
-    ],
+    beforeEach: stubCalendarIntegrations({
+        integrations: [
+            {
+                _id: 'int-1',
+                provider: 'google',
+                createdTs: '2024-01-15T10:00:00.000Z',
+                updatedTs: '2024-01-15T10:00:00.000Z',
+                lastSyncedTs: '2024-03-20T08:30:00.000Z',
+            },
+        ],
+        shouldFail: false,
+        hang: false,
+    }),
 };
 
 /**
  * Error state — the API returns a 500. The error message replaces the list.
  */
 export const ErrorState: Story = {
-    decorators: [withFetchMock({ integrations: [], shouldFail: true, hang: false })],
+    beforeEach: stubCalendarIntegrations({ integrations: [], shouldFail: true, hang: false }),
 };
