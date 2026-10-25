@@ -135,7 +135,9 @@ function isInstanceFormEventId(eventId: string): boolean {
 
 /** Start of today (00:00) in the given IANA timezone, returned as ISO. */
 function startOfTodayInTz(nowIso: string, timeZone: string): string {
-    return dayjs(nowIso).tz(timeZone).startOf('day').toISOString();
+    // Re-parse the local date as midnight in the zone: `tz().startOf('day')` keeps now's UTC offset, which is
+    // an hour off on a DST-transition day (midnight and now sit on different sides of the shift).
+    return dayjs.tz(dayjs(nowIso).tz(timeZone).format('YYYY-MM-DD'), timeZone).toISOString();
 }
 
 /** Returns true if the event ended strictly before `cutoffIso`. */

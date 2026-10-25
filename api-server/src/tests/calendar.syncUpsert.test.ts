@@ -548,15 +548,23 @@ describe('POST /calendar/integrations/:id/sync — upsert paths', () => {
         const userId = await getUserId(sessionCookie);
         await insertIntegrationWithConfig(userId);
 
-        const fullSyncSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok-1' });
+        // Pinned to Asia/Jerusalem's DST-end day (2026-10-25, clocks 02:00 → 01:00): midnight is still UTC+3
+        // while "now" is UTC+2, so a start-of-day that reuses now's offset lands an hour late.
+        vi.useFakeTimers();
+        vi.setSystemTime(dayjs.utc('2026-10-25T07:00:00Z').toDate());
+        try {
+            const fullSyncSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok-1' });
 
-        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
-        expect(res.status).toBe(200);
+            const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+            expect(res.status).toBe(200);
 
-        expect(fullSyncSpy).toHaveBeenCalledTimes(1);
-        const [, timeMinArg] = fullSyncSpy.mock.calls[0]!;
-        // timeMin must be 00:00 (start of day) when projected into the calendar's TZ.
-        expect(dayjs(timeMinArg).tz('Asia/Jerusalem').format('HH:mm:ss')).toBe('00:00:00');
+            expect(fullSyncSpy).toHaveBeenCalledTimes(1);
+            const [, timeMinArg] = fullSyncSpy.mock.calls[0]!;
+            // timeMin must be 00:00 (start of day) when projected into the calendar's TZ.
+            expect(dayjs(timeMinArg).tz('Asia/Jerusalem').format('HH:mm:ss')).toBe('00:00:00');
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it('skips update when local item is newer than the GCal event', async () => {
