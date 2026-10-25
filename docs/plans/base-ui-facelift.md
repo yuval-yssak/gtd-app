@@ -376,3 +376,19 @@ After batch 10: `grep -rE "@mui/|--mui-|classnames" client/src` must return noth
     - An h1 page title on every page (changes most heading assertions).
     - Switch/Checkbox accessible names: label and description currently run together, and fixing that changes names the e2e specs query by.
     - The non-blocking notes from the components review: `applyPulledOps` deletes queued mid-batch, the `useCalendarOptions` revalidate flash, StageToast keys, the SyncIssuesPanel title name.
+- **Follow-ups after Phase 3:**
+  - **Stories:** all 345 stories were rendered headlessly (a throwaway Playwright script against `storybook build`), and 10 failing play functions were fixed. Base UI's Tooltip opens on the first mousemove, so the hover stories add one.
+  - **ChoiceLabel:** the description is a `Field.Description` outside the label, so the name is the label alone.
+  - **h1 page titles:** every page has exactly one h1 (`page-titles.spec.ts`).
+  - **Small fixes:**
+    - The SyncIssuesPanel dialog name no longer includes "Close".
+    - A replacement toast message gets a fresh timer.
+    - Revalidated calendar options are swapped in pre-settled.
+    - A queued delete is honoured mid-pull.
+  - **Sync:**
+    - A pull or bootstrap for an account removed mid-request is dropped, and removal runs under `SYNC_APPLY_LOCK`.
+    - A failed boot sync still opens the SSE channels.
+  - **Open, needs a decision:** the session gate is per context, while the session cookie and the IDB active-account pointer are shared by every tab. One tab's pass can therefore pivot them under another tab's, which can raise a spurious reauth flag. `account-deletion.spec.ts:261` fails about 1 in 20 under stress.
+    - Fix: a cross-context gate (a Web Lock).
+    - Trade-off: a hung pass would then stall sync in every tab, where today each tab's gate releases after 10s.
+  - **Stories that hit the API:** stories reading `calendar/all-sync-configs` and `sync/issues` call the real API (non-seam modules).

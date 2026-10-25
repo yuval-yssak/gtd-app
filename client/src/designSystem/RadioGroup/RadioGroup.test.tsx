@@ -7,6 +7,23 @@ import { RadioGroup } from './RadioGroup';
 afterEach(cleanup);
 
 describe('RadioGroup', () => {
+    // Each option is its own Field.Item, so each radio gets its own description, not a neighbour's.
+    it('names each option by its label and describes it by its own description', () => {
+        render(
+            <RadioGroup
+                aria-label="Theme"
+                value="light"
+                onValueChange={vi.fn()}
+                options={[
+                    { value: 'system', label: 'System', description: 'Follow device' },
+                    { value: 'light', label: 'Light', description: 'Always light' },
+                ]}
+            />,
+        );
+        expect(screen.getByRole('radio', { name: 'Light', description: 'Always light' })).toBeDefined();
+        expect(screen.getByRole('radio', { name: 'System', description: 'Follow device' })).toBeDefined();
+    });
+
     it('exposes each option as a named radio and reports the picked value', async () => {
         const onValueChange = vi.fn();
         render(

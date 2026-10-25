@@ -26,7 +26,7 @@ export const Closed: Story = {};
 export const Disabled: Story = { args: { disabled: true } };
 export const Open: Story = {
     play: async ({ canvasElement }) => {
-        await userEvent.click(within(canvasElement).getByRole('combobox', { name: 'Calendar' }));
+        await userEvent.click(await within(canvasElement).findByRole('combobox', { name: 'Calendar' }));
         await within(document.body).findByRole('listbox');
     },
 };
@@ -47,7 +47,7 @@ function GroupedSelect() {
 export const GroupedOpen: Story = {
     render: () => <GroupedSelect />,
     play: async ({ canvasElement }) => {
-        await userEvent.click(within(canvasElement).getByRole('combobox', { name: 'Calendar' }));
+        await userEvent.click(await within(canvasElement).findByRole('combobox', { name: 'Calendar' }));
         await within(document.body).findByText('dana@work.example.com');
     },
 };

@@ -18,7 +18,7 @@ const MEETING: StoredItem = {
 };
 
 async function expand(canvasElement: HTMLElement) {
-    const summary = within(canvasElement).getByTestId('meetingDetailsSummary');
+    const summary = await within(canvasElement).findByTestId('meetingDetailsSummary');
     await userEvent.click(summary);
     await expect(summary).toHaveAttribute('aria-expanded', 'true');
 }

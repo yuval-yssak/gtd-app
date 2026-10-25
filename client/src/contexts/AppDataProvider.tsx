@@ -546,6 +546,10 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
         // be lost if it fires before the load event completes.
         navigator.serviceWorker?.startMessages();
         loadAll()
+            .catch((err) => console.error('[boot] load failed:', err))
+            // Channels open even after a failed boot sync (a server error, or another tab pivoting
+            // the shared active-account pointer mid-pull): a tab without them gets no live updates
+            // at all, and a channel's first open runs a catch-up sync that retries the failed one.
             .then(() => {
                 if (unmounted) {
                     return;
@@ -555,15 +559,15 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
                         if (unmounted) {
                             return;
                         }
-                        // Open one SSE channel per logged-in account. The orchestrator inside
-                        // loadAll has already populated `loggedInUserIdsRef`, so reading it here
-                        // covers every signed-in session — single-account devices still get one channel.
+                        // Open one SSE channel per logged-in account. loadAll has refreshed
+                        // `loggedInUserIdsRef` from the server's session list (after a failed load it
+                        // still holds the boot bundle's accounts) — single-account devices get one channel.
                         openSseConnections(sseHandlersFor(deviceId), loggedInUserIdsRef.current);
                     });
                     registerPushSubscriptionIfPermitted(db).catch((err) => console.error('[push] registration failed:', err));
                 }
             })
-            .catch((err) => console.error('[boot] load failed:', err));
+            .catch((err) => console.error('[boot] opening live channels failed:', err));
         return () => {
             unmounted = true; // guards the .then() callback below (local scope)
             unmountedRef.current = true; // guards triggerAppResourceRefresh inside syncAndRefresh (shared scope)

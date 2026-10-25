@@ -20,7 +20,7 @@ export function CompletionCelebration({ flow, onFinish }: CompletionCelebrationP
         <div className={styles.celebrationRoot} data-testid="reviewCelebration">
             <Card padding="none" className={styles.celebrationCard}>
                 <Waves className={styles.mindIcon} />
-                <Text variant="headline" weight="bold">
+                <Text as="h1" variant="headline" weight="bold">
                     Your mind is clear
                 </Text>
                 <Text tone="secondary">Everything you're committed to now lives in your trusted system — not in your head. Mind like water.</Text>

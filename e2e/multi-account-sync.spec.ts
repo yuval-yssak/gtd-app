@@ -47,6 +47,45 @@ async function waitForItemTitle(page: Page, title: string): Promise<StoredItem> 
 }
 
 test.describe('multi-account sync', () => {
+    // A tab's boot sync can fail — another tab pivots the shared session cookie mid-pull, the server
+    // hiccups — and that must not leave the tab without live updates: its channels still open, and
+    // their first-open catch-up retries the sync.
+    test('a failed boot sync still opens the live channels, which then retry the sync', async ({ browser }) => {
+        const stamp = uniqueStamp();
+        await withTwoAccountsOnOneDevice(
+            browser,
+            [`boot-fail-a-${stamp}@example.com`, `boot-fail-b-${stamp}@example.com`],
+            async (page, { active, secondary }) => {
+                const failedSyncFetches = { count: 0 };
+                // Fail every pull until a channel has opened: the boot sync fails, the channel's catch-up later succeeds.
+                const isChannelOpen = { value: false };
+                // Only the reloaded document's channels count; the outgoing page's may request before it unloads.
+                page.on('framenavigated', (frame) => {
+                    if (frame === page.mainFrame()) isChannelOpen.value = false;
+                });
+                page.on('request', (request) => {
+                    if (request.url().includes('/sync/events')) isChannelOpen.value = true;
+                });
+                // Bootstrap or pull, whichever the boot sync takes, fails until a channel has opened.
+                await page.route(/\/sync\/(pull|bootstrap)/, async (route) => {
+                    if (isChannelOpen.value) {
+                        await route.continue();
+                        return;
+                    }
+                    failedSyncFetches.count += 1;
+                    await route.fulfill({ status: 500, body: '{}' });
+                });
+
+                await page.reload();
+
+                await expect.poll(() => gtd.sseChannelUserIds(page), { timeout: 15_000 }).toEqual(expect.arrayContaining([active.userId, secondary.userId]));
+                expect(failedSyncFetches.count).toBeGreaterThan(0);
+            },
+            // page.route cannot intercept requests the service worker makes once it controls the page.
+            { serviceWorkers: 'block' },
+        );
+    });
+
     test('GET /sync/events?userId= rejects users that are not sessions on this device with 403', async ({ browser }) => {
         const email = `sse-403-${uniqueStamp()}@example.com`;
         const ctx = await browser.newContext();

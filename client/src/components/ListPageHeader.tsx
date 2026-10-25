@@ -20,7 +20,7 @@ export function ListPageHeader({ title, count = 0, countTone, action, isCompact 
     return (
         <div className={styles.header} data-compact={isCompact || undefined}>
             <div className={styles.titleGroup}>
-                <Text variant="title">
+                <Text as="h1" variant="title">
                     {title}
                     {count > 0 && <Chip label={count} tone={countTone} className={styles.countChip} />}
                 </Text>

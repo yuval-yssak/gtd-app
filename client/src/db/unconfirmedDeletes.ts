@@ -2,8 +2,8 @@ import dayjs from 'dayjs';
 import type { SyncOperation } from '../types/MyDB';
 
 /**
- * Deletes this context pushed whose own delete op the server has not echoed back through a pull
- * yet. Until it has, a pulled create/update for that entity is a stale re-delivery (the server
+ * Deletes this context queued or pushed whose own delete op the server has not echoed back through
+ * a pull yet. Until it has, a pulled create/update for that entity is a stale re-delivery (the server
  * re-sends the last few seconds of ops on every pull) that was fetched before the delete landed —
  * applying it would resurrect the row, and this device ignores the SSE echo of its own delete,
  * so no later pull would remove it again.
@@ -21,6 +21,15 @@ const UNCONFIRMED_DELETE_TTL_MS = 2 * 60 * 1000;
 const pushedAtByEntity = new Map<string, number>();
 
 export const entityKey = (entityType: string, entityId: string) => `${entityType}:${entityId}`;
+
+/**
+ * A delete this context just queued. Marked at once, not only on push: a pull reads the queued
+ * deletes from IDB once, before applying its batch, so a delete queued while that batch applies
+ * would otherwise let a stale op later in the same batch resurrect the row.
+ */
+export function rememberQueuedDelete(key: string): void {
+    pushedAtByEntity.set(key, dayjs().valueOf());
+}
 
 export function rememberPushedDeletes(pushed: SyncOperation[]): void {
     const now = dayjs().valueOf();

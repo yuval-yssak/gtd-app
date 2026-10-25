@@ -59,6 +59,17 @@ describe('Toast', () => {
         expect(onClose).toHaveBeenCalledWith('timeout');
     });
 
+    it('restarts the timer when the message is replaced, so a new notice gets its full duration', () => {
+        const onClose = vi.fn();
+        const { rerender } = render(<Toast open message="Moved to Next Actions" autoHideDuration={3000} onClose={onClose} />);
+        act(() => vi.advanceTimersByTime(2500));
+        rerender(<Toast open message="Moved to Waiting For" autoHideDuration={3000} onClose={onClose} />);
+        act(() => vi.advanceTimersByTime(2000));
+        expect(onClose).not.toHaveBeenCalled();
+        act(() => vi.advanceTimersByTime(1000));
+        expect(onClose).toHaveBeenCalledWith('timeout');
+    });
+
     it('pauses the timer while the pointer is over it and restarts on leave', () => {
         const onClose = vi.fn();
         render(<Toast open message="Saved" autoHideDuration={3000} onClose={onClose} data-testid="toast" />);

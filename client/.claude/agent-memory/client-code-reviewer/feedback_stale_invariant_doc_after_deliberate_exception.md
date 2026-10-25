@@ -24,5 +24,10 @@ in explanatory comments, so a stale one is more misleading here than in a sparse
 inside one case, scroll up to the enclosing function's JSDoc and check whether it states the
 rule being broken. Same check for any shared comparator/helper whose header claims "shared by
 X and Y so both stay identical" when a third caller now diverges. Cheap to verify, and it is
-a documentation-only fix so it never blocks approval on its own. Related:
+a documentation-only fix so it never blocks approval on its own.
+
+Same pattern on **sibling tests**: when a behaviour flips (ChoiceLabel description moved out of
+the accessible name, 2026-10-25), the author adds a strict test in one file (Switch.test) while
+the component's own test (ChoiceLabel.test) keeps a comment asserting the OLD behaviour and a
+loose regex that passes both ways. Grep the other test files of the touched component. Related:
 [[inverse-pair-predicates]].

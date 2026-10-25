@@ -3,7 +3,7 @@ import type { IDBPDatabase } from 'idb';
 import { useCallback, useEffect, useState } from 'react';
 import { signOutDevice } from '../api/pushApi';
 import { runLocalAccountAction } from '../contexts/accountEvaporatedRecovery';
-import { clearAllAccounts, getAllAccounts, removeAccount, setActiveAccount, wipeUserData } from '../db/accountHelpers';
+import { getAllAccounts, removeAccountAndData, removeAllAccountsAndData, setActiveAccount } from '../db/accountHelpers';
 import { getOrCreateDeviceId } from '../db/deviceId';
 import { readSettledActiveAccount, withSessionGate } from '../db/syncHelpers';
 import { authClient } from '../lib/authClient';
@@ -68,11 +68,7 @@ export function performSignOutAll(db: IDBPDatabase<MyDB>) {
         const deviceId = await getOrCreateDeviceId(db);
         await signOutDevice(deviceId);
         await authClient.signOut();
-        // Wipe each account's IDB rows before clearing the account directory itself —
-        // accounts read first so userIds are in hand, then per-user wipe, then the directory.
-        const accounts = await getAllAccounts(db);
-        await Promise.all(accounts.map((a) => wipeUserData(a.id, db)));
-        await clearAllAccounts(db);
+        await removeAllAccountsAndData(db);
     });
 }
 
@@ -263,12 +259,10 @@ export function useAccounts(db: IDBPDatabase<MyDB>): AccountsState {
         const { data: sessions } = await authClient.multiSession.listDeviceSessions();
         const currentSession = sessions?.find((s) => s.user.id === activeAccount?.id);
         if (activeAccount) {
-            // Wipe before removeAccount so we still know which userId's rows to drop.
             // Note: this also drops any unflushed `syncOperations` queued for this user — a user
             // who signs out while offline with pending mutations loses them. The alternative is
             // leaving them in IDB indefinitely with no UI to recover them, which is worse.
-            await wipeUserData(activeAccount.id, db);
-            await removeAccount(activeAccount.id, db);
+            await removeAccountAndData(activeAccount.id, db);
         }
         return { currentSessionToken: currentSession?.session.token, sessions };
     }, [db, activeAccount]);

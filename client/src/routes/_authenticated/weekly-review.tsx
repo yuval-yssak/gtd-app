@@ -259,7 +259,7 @@ function SweepScreen({ arrivals, onReviewStage, onFinishAnyway }: SweepScreenPro
     return (
         <div className={styles.introWrapper}>
             <Card padding="none" className={styles.introCard} data-testid="sweepScreen">
-                <Text variant="headline" weight="bold">
+                <Text as="h1" variant="headline" weight="bold">
                     Almost done…
                 </Text>
                 <Text tone="secondary">Reviewing generated new items in lists you already went through:</Text>
@@ -295,7 +295,7 @@ function IntroScreen({ resumableFlow, lastCompletedTs, onStart, onResume, onStar
     return (
         <div className={styles.introWrapper}>
             <Card padding="none" className={styles.introCard}>
-                <Text variant="headline" weight="bold">
+                <Text as="h1" variant="headline" weight="bold">
                     Weekly Review
                 </Text>
                 <Text tone="secondary">

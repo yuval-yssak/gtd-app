@@ -142,7 +142,7 @@ test.describe('Keyboard regions and global shortcuts', () => {
             await expect(page).toHaveURL(/\/inbox$/);
             await expect(page.getByTestId('goToHint')).toHaveCount(0);
             // The inbox autofocuses its capture field, where g is a letter — step out of it first.
-            await page.locator('h5').first().click();
+            await page.locator('h1').first().click();
 
             await page.keyboard.press('g');
             await page.keyboard.press('Shift'); // a bare modifier keeps the jump pending
@@ -150,7 +150,7 @@ test.describe('Keyboard regions and global shortcuts', () => {
             await expect(page).toHaveURL(/\/waiting-for$/);
 
             // A modifier pressed late does not extend the jump: the hint goes when the g expires.
-            await page.locator('h5').first().click();
+            await page.locator('h1').first().click();
             await page.keyboard.press('g');
             await expect(page.getByTestId('goToHint')).toBeVisible();
             await page.waitForTimeout(1000);
@@ -247,7 +247,7 @@ test.describe('Keyboard regions and global shortcuts', () => {
             await page.keyboard.press('Tab');
             await page.keyboard.press('ArrowDown'); // walk to Calendar, but do not follow it
             await expect.poll(() => focused(page)).toBe('Calendar');
-            await page.locator('h5').first().click();
+            await page.locator('h1').first().click();
             await page.keyboard.press('g');
             await page.keyboard.press('w');
             await expect(page).toHaveURL(/\/waiting-for$/);
@@ -290,7 +290,7 @@ test.describe('Keyboard regions and global shortcuts', () => {
                 await seedUndated(page, ['Alpha']);
                 await page.goto('/next-actions');
                 await page.waitForSelector('text=Alpha');
-                await page.locator('h5').first().click();
+                await page.locator('h1').first().click();
                 const seen: string[] = [];
                 for (let i = 0; i < 4; i++) {
                     await page.keyboard.press('F6');
@@ -310,7 +310,7 @@ test.describe('Keyboard regions and global shortcuts', () => {
             await seedUndated(page, ['Alpha']);
             await page.goto('/next-actions');
             await page.waitForSelector('text=Alpha');
-            await page.locator('h5').first().click();
+            await page.locator('h1').first().click();
             await page.keyboard.press('Shift+?');
             const legend = page.getByTestId('keyboardShortcutsDialog');
             await expect(legend).toBeVisible();

@@ -12,10 +12,10 @@ function SwitchControl({ onCheckedChange = vi.fn() }) {
 }
 
 describe('ChoiceLabel', () => {
-    // The label wraps both lines, so the description is part of the control's name, after the label.
-    it('names its control starting with the label text', () => {
+    // The description sits outside the label: it describes the control and never joins its name.
+    it('names its control by the label alone and describes it by the description', () => {
         render(<ChoiceLabel control={<SwitchControl />} label="Show briefs" description="In the weekly review" />);
-        expect(screen.getByRole('switch', { name: /^Show briefs/ })).toBeDefined();
+        expect(screen.getByRole('switch', { name: 'Show briefs', description: 'In the weekly review' })).toBeDefined();
     });
 
     it('toggles its control when the label text is clicked', async () => {

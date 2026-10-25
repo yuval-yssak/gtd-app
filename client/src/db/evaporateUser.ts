@@ -4,7 +4,7 @@ import type { ReloadDestination } from '../contexts/accountEvaporatedRecovery';
 import { announceAccountReauthResolved } from '../contexts/accountReauthEvents';
 import { authClient } from '../lib/authClient';
 import type { MyDB, StoredAccount } from '../types/MyDB';
-import { getActiveAccount, getAllAccounts, removeAccount, setActiveAccount, wipeUserData } from './accountHelpers';
+import { getActiveAccount, getAllAccounts, removeAccountAndData, setActiveAccount } from './accountHelpers';
 import { withSessionGate } from './syncHelpers';
 
 export interface EvaporationResult {
@@ -35,8 +35,7 @@ export interface RecoveryResult {
  */
 export async function evaporateUser(db: IDBPDatabase<MyDB>, userId: string): Promise<EvaporationResult> {
     const wasActive = (await getActiveAccount(db))?.id === userId;
-    await wipeUserData(userId, db);
-    await removeAccount(userId, db);
+    await removeAccountAndData(userId, db);
     // A deleted account can never sync again, so a "Sync is broken — re-login" dialog for it is
     // noise; clear it here and in every other tab.
     announceAccountReauthResolved(userId);

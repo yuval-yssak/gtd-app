@@ -96,7 +96,9 @@ Import from the barrel: `import { Button, Dialog, Text } from '../designSystem'`
   as an outside press and closes the Dialog — decide that interaction before a Dialog hosts a
   toast trigger.
 - **Text** keeps MUI's default element per variant (`title` → `h5`, `subtitleSm` → `h6`, `body` → `p`…)
-  so the page outline and every `getByRole('heading')` survive. `as` overrides it.
+  so the page outline and every `getByRole('heading')` survive. `as` overrides it. Each page's own
+  title passes `as="h1"` (ListPageHeader and DetailPageHeader do it for you), so every page has
+  exactly one h1 (`page-titles.spec.ts` pins this).
 - **Chip**: a clickable chip *is* the `<button>`; a toggle chip exposes `aria-pressed` and
   `data-selected`. Selected, it fills accent — or its status tone (`success`/`warning`/`error`/`info`).
   It cannot be both clickable and removable (a button cannot hold a button): put the click target

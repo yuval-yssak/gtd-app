@@ -26,7 +26,7 @@ import { getOrCreateDeviceId, getSyncCursor, setSyncCursor } from './deviceId';
 import { dispatchOpFlush } from './dispatchOpFlush';
 import { bulkPutItems } from './itemHelpers';
 import { mergeServerOwnedRank } from './rankMerge';
-import { confirmDelete, entityKey, isAwaitingDeleteEcho, rememberPushedDeletes } from './unconfirmedDeletes';
+import { confirmDelete, entityKey, isAwaitingDeleteEcho, rememberPushedDeletes, rememberQueuedDelete } from './unconfirmedDeletes';
 
 interface BaseSyncOpParams {
     entityType: EntityType;
@@ -138,6 +138,7 @@ export async function queueSyncOp(db: IDBPDatabase<MyDB>, op: SyncOpParams): Pro
         if (hasPendingCreate) {
             return;
         }
+        rememberQueuedDelete(entityKey(entityType, entityId));
     }
 
     await db.add('syncOperations', {
@@ -428,6 +429,9 @@ export async function bootstrapFromServerUnguarded(db: IDBPDatabase<MyDB>, userI
     const mappedItemBriefs = (itemBriefs ?? []).map((doc) => remapUser(doc) as unknown as StoredItemBrief);
 
     await withCrossContextLock(SYNC_APPLY_LOCK, async () => {
+        if (await isRemovedFromDevice(db, userId)) {
+            return;
+        }
         await bulkPutItems(db, mappedItems);
 
         const routinesTx = db.transaction('routines', 'readwrite');
@@ -591,9 +595,25 @@ async function doPull(db: IDBPDatabase<MyDB>, userId: string): Promise<void> {
     // every other context's sync; the per-op transaction in `applyEntityOp` is the second layer
     // for browsers without Web Locks.
     await withCrossContextLock(SYNC_APPLY_LOCK, async () => {
+        if (await isRemovedFromDevice(db, userId)) {
+            return;
+        }
         await applyPulledOps(db, userId, ops);
         await advanceSyncCursor(db, userId, serverTs, serverId ?? '');
     });
+}
+
+/**
+ * The account left this device while its request was in flight (deleted and evaporated, or signed
+ * out). Checked inside the apply lock — `removeAccountAndData` takes the same lock — so the
+ * response is dropped instead of writing rows and a cursor back for an account the wipe removed.
+ */
+async function isRemovedFromDevice(db: IDBPDatabase<MyDB>, userId: string) {
+    const isRemoved = (await db.get('accounts', userId)) === undefined;
+    if (isRemoved) {
+        console.log('[sync] dropping a response for an account removed from this device', { userId });
+    }
+    return isRemoved;
 }
 
 /**

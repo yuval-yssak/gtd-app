@@ -14,6 +14,7 @@ vi.mock('../db/multiUserSync', () => ({
 
 import dayjs from 'dayjs';
 import { fetchBootstrap, fetchSyncOps, PUSH_BATCH_MAX, pushSyncOps } from '#api/syncClient';
+import { removeAccountAndData } from '../db/accountHelpers';
 import { SYNC_APPLY_LOCK, SYNC_FLUSH_LOCK } from '../db/crossContextLock';
 import { syncSingleUser } from '../db/multiUserSync';
 import {
@@ -28,8 +29,8 @@ import {
     waitForPendingFlush,
     withSessionGate,
 } from '../db/syncHelpers';
+import { __resetUnconfirmedDeletesForTests, entityKey, isAwaitingDeleteEcho } from '../db/unconfirmedDeletes';
 // StoredPerson/Routine/WorkContext are still needed for the db.put() casts below
-import { __resetUnconfirmedDeletesForTests } from '../db/unconfirmedDeletes';
 import type { MyDB, StoredItem, StoredItemBrief, StoredPerson, StoredRoutine, StoredWorkContext, SyncOperation } from '../types/MyDB';
 import { openTestDB } from './openTestDB';
 
@@ -122,6 +123,28 @@ async function waitFor(predicate: () => boolean, timeoutMs = 500): Promise<void>
         await new Promise((r) => setTimeout(r, 5));
     }
 }
+
+// A pull reads the queued deletes once, before its batch; a delete queued while that batch applies
+// must still hold its entity back, or a stale op later in the same batch resurrects the row.
+describe('queueSyncOp — a queued delete holds its entity back at once', () => {
+    afterEach(async () => {
+        await waitForPendingFlush();
+    });
+
+    it('marks the entity as awaiting its delete the moment the delete is queued', async () => {
+        await db.put('items', makeItem('doomed'));
+        await queueSyncOp(db, { opType: 'delete', entityType: 'item', entityId: 'doomed', snapshot: null, userId: 'u1' });
+
+        expect(isAwaitingDeleteEcho(entityKey('item', 'doomed'))).toBe(true);
+    });
+
+    it('does not mark a delete that collapsed away with its unpushed create — the server never saw the entity', async () => {
+        await queueSyncOp(db, { opType: 'create', entityType: 'item', entityId: 'fleeting', snapshot: makeItem('fleeting'), userId: 'u1' });
+        await queueSyncOp(db, { opType: 'delete', entityType: 'item', entityId: 'fleeting', snapshot: null, userId: 'u1' });
+
+        expect(isAwaitingDeleteEcho(entityKey('item', 'fleeting'))).toBe(false);
+    });
+});
 
 describe('queueSyncOp — userId field', () => {
     afterEach(async () => {
@@ -662,6 +685,39 @@ describe('flushSyncQueue — IDB marker fallback (no navigator.locks)', () => {
 });
 
 // ── pullFromServer / applyServerOp ─────────────────────────────────────────────
+
+// A pull fetches outside the apply lock; if the account leaves the device meanwhile (deleted and
+// evaporated, or signed out in another tab), applying the response would write rows and a cursor
+// back for an account the wipe just removed.
+describe('pullFromServer — an account removed while the request was in flight', () => {
+    it('drops the response: no rows and no cursor come back for the removed account', async () => {
+        vi.mocked(fetchSyncOps).mockImplementationOnce(async () => {
+            await removeAccountAndData(USER_ID, db);
+            return {
+                ops: [{ entityType: 'item', entityId: 'item-ghost', opType: 'create', snapshot: serverItem('item-ghost') }],
+                serverTs: '2025-06-01T00:00:00.000Z',
+                serverId: '',
+            };
+        });
+
+        await pullFromServer(db, USER_ID);
+
+        expect(await db.get('items', 'item-ghost')).toBeUndefined();
+        expect(await db.get('syncCursors', USER_ID)).toBeUndefined();
+    });
+
+    it('bootstrap drops its snapshot for an account removed while the request was in flight', async () => {
+        vi.mocked(fetchBootstrap).mockImplementationOnce(async () => {
+            await removeAccountAndData(USER_ID, db);
+            return { items: [serverItem('item-ghost')], routines: [], people: [], workContexts: [], serverTs: '2025-06-01T00:00:00.000Z', serverId: '' };
+        });
+
+        await bootstrapFromServer(db, USER_ID);
+
+        expect(await db.get('items', 'item-ghost')).toBeUndefined();
+        expect(await db.get('syncCursors', USER_ID)).toBeUndefined();
+    });
+});
 
 describe('pullFromServer — item ops', () => {
     it('create op writes the item to IndexedDB', async () => {

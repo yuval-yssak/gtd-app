@@ -339,7 +339,7 @@ function WizardHeader({ flow, stage, queue, onSkipStage, hasStageActivity, canCo
                         {itemProgress ? ` · ${itemProgress}` : ''}
                     </Text>
                     <div className={styles.titleRow}>
-                        <Text variant="title" className={styles.stageTitle} data-testid="reviewStageTitle">
+                        <Text as="h1" variant="title" className={styles.stageTitle} data-testid="reviewStageTitle">
                             {stage.title}
                         </Text>
                         {hasStageActivity && (

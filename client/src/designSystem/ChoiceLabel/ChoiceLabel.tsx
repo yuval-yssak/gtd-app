@@ -7,12 +7,12 @@ type ChoiceLabelProps = {
     /** The control (switch, checkbox, radio) — wrapped, so the label text names it. */
     control: ReactNode;
     label: ReactNode;
-    /** Secondary line under the label. */
+    /** Secondary line under the label: describes the control (aria-describedby), never part of its name. */
     description?: ReactNode | undefined;
     disabled?: boolean | undefined;
     /**
      * field = a standalone switch/checkbox (its own Field.Root); item = one radio inside a group
-     * (a Field.Item, so each option keeps its own label).
+     * (a Field.Item, so each option keeps its own label and description).
      */
     scope?: 'field' | 'item' | undefined;
     className?: string | undefined;
@@ -21,24 +21,25 @@ type ChoiceLabelProps = {
 
 /**
  * MUI FormControlLabel: a label that wraps, names and toggles its control — Base UI's documented
- * `Field.Label` pattern.
+ * `Field.Label` pattern. The description sits outside the label, as a `Field.Description`: inside
+ * it, its text would run straight into the control's accessible name.
  */
 export function ChoiceLabel({ control, label, description, disabled, scope = 'field', className, ...rest }: ChoiceLabelProps) {
-    const labelElement = (
-        <Field.Label data-disabled={disabled || undefined} {...rest} className={clsx(styles.choiceLabel, className)}>
-            {control}
-            <span className={styles.text}>
+    const content = (
+        <>
+            <Field.Label data-disabled={disabled || undefined} {...rest} className={clsx(styles.choiceLabel, className)}>
+                {control}
                 <span className={styles.label}>{label}</span>
-                {description !== undefined && <span className={styles.description}>{description}</span>}
-            </span>
-        </Field.Label>
+            </Field.Label>
+            {description !== undefined && <Field.Description className={styles.description}>{description}</Field.Description>}
+        </>
     );
     if (scope === 'item') {
-        return <Field.Item>{labelElement}</Field.Item>;
+        return <Field.Item className={styles.field}>{content}</Field.Item>;
     }
     return (
         <Field.Root disabled={disabled ?? false} className={styles.field}>
-            {labelElement}
+            {content}
         </Field.Root>
     );
 }

@@ -62,6 +62,8 @@ test('entity_missing update surfaces a titled sync issue row and can be dismisse
         const badge = page.getByTestId('syncIssuesBadge').locator('visible=true').first();
         await expect(badge).toBeVisible({ timeout: 15_000 });
         await badge.click();
+        // The dialog is named by its title alone — the close button sits beside it, not inside it.
+        await expect(page.getByRole('dialog', { name: 'Sync issues', exact: true })).toBeVisible();
 
         const entry = page.getByTestId('syncIssueEntry');
         await expect(entry).toHaveCount(1);

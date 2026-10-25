@@ -56,8 +56,19 @@ function useToastRegion(placement: ToastPlacement) {
 /** A transient notice (MUI Snackbar's declarative shape: `open` + `message` + `onClose`). */
 export function Toast({ open, placement = 'start', ...bodyProps }: ToastProps) {
     const region = useToastRegion(placement);
-    if (!open || !region) return null;
-    return createPortal(<ToastBody {...bodyProps} />, region);
+    if (!open || !region) {
+        return null;
+    }
+    return createPortal(<ToastBody key={noticeKeyOf(bodyProps.message)} {...bodyProps} />, region);
+}
+
+/**
+ * A text message identifies its notice; a ReactNode message has no stable identity. Keying the body
+ * by it remounts a replacement notice, so it gets its own full timer and a fresh pause latch
+ * instead of inheriting what is left of the previous one.
+ */
+function noticeKeyOf(message: ReactNode) {
+    return typeof message === 'string' || typeof message === 'number' ? String(message) : undefined;
 }
 
 // Mounted only while open, so the pause latch and the timer are born and die with each showing: a

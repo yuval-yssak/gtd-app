@@ -40,6 +40,9 @@ function ProcessInboxPage() {
     if (inboxSnapshot.length === 0) {
         return (
             <div className={styles.empty}>
+                <Text as="h1" variant="titleSm" weight="semibold">
+                    Process Inbox
+                </Text>
                 <Text tone="secondary">Inbox zero — nothing to process.</Text>
                 <Button variant="solid" onClick={close}>
                     Back to Inbox

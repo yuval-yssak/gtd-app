@@ -17,7 +17,7 @@ export function DetailPageHeader({ title, onBack, idForCopy }: DetailPageHeaderP
             <IconButton size="sm" onClick={onBack} aria-label="Go back">
                 <ArrowLeft />
             </IconButton>
-            <Text variant="titleSm" weight="semibold" className={styles.title}>
+            <Text as="h1" variant="titleSm" weight="semibold" className={styles.title}>
                 {title}
             </Text>
             {idForCopy && <CopyIdButton id={idForCopy} />}

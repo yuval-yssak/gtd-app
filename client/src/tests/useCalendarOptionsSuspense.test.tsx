@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, render, screen } from '@testing-library/react';
 import dayjs from 'dayjs';
-import { Suspense } from 'react';
+import { type ReactNode, Suspense } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AccountSyncConfigsBundle } from '../api/calendarApi';
 import * as calendarApi from '../api/calendarApi';
@@ -42,20 +42,20 @@ function OptionCount({ renderTick }: { renderTick: number }) {
     );
 }
 
-function Reader({ renderTick }: { renderTick: number }) {
+function Reader({ renderTick, fallback = <p>loading</p> }: { renderTick: number; fallback?: ReactNode }) {
     return (
-        <Suspense fallback={<p>loading</p>}>
+        <Suspense fallback={fallback}>
             <OptionCount renderTick={renderTick} />
         </Suspense>
     );
 }
 
 /** Mounts a reader whose first request has already failed and settled on no options. */
-async function mountAfterFailure() {
+async function mountAfterFailure(fallback?: ReactNode) {
     const view = { current: null as ReturnType<typeof render> | null };
     // Awaited act: React only retries a suspended render inside an act scope in tests.
     await act(async () => {
-        view.current = render(<Reader renderTick={1} />);
+        view.current = render(<Reader renderTick={1} fallback={fallback} />);
     });
     if (!view.current) throw new Error('expected the reader to mount');
     expect(screen.getByText('0 calendars, render 1')).toBeTruthy();
@@ -106,5 +106,29 @@ describe('useCalendarOptions under Suspense', () => {
         await act(async () => view.rerender(<Reader renderTick={3} />));
         expect(screen.queryByText('loading')).toBeNull();
         expect(screen.getByText('1 calendars, render 3')).toBeTruthy();
+    });
+
+    // The final-state check above cannot see a one-tick fallback, so this one counts fallback renders.
+    it('swaps in the retried options without suspending the reader even once', async () => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.spyOn(calendarApi, 'getAllSyncConfigs').mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce([WORK_CALENDAR]);
+        const fallbackRenders = { count: 0 };
+        const CountingFallback = () => {
+            fallbackRenders.count += 1;
+            return <p>loading</p>;
+        };
+        const view = await mountAfterFailure(<CountingFallback />);
+        const rendersBeforeRetry = fallbackRenders.count;
+
+        vi.setSystemTime(
+            dayjs()
+                .add(CALENDAR_OPTIONS_RETRY_AFTER_FAILURE_MS + 1, 'ms')
+                .valueOf(),
+        );
+        await act(async () => view.rerender(<Reader renderTick={2} fallback={<CountingFallback />} />));
+        await act(async () => view.rerender(<Reader renderTick={3} fallback={<CountingFallback />} />));
+
+        expect(screen.getByText('1 calendars, render 3')).toBeTruthy();
+        expect(fallbackRenders.count).toBe(rendersBeforeRetry);
     });
 });

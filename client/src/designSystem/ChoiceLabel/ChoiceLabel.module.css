@@ -1,12 +1,18 @@
 @layer gtd.components {
+    /* Two columns — the control, then its text — shared by the label row and the description row
+       below it, so the description lines up under the label whatever the control's width. */
     .field {
-        display: contents;
+        display: inline-grid;
+        grid-template-columns: auto 1fr;
+        column-gap: var(--space-2);
+        align-items: center;
     }
 
     .choiceLabel {
-        display: inline-flex;
+        display: grid;
+        grid-column: 1 / -1;
+        grid-template-columns: subgrid;
         align-items: center;
-        gap: var(--space-2);
         min-block-size: var(--control-height-md);
         cursor: pointer;
         user-select: none;
@@ -17,18 +23,15 @@
         }
     }
 
-    .text {
-        display: flex;
-        flex-direction: column;
-        min-inline-size: 0;
-    }
-
     .label {
+        min-inline-size: 0;
         font-size: var(--type-sm-size);
         line-height: var(--type-sm-line);
     }
 
     .description {
+        grid-column: 2;
+        margin-block-start: calc(var(--space-2) * -1);
         color: var(--color-text-secondary);
         font-size: var(--type-xs-size);
         line-height: var(--type-xs-line);

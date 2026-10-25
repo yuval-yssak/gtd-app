@@ -96,6 +96,6 @@ export const EditorOpen: Story = {
 export const PauseConfirm: Story = {
     play: async ({ canvasElement }) => {
         await userEvent.click(await within(canvasElement).findByTestId('routineCardPause'));
-        await within(document.body).findByRole('dialog');
+        await within(document.body).findByRole('alertdialog');
     },
 };

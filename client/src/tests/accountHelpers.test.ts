@@ -7,11 +7,15 @@ import {
     getLoggedInAccounts,
     getLoggedInUserIds,
     removeAccount,
+    removeAccountAndData,
+    removeAllAccountsAndData,
     setActiveAccount,
     upsertAccount,
     wipeUserData,
 } from '../db/accountHelpers';
+import { SYNC_APPLY_LOCK } from '../db/crossContextLock';
 import type { MyDB, StoredAccount, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext, SyncOperation } from '../types/MyDB';
+import { installQueueingLocks, uninstallLocks } from './fakeWebLocks';
 import { openTestDB } from './openTestDB';
 
 function makeAccount(id: string, addedAt: number, overrides: Partial<StoredAccount> = {}): StoredAccount {
@@ -354,5 +358,48 @@ describe('wipeUserData', () => {
         expect(await db.get('syncCursors', 'userA')).toBeDefined();
         expect(await db.get('syncCursors', 'userB')).toBeDefined();
         expect(await db.getAll('syncOperations')).toHaveLength(3);
+    });
+});
+
+// A wipe must not interleave with a pull applying in another tab or the Service Worker: under the
+// same cross-context lock the pull lands wholly before the wipe, or after it and finds no account.
+describe('removeAccountAndData / removeAllAccountsAndData', () => {
+    afterEach(() => {
+        uninstallLocks();
+    });
+
+    async function seedTwoAccounts() {
+        await upsertAccount(makeAccount('userA', 1), db);
+        await upsertAccount(makeAccount('userB', 2), db);
+        await setActiveAccount('userA', db);
+        await db.put('items', makeItem('a1', 'userA'));
+        await db.put('items', makeItem('b1', 'userB'));
+        await db.put('syncCursors', { userId: 'userA', lastSyncedTs: '2026-01-01T00:00:00.000Z', lastSyncedId: '' });
+    }
+
+    it('removes one account and its rows under the sync apply lock, leaving the other account alone', async () => {
+        const lockNames = installQueueingLocks();
+        await seedTwoAccounts();
+
+        await removeAccountAndData('userA', db);
+
+        expect(lockNames).toContain(SYNC_APPLY_LOCK);
+        expect(await db.get('accounts', 'userA')).toBeUndefined();
+        expect(await db.get('items', 'a1')).toBeUndefined();
+        expect(await db.get('syncCursors', 'userA')).toBeUndefined();
+        expect(await getActiveAccount(db)).toBeUndefined();
+        expect(await db.get('items', 'b1')).toBeDefined();
+    });
+
+    it('removes every account and its rows under the sync apply lock', async () => {
+        const lockNames = installQueueingLocks();
+        await seedTwoAccounts();
+
+        await removeAllAccountsAndData(db);
+
+        expect(lockNames).toContain(SYNC_APPLY_LOCK);
+        expect(await db.getAll('accounts')).toEqual([]);
+        expect(await db.getAll('items')).toEqual([]);
+        expect(await getActiveAccount(db)).toBeUndefined();
     });
 });

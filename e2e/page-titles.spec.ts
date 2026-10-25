@@ -6,6 +6,45 @@ import { uniqueStamp } from './helpers/uniqueStamp';
 // The browser tab title follows the page: "<page> · Done" on list pages, the entity's own title on
 // item/person/routine pages, so a row of open tabs is tellable apart.
 
+// Every page opens its outline with one h1 naming the page, for screen-reader heading navigation.
+const PAGE_HEADINGS: Array<[path: string, heading: string]> = [
+    ['/inbox', 'Inbox'],
+    ['/next-actions', 'Next Actions'],
+    ['/calendar', 'Calendar'],
+    ['/waiting-for', 'Waiting For'],
+    ['/tickler', 'Tickler'],
+    ['/someday', 'Someday / Maybe'],
+    ['/routines', 'Routines'],
+    ['/people', 'People'],
+    ['/work-contexts', 'Work Contexts'],
+    ['/search', 'Search'],
+    ['/done', 'Done'],
+    ['/trash', 'Trash'],
+    ['/settings', 'Settings'],
+    ['/weekly-review', 'Weekly Review'],
+    ['/process-inbox', 'Process Inbox'],
+    ['/item/no-such-item-id', 'Edit item'],
+    ['/person/no-such-person-id', 'Edit person'],
+    ['/routine/no-such-routine-id', 'Edit routine'],
+];
+
+/** The heading may be followed by a count chip inside the same h1, so match it as a prefix. */
+const startsWith = (heading: string) => new RegExp(`^${heading.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}`);
+
+test.describe('page heading', () => {
+    test('every page has exactly one h1, naming the page', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `page-headings-${uniqueStamp()}@example.com`, async (page) => {
+            for (const [path, heading] of PAGE_HEADINGS) {
+                await page.goto(path);
+                const h1 = page.getByRole('heading', { level: 1 });
+                // Count first: with two h1s the text check would fail and hide the real cause.
+                await expect(h1, path).toHaveCount(1);
+                await expect(h1, path).toHaveText(startsWith(heading));
+            }
+        });
+    });
+});
+
 test.describe('tab title', () => {
     test('follows the page through in-app navigation and deep links', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `page-titles-${uniqueStamp()}@example.com`, async (page) => {

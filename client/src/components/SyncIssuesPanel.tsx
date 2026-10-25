@@ -70,12 +70,14 @@ export function SyncIssuesPanel() {
                 </IconButton>
             </Tooltip>
             <Dialog open={isOpen} onClose={() => setIsOpen(false)} fullWidth size="sm" data-testid="syncIssuesPanel">
-                <DialogTitle className={styles.dialogTitle}>
-                    Sync issues
+                {/* The close button sits beside the title, not inside it: inside, its "Close" would join
+                    the dialog's accessible name. */}
+                <div className={styles.titleRow}>
+                    <DialogTitle>Sync issues</DialogTitle>
                     <IconButton onClick={() => setIsOpen(false)} size="sm" aria-label="Close">
                         <X />
                     </IconButton>
-                </DialogTitle>
+                </div>
                 <DialogContent className={styles.content}>
                     {issues.length === 0 ? (
                         <Text variant="bodySm" tone="secondary">

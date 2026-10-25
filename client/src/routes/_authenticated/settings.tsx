@@ -50,7 +50,7 @@ function SettingsPage() {
 
     return (
         <div className={styles.pageWrapper}>
-            <Text variant="title" className={styles.pageTitle}>
+            <Text as="h1" variant="title" className={styles.pageTitle}>
                 Settings
             </Text>
             <SettingsSection title="Account" description={`${account?.name ?? '—'} · ${account?.email ?? '—'}`} />

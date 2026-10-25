@@ -1,6 +1,7 @@
 import dayjs from 'dayjs';
 import type { IDBPDatabase, IDBPTransaction } from 'idb';
 import type { MyDB, OAuthProvider, StoredAccount } from '../types/MyDB';
+import { SYNC_APPLY_LOCK, withCrossContextLock } from './crossContextLock';
 
 /**
  * Upserts an account row, reconciling on the unique `email` index. The store is keyed by `id`
@@ -104,6 +105,27 @@ export async function removeAccount(userId: string, db: IDBPDatabase<MyDB>): Pro
 export async function clearAllAccounts(db: IDBPDatabase<MyDB>): Promise<void> {
     await db.clear('accounts');
     await db.delete('activeAccount', 'active');
+}
+
+/**
+ * Takes an account off this device: its rows, then its directory entry. Under the cross-context
+ * apply lock, so a pull applying in another tab (or the Service Worker) lands either wholly before
+ * the wipe — which then removes it — or after the account is gone, when the pull drops its result.
+ */
+export function removeAccountAndData(userId: string, db: IDBPDatabase<MyDB>): Promise<void> {
+    return withCrossContextLock(SYNC_APPLY_LOCK, async () => {
+        await wipeUserData(userId, db);
+        await removeAccount(userId, db);
+    });
+}
+
+/** Every account off this device, under the same lock as `removeAccountAndData`. */
+export function removeAllAccountsAndData(db: IDBPDatabase<MyDB>): Promise<void> {
+    return withCrossContextLock(SYNC_APPLY_LOCK, async () => {
+        const accounts = await getAllAccounts(db);
+        await Promise.all(accounts.map((account) => wipeUserData(account.id, db)));
+        await clearAllAccounts(db);
+    });
 }
 
 /**

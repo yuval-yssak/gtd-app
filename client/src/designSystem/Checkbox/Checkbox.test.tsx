@@ -8,6 +8,11 @@ import { Checkbox } from './Checkbox';
 afterEach(cleanup);
 
 describe('Checkbox', () => {
+    it('is named by its label alone and described by its description', () => {
+        render(<Checkbox checked={false} onCheckedChange={vi.fn()} label="Urgent" description="Shown first in Next Actions" />);
+        expect(screen.getByRole('checkbox', { name: 'Urgent', description: 'Shown first in Next Actions' })).toBeDefined();
+    });
+
     it('is a checkbox named by its label (e2e: getByRole checkbox { name: "Sync Primary" })', async () => {
         function Harness() {
             const [isChecked, setIsChecked] = useState(false);

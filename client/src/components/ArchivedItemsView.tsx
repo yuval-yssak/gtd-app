@@ -107,7 +107,7 @@ export function ArchivedItemsView({ status, title, emptyIcon, emptyMessage, urlQ
         return (
             <div>
                 <div className={styles.titleGroup}>
-                    <Text variant="title" className={styles.emptyTitle}>
+                    <Text as="h1" variant="title" className={styles.emptyTitle}>
                         {title}
                     </Text>
                     {/* "Syncing account…" while a newly-added account bootstraps; surfaces even when the list already has items. */}
@@ -139,7 +139,7 @@ export function ArchivedItemsView({ status, title, emptyIcon, emptyMessage, urlQ
         <div>
             <div className={styles.headerRow}>
                 <div className={styles.titleGroup}>
-                    <Text variant="title">
+                    <Text as="h1" variant="title">
                         {title}
                         {liveCount > 0 && <Chip label={liveCount} className={styles.countChip} />}
                     </Text>

@@ -58,11 +58,19 @@ function fetchCalendarOptions(): Promise<CalendarOption[]> {
 function revalidateInBackground(): void {
     failedAt = null;
     const retry = fetchCalendarOptions();
-    void retry.then(() => {
+    void retry.then((options) => {
         if (failedAt === null) {
-            cached = retry;
+            cached = settledPromise(options);
         }
     });
+}
+
+/**
+ * A promise React's use() can read synchronously: it reads a thenable's `status`/`value` tags
+ * before subscribing, so an already-settled swap renders at once instead of suspending for a tick.
+ */
+function settledPromise<T>(value: T) {
+    return Object.assign(Promise.resolve(value), { status: 'fulfilled' as const, value });
 }
 
 /**

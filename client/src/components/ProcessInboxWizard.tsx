@@ -171,7 +171,7 @@ function WizardHeader({ index, total }: WizardHeaderProps) {
     return (
         <div className={styles.headerRow}>
             <div className={styles.headerTextBlock}>
-                <Text variant="titleSm" weight="semibold">
+                <Text as="h1" variant="titleSm" weight="semibold">
                     Process Inbox
                 </Text>
                 <Text as="span" variant="caption" tone="secondary">

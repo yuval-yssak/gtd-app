@@ -1,8 +1,10 @@
-.dialogTitle {
+/* The title keeps the dialog's own padding; the close button sits beside it at the end edge. */
+.titleRow {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: var(--space-2);
+    padding-inline-end: var(--space-4);
 }
 
 /* MUI's `dividers` content: hairlines above and below the scrolling list. */

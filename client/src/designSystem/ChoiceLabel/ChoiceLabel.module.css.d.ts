@@ -3,6 +3,5 @@ declare const styles: {
     readonly description: string;
     readonly field: string;
     readonly label: string;
-    readonly text: string;
 };
 export = styles;

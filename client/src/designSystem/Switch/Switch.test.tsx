@@ -16,6 +16,12 @@ describe('Switch', () => {
         expect(onCheckedChange).toHaveBeenCalledWith(true);
     });
 
+    it('is named by its label alone; the description describes it instead of running into the name', () => {
+        render(<Switch checked={false} onCheckedChange={vi.fn()} label="Show briefs" description="In the weekly review" />);
+        // A string name matches the whole computed name, so a run-on "Show briefsIn the…" fails here.
+        expect(screen.getByRole('switch', { name: 'Show briefs', description: 'In the weekly review' })).toBeDefined();
+    });
+
     it('puts controlProps on the focusable switch itself (a keyboard region walks it by arrows)', () => {
         render(
             <Switch checked={false} onCheckedChange={vi.fn()} label="Show tags" controlProps={{ tabIndex: -1, 'data-roving-item': '' }} data-testid="toggle" />,
