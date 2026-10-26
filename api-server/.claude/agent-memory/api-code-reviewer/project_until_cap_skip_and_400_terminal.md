@@ -32,9 +32,11 @@ occurrences; `categorizeGCalError` buckets 400 as `terminal`.
   precedence is load-bearing — inverting it strands a revoked integration Dismiss-only with no
   Reconnect. NOW PINNED by "classifies a 400 carrying invalid_grant as scope_missing"; verified it
   is the ONLY test that catches hoisting the code switch above the guard.
-- The skip guard lives ONLY in `pushRoutineInstanceCancellation`. `pushRoutineInstanceOverride`
-  (the `done`-marker / per-instance-edit path) has no equivalent and will still 400 on a beyond-cap
-  instance — reachable when a device offline during the cap later flushes a `done` op. OPEN follow-up.
+- The skip guard now covers BOTH `pushRoutineInstanceCancellation` and `pushRoutineInstanceOverride`
+  (override added 2026-10-26 after prod done-marker 400s on an organizer-ended split tail). The
+  stale-local-UNTIL proxy risk (point 1) therefore now also silently drops done markers / instance
+  edits, not just cancellations. The missed-push sweep re-selects such rows every sync (skip never
+  stamps lastPushedToGCalTs) — cheap, but a perpetual candidate.
 - COUNT-capped series (`FREQ=DAILY;COUNT=10`) cap the master with no UNTIL, so `extractUntil` returns
   null and the guard never fires. `stripEndClauses` removes COUNT on split/cap, but imported GCal
   series can carry it. Mitigated (not fixed) by 400→terminal. OPEN follow-up.

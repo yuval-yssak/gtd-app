@@ -325,13 +325,17 @@ async function pushRoutineInstanceOverride(
     if (!routine?.calendarEventId) {
         return;
     }
+    const originalDate = resolveOriginalDate(routine, snapshot);
+    if (isBeyondUntilCap(routine, originalDate)) {
+        console.log('[gcal-pushback] skipping instance override beyond UNTIL cap', { routineId: routine._id, originalDate });
+        return;
+    }
     const link: CalendarLink = { integrationId: routine.calendarIntegrationId, configId: routine.calendarSyncConfigId };
     // Heal targets the routine — the routine owns the integration link for all generated items.
     const ctx = await resolvePushContext(link, userId, buildProvider, { entityType: 'routine', entityId: routine._id });
     if (!ctx) {
         return;
     }
-    const originalDate = resolveOriginalDate(routine, snapshot);
     const { provider, config, timeZone, integration } = ctx;
     const isDone = snapshot.status === 'done';
     const calendarEventId = routine.calendarEventId;
@@ -447,10 +451,11 @@ async function pushRoutineInstanceCancellation(
 /**
  * True when the occurrence falls past the routine's rrule UNTIL cap. Same rationale as the
  * paused-routine skip in `pushRoutineInstanceCancellation`, for the UNTIL-cap-via-edit path:
- * capping the routine's rrule already rewrote the GCal master with UNTIL, removing every
- * occurrence past the cap — Google answers a cancellation PATCH for such an instance with a
- * permanent 400. Day-granularity comparison is deliberately conservative: a mid-day UNTIL with
- * a same-day occurrence still pushes and surfaces as terminal rather than being skipped.
+ * capping the routine's rrule (locally, or by the organizer in Google) leaves the GCal master
+ * with an UNTIL that removes every occurrence past the cap — Google answers any instance
+ * PATCH for such an occurrence (cancellation or done-marker override) with a permanent 400.
+ * Day-granularity comparison is deliberately conservative: a mid-day UNTIL with a same-day
+ * occurrence still pushes and surfaces as terminal rather than being skipped.
  */
 function isBeyondUntilCap(routine: RoutineInterface, originalDate: string): boolean {
     const untilIso = extractUntilFromRrule(routine.rrule);

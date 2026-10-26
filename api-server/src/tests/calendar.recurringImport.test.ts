@@ -2,11 +2,12 @@
 import dayjs from 'dayjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GoogleCalendarProvider } from '../calendarProviders/GoogleCalendarProvider.js';
+import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import { maybePushToGCal } from '../lib/calendarPushback.js';
-import { bareIdsWithLiveMasterInBatch, classifyRecurringMaster, pickSplitParent } from '../routes/calendar.js';
+import { bareIdsWithLiveMasterInBatch, classifyRecurringMaster, isOwnedCappedSplitTail, pickSplitParent } from '../routes/calendar.js';
 import type { ItemInterface, RoutineInterface } from '../types/entities.js';
 import {
     app,
@@ -1130,6 +1131,114 @@ describe('cancelled master — orphaned split-successor reap', () => {
     });
 });
 
+// ─── Capped split tail — the organizer ENDS a split series ─────────────────
+//
+// Ending an already-split series in Google ("this and all following" → end date, or simply giving the
+// series an end) adds a PAST UNTIL to the tail's own `_R<anchor>` master. No per-occurrence cancellation
+// is ever sent. That capped `_R` master must cap the successor routine that owns it — resolving it to the
+// bare id handed it to the inactive BASE instead, so the successor kept generating phantom occurrences
+// forever (prod 2026-10-26: "ALL HANDS", "Daily - Team Leaders").
+
+describe('capped split tail — series ended on its own _R master', () => {
+    const rebasedId = 'master-ended_R20260102T090000';
+    const pastUntil = () => dayjs().subtract(2, 'day').format('YYYYMMDD[T205959Z]');
+
+    beforeEach(() => {
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+    });
+
+    /** Incremental delta — the path a live webhook takes; a full sync would also run the chain heal and mask the bug. */
+    async function syncIncrementalDelta(sessionCookie: string, events: GCalEvent[]) {
+        await calendarSyncConfigsDAO.upsertSyncToken('sync-config-1', 'tok-before', dayjs().toISOString());
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsIncremental').mockResolvedValue({ events, nextSyncToken: 'tok-after' });
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+    }
+
+    it('caps and pauses the successor that owns the _R master, trashing its occurrences past the UNTIL', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await seedSplitSeries(userId, 'master-ended', { calendarRebasedEventId: rebasedId });
+        await itemsDAO.insertOne(makeItem(userId, { _id: 'item-ended-future', title: CANCELLED_MASTER_TITLE, routineId: 'master-ended-successor' }));
+        const until = pastUntil();
+
+        await syncIncrementalDelta(sessionCookie, [liveMaster(rebasedId, `FREQ=WEEKLY;UNTIL=${until};BYDAY=MO`)]);
+
+        const successor = await routinesDAO.findOne({ _id: 'master-ended-successor' });
+        expect(successor!.active).toBe(false);
+        expect(successor!.rrule).toContain(`UNTIL=${until}`);
+        const item = await itemsDAO.findOne({ _id: 'item-ended-future' });
+        expect(item!.status).toBe('trash');
+    });
+
+    it('leaves the inactive base segment untouched — the tail master is not its master', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await seedSplitSeries(userId, 'master-ended', { calendarRebasedEventId: rebasedId });
+
+        await syncIncrementalDelta(sessionCookie, [liveMaster(rebasedId, `FREQ=WEEKLY;UNTIL=${pastUntil()};BYDAY=MO`)]);
+
+        const base = await routinesDAO.findOne({ _id: 'master-ended-base' });
+        expect(base!.rrule).toBe('FREQ=WEEKLY;UNTIL=20260101T235959Z;BYDAY=MO');
+    });
+
+    // Pausing a routine trashes ALL its future items, so an end date still ahead must not cap the successor
+    // yet — the real meetings before it would vanish from the app.
+    it('leaves the successor live while the tail ends on a FUTURE date', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await seedSplitSeries(userId, 'master-ended', { calendarRebasedEventId: rebasedId });
+        await itemsDAO.insertOne(makeItem(userId, { _id: 'item-before-end', title: CANCELLED_MASTER_TITLE, routineId: 'master-ended-successor' }));
+        const futureUntil = dayjs().add(10, 'day').format('YYYYMMDD[T205959Z]');
+
+        await syncIncrementalDelta(sessionCookie, [liveMaster(rebasedId, `FREQ=WEEKLY;UNTIL=${futureUntil};BYDAY=MO`)]);
+
+        const successor = await routinesDAO.findOne({ _id: 'master-ended-successor' });
+        expect(successor!.active).toBe(true);
+        expect((await itemsDAO.findOne({ _id: 'item-before-end' }))!.status).toBe('calendar');
+    });
+
+    it('ignores its own echo — a master update within the push window of our last push', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        const pushedTs = dayjs().toISOString();
+        await seedSplitSeries(userId, 'master-ended', { calendarRebasedEventId: rebasedId, lastPushedToGCalTs: pushedTs });
+        await itemsDAO.insertOne(makeItem(userId, { _id: 'item-echo-future', title: CANCELLED_MASTER_TITLE, routineId: 'master-ended-successor' }));
+
+        await syncIncrementalDelta(sessionCookie, [{ ...liveMaster(rebasedId, `FREQ=WEEKLY;UNTIL=${pastUntil()};BYDAY=MO`), updated: pushedTs }]);
+
+        const successor = await routinesDAO.findOne({ _id: 'master-ended-successor' });
+        expect(successor!.active).toBe(true);
+        expect((await itemsDAO.findOne({ _id: 'item-echo-future' }))!.status).toBe('calendar');
+    });
+
+    // Re-split: GCal caps the previous `_R` link AND mints a new open one in the same delta. Phase 2 re-keys the
+    // live successor onto the new anchor, so the capped link no longer owns any routine and must not cap it.
+    it('keeps the successor live when the same delta re-splits the series onto a new _R master', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await seedSplitSeries(userId, 'master-ended', { calendarRebasedEventId: rebasedId });
+        await itemsDAO.insertOne(makeItem(userId, { _id: 'item-resplit-future', title: CANCELLED_MASTER_TITLE, routineId: 'master-ended-successor' }));
+
+        await syncIncrementalDelta(sessionCookie, [
+            liveMaster(rebasedId, `FREQ=WEEKLY;UNTIL=${pastUntil()};BYDAY=MO`),
+            liveMaster('master-ended_R20260201T090000'),
+        ]);
+
+        const live = await expectSoleActiveRoutine(userId, 'master-ended');
+        expect(live._id).toBe('master-ended-successor');
+        expect(live.calendarRebasedEventId).toBe('master-ended_R20260201T090000');
+        expect(live.rrule).not.toContain('UNTIL=');
+        const item = await itemsDAO.findOne({ _id: 'item-resplit-future' });
+        expect(item!.status).toBe('calendar');
+    });
+});
+
 // ─── bareIdsWithLiveMasterInBatch — unit tests ────────────────────────────
 //
 // The reap's liveness predicate: which bare series ids still have a master producing occurrences. Getting
@@ -1519,6 +1628,61 @@ describe('classifyRecurringMaster', () => {
         const cancelled = makeEvent({ id: successorId, status: 'cancelled', recurrence: [] });
         const capped = makeRoutine({ calendarEventId: bareId, active: false });
         expect(classifyRecurringMaster(cancelled, [cancelled], [capped])).toBe('reReport');
+    });
+});
+
+// ─── isOwnedCappedSplitTail — unit tests ──────────────────────────────────
+
+describe('isOwnedCappedSplitTail', () => {
+    const tailId = 'base-master_R20261013T071500';
+    const tail = (over: Partial<GCalEvent> = {}): GCalEvent => ({
+        id: tailId,
+        title: 'Daily - Team Leaders',
+        timeStart: '2026-10-13T10:15:00+03:00',
+        timeEnd: '2026-10-13T10:30:00+03:00',
+        updated: '2026-10-23T12:16:00Z',
+        status: 'confirmed',
+        recurrence: ['RRULE:FREQ=WEEKLY;UNTIL=20261025T215959Z;BYDAY=MO'],
+        ...over,
+    });
+    const keyedTo = (rebasedId: string) => [makeRoutine('u1', { calendarRebasedEventId: rebasedId })];
+
+    it('claims a capped _R master whose raw id is a stored rebased key', () => {
+        const capped = tail();
+        expect(isOwnedCappedSplitTail(capped, [capped], keyedTo(tailId))).toBe(true);
+    });
+
+    it('leaves a capped _R master no routine is keyed to (phase 1 keeps its legacy handling)', () => {
+        const capped = tail();
+        expect(isOwnedCappedSplitTail(capped, [capped], keyedTo('base-master_R20260901T071500'))).toBe(false);
+    });
+
+    // A re-split, not an ending: capping here would trash the live series' items if phase 2's re-key failed.
+    it('leaves a capped _R master alone when the batch carries an open _R tail on the same series', () => {
+        const capped = tail();
+        const newTail = tail({ id: 'base-master_R20261026T084500', recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'] });
+        expect(isOwnedCappedSplitTail(capped, [capped, newTail], keyedTo(tailId))).toBe(false);
+    });
+
+    it('still claims it when the only open master in the batch belongs to another series', () => {
+        const capped = tail();
+        const otherSeries = tail({ id: 'other-master_R20261026T084500', recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'] });
+        expect(isOwnedCappedSplitTail(capped, [capped, otherSeries], keyedTo(tailId))).toBe(true);
+    });
+
+    it('leaves an open _R master to phase 2', () => {
+        const open = tail({ recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'] });
+        expect(isOwnedCappedSplitTail(open, [open], keyedTo(tailId))).toBe(false);
+    });
+
+    it('leaves a cancelled _R master to the cancellation path', () => {
+        const cancelled = tail({ status: 'cancelled', recurrence: [] });
+        expect(isOwnedCappedSplitTail(cancelled, [cancelled], keyedTo(tailId))).toBe(false);
+    });
+
+    it('leaves a capped bare master to phase 1', () => {
+        const bare = tail({ id: 'base-master' });
+        expect(isOwnedCappedSplitTail(bare, [bare], keyedTo('base-master'))).toBe(false);
     });
 });
 

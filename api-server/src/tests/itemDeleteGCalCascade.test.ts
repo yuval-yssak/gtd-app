@@ -349,12 +349,72 @@ describe('item-delete cascades to GCal via maybePushToGCal', () => {
     });
 });
 
+describe('done marker on a routine occurrence beyond the UNTIL cap', () => {
+    // Marking done patches the single GCal instance with the ✓ marker. An occurrence past the master's
+    // UNTIL no longer exists in Google, so the patch is a permanent 400 that lands in Sync issues
+    // (prod 2026-10-26, a series the organizer had ended). Same guard as the cancellation path.
+    async function seedCappedRoutineWithItems() {
+        await seedCalendarIntegration();
+        await routinesDAO.insertOne({
+            _id: 'routine-capped-done',
+            user: userId,
+            title: 'Daily check',
+            routineType: 'calendar',
+            rrule: 'FREQ=DAILY;UNTIL=20260901T235959Z',
+            template: {},
+            active: false,
+            createdTs: '2026-08-01T00:00:00Z',
+            updatedTs: '2026-08-01T00:00:00Z',
+            calendarEventId: 'gcal-master-capped-done',
+            calendarIntegrationId: integrationId,
+            calendarSyncConfigId: configId,
+        } as RoutineInterface);
+        const beyondCap: ItemInterface = {
+            _id: 'item-done-beyond-cap',
+            user: userId,
+            status: 'calendar',
+            title: 'Daily check',
+            routineId: 'routine-capped-done',
+            timeStart: '2026-09-08T15:00:00',
+            timeEnd: '2026-09-08T15:10:00',
+            createdTs: '2026-08-01T00:00:00Z',
+            updatedTs: '2026-08-01T00:00:00Z',
+        };
+        await itemsDAO.insertOne(beyondCap);
+        await itemsDAO.insertOne({ ...beyondCap, _id: 'item-done-at-cap', timeStart: '2026-09-01T15:00:00', timeEnd: '2026-09-01T15:10:00' });
+    }
+
+    async function markDone(itemId: string, buildProvider: () => never) {
+        const item = await itemsDAO.findOne({ _id: itemId });
+        if (!item) throw new Error(`expected seeded item ${itemId}`);
+        const op = await applyAndPublishOperation(
+            userId,
+            { entityType: 'item', opType: 'update', entityId: itemId, snapshot: { ...item, status: 'done', updatedTs: dayjs().toISOString() } },
+            { deviceId: 'api:tok-1' },
+        );
+        await calendarPushback.maybePushToGCal(op, buildProvider);
+    }
+
+    it('skips the instance patch past the cap and still patches the occurrence on the UNTIL day', async () => {
+        await seedCappedRoutineWithItems();
+        const updateInstance = vi.fn().mockResolvedValue(undefined);
+        const buildProvider = () => ({ updateRecurringInstance: updateInstance, getCalendarTimeZone: vi.fn().mockResolvedValue('UTC') }) as never;
+
+        await markDone('item-done-beyond-cap', buildProvider);
+        expect(updateInstance).not.toHaveBeenCalled();
+
+        await markDone('item-done-at-cap', buildProvider);
+        expect(updateInstance).toHaveBeenCalledTimes(1);
+    });
+});
+
 // The CalendarProvider interface has many methods; we only need one or two per test. Return a
 // proxy that satisfies the type via cast — call sites assert on the spies' invocation, not on
 // type-level completeness.
 function fakeProviderWithDelete(deleteEvent: ReturnType<typeof vi.fn>) {
     return { deleteEvent, getCalendarTimeZone: vi.fn().mockResolvedValue('UTC') } as never;
 }
+
 function fakeProviderWithCancelInstance(cancel: ReturnType<typeof vi.fn>) {
     return { cancelRecurringInstance: cancel, getCalendarTimeZone: vi.fn().mockResolvedValue('UTC') } as never;
 }

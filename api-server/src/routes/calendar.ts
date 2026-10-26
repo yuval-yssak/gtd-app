@@ -2535,6 +2535,8 @@ export function classifyRecurringMaster(event: GCalEvent, batch: GCalEvent[], ex
  *    pauses its routine (active:false) before any successor inserts.
  *  - Phase 2 (sequential per bare-id group): `_R<…>` split successors. Sequencing per bare id avoids
  *    a Promise.all race when GCal split the same series twice (two `_R` masters → one bare id).
+ *  - Phase 2b: capped `_R<…>` masters still owned by a successor — the series was ended on its tail.
+ *  - Phase 3: reap successors orphaned by a cancelled master.
  */
 async function importRecurringMastersOrdered(
     masters: GCalEvent[],
@@ -2543,8 +2545,9 @@ async function importRecurringMastersOrdered(
     ctx: SyncContext,
 ): Promise<void> {
     const successors = masters.filter((e) => classifyRecurringMaster(e, masters, existingRoutines) === 'splitSuccessor');
-    const successorIds = new Set(successors.map((e) => e.id));
-    const phaseOne = masters.filter((e) => !successorIds.has(e.id));
+    const ownedCappedTails = masters.filter((e) => isOwnedCappedSplitTail(e, masters, existingRoutines) && hasEndedBy(e, ctx.now));
+    const deferredIds = new Set([...successors, ...ownedCappedTails].map((e) => e.id));
+    const phaseOne = masters.filter((e) => !deferredIds.has(e.id));
 
     for (const event of phaseOne) {
         await importRecurringMasterIsolated(event, source, ctx);
@@ -2566,9 +2569,85 @@ async function importRecurringMastersOrdered(
             }
         }),
     );
+    // Phase 2b: after phase 2, so a same-batch re-split has already re-keyed the live successor onto its new
+    // anchor — the capped link then owns nothing and is skipped instead of capping the live series.
+    for (const tail of ownedCappedTails) {
+        await applyCappedSplitTailIsolated(tail, source, ctx);
+    }
     // Phase 3: retire successors stranded active on series this batch cancelled. Must run last — see
     // `reapOrphanedSeriesSuccessors` for why sweeping any earlier destroys a live same-batch tail.
     await reapOrphanedSeriesSuccessors(masters, source, ctx);
+}
+
+/**
+ * A confirmed `_R<anchor>` master carrying an UNTIL whose raw id is the stored rebased key of an existing
+ * split successor: the organizer ENDED the live tail of a split series. Google sends no per-occurrence
+ * cancellations for that — the UNTIL on this master is the only signal. Phase 1 must not take it: its bare-id
+ * resolution prefers the inactive base, which then absorbs the tail's UNTIL while the successor stays open and
+ * keeps generating occurrences Google no longer has (every done-marker on them then 400s).
+ *
+ * Applying it is destructive (pause + trash past the UNTIL), so a batch that also carries an OPEN `_R` master
+ * on the same series is a re-split, not an ending: phase 2 re-keys the successor onto that new tail, and the
+ * capped link is left alone even if that import fails. Residual risk: a re-split whose cap and new tail land
+ * in DIFFERENT deltas caps the successor first; the new tail's arrival reactivates it (`newlyLosesUntil`)
+ * but the items trashed in between stay trashed.
+ *
+ * Exported for unit testing.
+ */
+export function isOwnedCappedSplitTail(event: GCalEvent, batch: GCalEvent[], existingRoutines: RoutineInterface[]): boolean {
+    if (!hasRebasedSuffix(event.id) || event.status !== 'confirmed') {
+        return false;
+    }
+    const rrule = extractRrule(event.recurrence ?? []);
+    if (!rrule || isOpenRrule(rrule) || hasOpenSiblingTailInBatch(event, batch)) {
+        return false;
+    }
+    return existingRoutines.some((routine) => routine.calendarRebasedEventId === event.id);
+}
+
+/**
+ * The master's UNTIL already lies in the past. Phase 2b claims only such tails: pausing a routine trashes
+ * ALL its future items, so a tail the organizer ends on a FUTURE date would lose the real meetings still
+ * ahead of it. Those stay on the legacy phase-1 path until the date passes.
+ */
+function hasEndedBy(master: GCalEvent, now: string): boolean {
+    const until = extractUntilFromRrule(extractRrule(master.recurrence ?? []) ?? '');
+    return until !== null && dayjs(until).isBefore(dayjs(now));
+}
+
+function hasOpenSiblingTailInBatch(tail: GCalEvent, batch: GCalEvent[]): boolean {
+    const bareId = normalizeMasterEventId(tail.id);
+    return batch.some((e) => {
+        if (e.id === tail.id || e.status !== 'confirmed' || !hasRebasedSuffix(e.id) || normalizeMasterEventId(e.id) !== bareId) {
+            return false;
+        }
+        const rrule = extractRrule(e.recurrence ?? []);
+        return rrule !== null && isOpenRrule(rrule);
+    });
+}
+
+/** Per-series fault isolation, mirroring `importRecurringMasterIsolated`. */
+async function applyCappedSplitTailIsolated(rawEvent: GCalEvent, source: CalendarSource, ctx: SyncContext): Promise<void> {
+    try {
+        await applyCappedSplitTail(rawEvent, source, ctx);
+    } catch (err) {
+        console.error('[gcal-sync] capped split-tail import failed — skipping series', { eventId: rawEvent.id, err });
+    }
+}
+
+/** Applies an ended tail master to the successor routine that still owns its `_R` id (see `isOwnedCappedSplitTail`). */
+async function applyCappedSplitTail(rawEvent: GCalEvent, source: CalendarSource, ctx: SyncContext): Promise<void> {
+    const owner = await findSplitSuccessorByRebasedId(rawEvent.id, source, ctx);
+    const rrule = extractRrule(rawEvent.recurrence ?? []);
+    if (!owner || !rrule) {
+        return;
+    }
+    if (owner.lastPushedToGCalTs && isOwnEcho(owner.lastPushedToGCalTs, rawEvent.updated)) {
+        return;
+    }
+    console.log('[gcal-sync] capping split successor from its own ended master', { rebasedId: rawEvent.id, routineId: owner._id });
+    // `newlyGainsUntil` inside pauses the routine and trashes its items past the UNTIL — inbound only, no GCal write.
+    await updateRoutineFromGCal(owner, { ...rawEvent, id: normalizeMasterEventId(rawEvent.id) }, rrule, source, ctx);
 }
 
 /**
