@@ -37,6 +37,7 @@ import { useShowBriefs } from '../../lib/briefPreference';
 import { briefState } from '../../lib/briefSource';
 import { statusKeyOf } from '../../lib/editorShortcuts';
 import { omitArchived } from '../../lib/entityUsage';
+import { startsOnFutureDay } from '../../lib/futureDoneConfirm';
 import { isBrowserOffline } from '../../lib/onlineStatus';
 import { scopeOptionsToOwner } from '../../lib/ownerScopedPickerOptions';
 import { chordLabel, isApplePlatform } from '../../lib/platformKeys';
@@ -62,6 +63,7 @@ import {
 } from '../clarify/types';
 import { WaitingForFields } from '../clarify/WaitingForFields';
 import { DisabledCapableTooltip } from '../DisabledCapableTooltip';
+import { FutureDoneConfirmDialog, useFutureDoneConfirm } from '../FutureDoneConfirmDialog';
 import { NextActionPositionRow } from '../nextActions/NextActionPositionRow';
 import { RoutineIndicator } from '../RoutineIndicator';
 import { RoutineScheduleFields } from '../routineEditor/RoutineScheduleFields';
@@ -309,6 +311,7 @@ export function ItemEditorBody({
     // Deferred save state. When the SendUpdatesDialog needs to fire we stash the normalized
     // title/notes here and resolve them when the user picks all/none/cancel.
     const [pendingSave, setPendingSave] = useState<{ trimmedTitle: string; trimmedNotes: string } | null>(null);
+    const futureDone = useFutureDoneConfirm([liveItem]);
 
     const [naForm, setNaForm] = useState<NextActionFormState>(() => itemToNextActionForm(item));
     const [calForm, setCalForm] = useState<CalendarFormState>(() => itemToCalendarForm(item));
@@ -686,6 +689,13 @@ export function ItemEditorBody({
             setReassignError(null);
             setRoutineSaveError(null);
             commitClarifyToRoutine(trimmedTitle, trimmedNotes);
+            return;
+        }
+        // Completing a calendar item that starts on a later day asks first. Such a save is always a
+        // plain calendar→done status transition (no reassign, no attendee prompt), so the confirm
+        // resumes straight at the commit.
+        if (status === 'done' && startsOnFutureDay(live)) {
+            futureDone.confirmDone(live, () => commitSave(trimmedTitle, trimmedNotes, undefined));
             return;
         }
         if (path.kind === 'reassign' && !validateReassign()) {
@@ -1295,6 +1305,7 @@ export function ItemEditorBody({
             {actionsPlacement.kind === 'inline' && actionsRow}
             {actionsPlacement.kind === 'portal' && createPortal(actionsRow, actionsPlacement.container)}
             <UnsavedChangesDialog blocker={navigationBlocker} />
+            <FutureDoneConfirmDialog {...futureDone.dialogProps} />
             <SendUpdatesDialog
                 open={pendingSave !== null}
                 attendeeCount={liveAttendees?.length ?? 0}

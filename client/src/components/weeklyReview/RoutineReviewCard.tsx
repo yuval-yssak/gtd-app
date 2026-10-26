@@ -10,7 +10,8 @@ import { Button, Card, Chip, IconButton, Text, Tooltip } from '../../designSyste
 import { useCalendarOptions } from '../../hooks/useCalendarOptions';
 import { useNewTabAwareNavigate } from '../../lib/newTabNavigation';
 import { isOverdueCalendarItem } from '../../lib/routineNextItem';
-import type { MyDB, StoredRoutine } from '../../types/MyDB';
+import type { MyDB, StoredItem, StoredRoutine } from '../../types/MyDB';
+import { FutureDoneConfirmDialog, useFutureDoneConfirm } from '../FutureDoneConfirmDialog';
 import { CalendarEventLinks } from '../itemEditor/CalendarEventLinks';
 import { MeetingDetails } from '../itemEditor/MeetingDetails';
 import { MarkdownPreview } from '../markdown/MarkdownPreview';
@@ -69,6 +70,7 @@ export function RoutineReviewCard({ routine, db, nav, travel }: RoutineReviewCar
     // Same richer-than-a-boolean reason as the pause flow: completing surfaces its own error text.
     const [isCompleting, setIsCompleting] = useState(false);
     const stageToast = useStageToast();
+    const futureDone = useFutureDoneConfirm(allItems);
     // A mid-flight cross-account reassign would misroute the pause's item-trashing writes — same
     // guard the routine editor applies to edits.
     const reassignInFlight = isPending('routine', routine._id);
@@ -129,13 +131,10 @@ export function RoutineReviewCard({ routine, db, nav, travel }: RoutineReviewCar
      * arms NO undo — a snapshot restore would double-book the series. The entry itself stays
      * decided either way; only the occurrence is written.
      */
-    async function onMarkOccurrenceDone() {
-        if (!actionable) {
-            return;
-        }
+    async function onMarkOccurrenceDone(occurrence: StoredItem) {
         setIsCompleting(true);
         try {
-            await clarifyToDone(db, actionable, { onReadOnlyGCal: () => stageToast.showNotice(FROM_GMAIL_READONLY_MESSAGE) });
+            await clarifyToDone(db, occurrence, { onReadOnlyGCal: () => stageToast.showNotice(FROM_GMAIL_READONLY_MESSAGE) });
             await refreshItems();
         } catch (err) {
             console.error('[weekly-review] mark routine occurrence done failed:', err);
@@ -249,7 +248,7 @@ export function RoutineReviewCard({ routine, db, nav, travel }: RoutineReviewCar
                     <Button
                         startIcon={<CircleCheck />}
                         disabled={isBusy || reassignInFlight}
-                        onClick={() => void onMarkOccurrenceDone()}
+                        onClick={() => futureDone.confirmDone(actionable, (latest) => void onMarkOccurrenceDone(latest))}
                         data-testid="routineCardMarkOccurrenceDone"
                     >
                         {isActionableOverdue ? 'Mark overdue done' : 'Mark done'}
@@ -264,6 +263,7 @@ export function RoutineReviewCard({ routine, db, nav, travel }: RoutineReviewCar
                 onCancel={() => setIsPauseConfirmOpen(false)}
                 onConfirm={() => void onPauseConfirmed()}
             />
+            <FutureDoneConfirmDialog {...futureDone.dialogProps} />
             <StageToast {...stageToast.toastProps} />
         </div>
     );

@@ -7,6 +7,7 @@ import { AccountChip } from '../../components/AccountChip';
 import { AccountSyncChip } from '../../components/AccountSyncChip';
 import { CalendarRowMeta } from '../../components/CalendarRowMeta';
 import { groupCalendarItemsByDay, isMultiDayAllDay, NO_DATE_KEY } from '../../components/calendarRouteSort';
+import { FutureDoneConfirmDialog, useFutureDoneConfirm } from '../../components/FutureDoneConfirmDialog';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { useItemEditor } from '../../components/itemEditor/useItemEditor';
 import { ListEmptyMessage } from '../../components/ListEmptyMessage';
@@ -42,6 +43,7 @@ function CalendarPage() {
     const navigate = useNavigate();
     const { items, routines, refreshItems, isInitialSyncing, isCalendarSyncing } = useAppData();
     const editor = useItemEditor();
+    const futureDone = useFutureDoneConfirm(items);
     useListScrollRestoration();
 
     const writeUrlQuery = useCallback((query: string) => void navigate({ to: '/calendar', search: { q: query || undefined }, replace: true }), [navigate]);
@@ -119,7 +121,7 @@ function CalendarPage() {
                                                         size="sm"
                                                         tone="success"
                                                         aria-label="Mark done"
-                                                        onClick={() => void onDone(item)}
+                                                        onClick={() => futureDone.confirmDone(item, (latest) => void onDone(latest))}
                                                         data-testid="calendarItemMarkDoneButton"
                                                     >
                                                         <CircleCheck />
@@ -176,6 +178,7 @@ function CalendarPage() {
                 />
             )}
             {renderBody()}
+            <FutureDoneConfirmDialog {...futureDone.dialogProps} />
             <Toast open={editor.toast.open} autoHideDuration={3000} onClose={editor.closeToast} message={editor.toast.message} />
         </div>
     );

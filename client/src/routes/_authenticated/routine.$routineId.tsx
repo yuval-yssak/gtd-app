@@ -4,6 +4,7 @@ import { ArrowRight, CircleCheck } from 'lucide-react';
 import { useState, useTransition } from 'react';
 import { DetailNotFound } from '../../components/DetailNotFound';
 import { DetailPageHeader } from '../../components/DetailPageHeader';
+import { FutureDoneConfirmDialog, useFutureDoneConfirm } from '../../components/FutureDoneConfirmDialog';
 import { RoutineEditorBody } from '../../components/routineEditor/RoutineEditorBody';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone, FROM_GMAIL_READONLY_MESSAGE } from '../../db/itemMutations';
@@ -33,6 +34,7 @@ function NextItemLink({ routine, items }: { routine: StoredRoutine; items: Store
     const navigateOrNewTab = useNewTabAwareNavigate();
     const [isCompleting, startCompleting] = useTransition();
     const [toast, setToast] = useState('');
+    const futureDone = useFutureDoneConfirm(items);
     const result = findRoutineNextItem(routine, items, dayjs());
 
     if (!result.item) {
@@ -47,9 +49,9 @@ function NextItemLink({ routine, items }: { routine: StoredRoutine; items: Store
     const dateLabel = describeNextItemDate(item);
     // Completing advances the series (clarifyToDone → maybeCreateNextRoutineItem), so the link
     // re-resolves to the following occurrence on the refresh.
-    const onMarkDone = () =>
+    const onMarkDone = (target: StoredItem) =>
         startCompleting(async () => {
-            await clarifyToDone(db, item, { onReadOnlyGCal: () => setToast(FROM_GMAIL_READONLY_MESSAGE) });
+            await clarifyToDone(db, target, { onReadOnlyGCal: () => setToast(FROM_GMAIL_READONLY_MESSAGE) });
             await refreshItems();
         });
 
@@ -69,12 +71,13 @@ function NextItemLink({ routine, items }: { routine: StoredRoutine; items: Store
                 size="sm"
                 startIcon={<CircleCheck />}
                 disabled={isCompleting}
-                onClick={onMarkDone}
+                onClick={() => futureDone.confirmDone(item, onMarkDone)}
                 className={styles.nextItemDone}
                 data-testid="routineNextItemMarkDone"
             >
                 Mark done
             </Button>
+            <FutureDoneConfirmDialog {...futureDone.dialogProps} />
             <Toast open={Boolean(toast)} autoHideDuration={4000} onClose={() => setToast('')} message={toast} />
         </div>
     );

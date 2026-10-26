@@ -4,7 +4,8 @@ import { useAppData } from '../../contexts/AppDataProvider';
 import { usePendingReassign } from '../../contexts/PendingReassignProvider';
 import { clarifyToDone, clarifyToTrash, FROM_GMAIL_READONLY_MESSAGE, releaseFromTickler } from '../../db/itemMutations';
 import { Button, Card, Text } from '../../designSystem';
-import type { MyDB } from '../../types/MyDB';
+import type { MyDB, StoredItem } from '../../types/MyDB';
+import { FutureDoneConfirmDialog, useFutureDoneConfirm } from '../FutureDoneConfirmDialog';
 import { type ItemEditorActionsApi, ItemEditorBody } from '../itemEditor/ItemEditorBody';
 import { RevisitDecisionCard } from './RevisitDecisionCard';
 import { RoutineReviewBanner } from './RoutineReviewBanner';
@@ -51,6 +52,7 @@ export function FocusStage({ stage, queue, db, onQueueChange, onStageFinished, t
     const { allItems, routines, people, workContexts, refreshItems } = useAppData();
     const { isPending } = usePendingReassign();
     const stageToast = useStageToast();
+    const futureDone = useFutureDoneConfirm(allItems);
     // Portal target for the editor's action row — state (not a ref) so ItemEditorBody re-renders
     // and portals the buttons in once the pinned bar element mounts.
     const [actionsBarEl, setActionsBarEl] = useState<HTMLElement | null>(null);
@@ -123,7 +125,8 @@ export function FocusStage({ stage, queue, db, onQueueChange, onStageFinished, t
         nav.recordDecision(currentEntryId, undo);
     }
 
-    const onDone = () => decideWith(() => clarifyToDone(db, currentItem, { onReadOnlyGCal: () => stageToast.showNotice(FROM_GMAIL_READONLY_MESSAGE) }));
+    const onDone = (target: StoredItem) =>
+        decideWith(() => clarifyToDone(db, target, { onReadOnlyGCal: () => stageToast.showNotice(FROM_GMAIL_READONLY_MESSAGE) }));
     const onTrash = () => decideWith(() => clarifyToTrash(db, currentItem));
     const onRelease = () => decideWith(() => releaseFromTickler(db, currentItem));
 
@@ -135,7 +138,7 @@ export function FocusStage({ stage, queue, db, onQueueChange, onStageFinished, t
                     Trash
                 </Button>
             ) : (
-                <Button disabled={api.isSaving} onClick={() => void onDone()} data-testid="focusDone">
+                <Button disabled={api.isSaving} onClick={() => futureDone.confirmDone(currentItem, (latest) => void onDone(latest))} data-testid="focusDone">
                     Done
                 </Button>
             )}
@@ -195,6 +198,7 @@ export function FocusStage({ stage, queue, db, onQueueChange, onStageFinished, t
                 {reassignInFlight && <StageNavButtons {...nav.blockedNavProps('focusBlockedSkip')} />}
             </StageActionBar>
             <StageToast {...stageToast.toastProps} />
+            <FutureDoneConfirmDialog {...futureDone.dialogProps} />
         </div>
     );
 }
