@@ -471,11 +471,17 @@ The outcome markers are written when an op's GCal side-effect throws (a Google e
 
 ```typescript
 interface DeviceSyncStateInterface {
-    _id: string;        // stable device UUID (client-generated on first launch)
+    _id: string;        // `${deviceId}::${userId}` — one row per (device, user) pair
+    deviceId: string;   // stable device UUID (client-generated on first launch)
     user: string;
-    lastSyncedTs: string;
+    lastSyncedTs: string;  // acked pull cursor (ts) — the purge floor input
+    lastSyncedId: string;  // acked pull cursor (op _id), compound with lastSyncedTs
     lastSeenTs: string;
     name?: string;      // user-given label, e.g. "iPhone", "Work laptop"
+    autoLabel?: string; // client-derived label sent on bootstrap, e.g. "Chrome on macOS"
+    timezone?: string;  // IANA zone reported on bootstrap/pull; drives server-side routine dates
+    timezoneReportedTs?: string;
+    appVersion?: string; // commit hash of the client build last reported on bootstrap/pull
 }
 ```
 

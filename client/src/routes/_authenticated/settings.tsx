@@ -103,7 +103,7 @@ function SettingsPage() {
             {/* Data export + account deletion (GDPR portability / erasure) */}
             <AccountDataSection db={db} account={account} />
             <SettingsSection title="App" description={`${APP_NAME} — an offline-first productivity app built around the ${METHOD_NAME} method.`}>
-                <Text as="p" variant="caption" tone="secondary">
+                <Text as="p" variant="caption" tone="secondary" data-testid="appVersion">
                     Version: {__COMMIT_HASH__}
                 </Text>
                 {/* The only in-app route to the legal documents; signed-out visitors get them from

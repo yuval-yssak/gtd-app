@@ -92,6 +92,7 @@ async function seedDeviceSyncState(opts: {
     lastSeenTs?: string;
     name?: string;
     autoLabel?: string;
+    appVersion?: string;
 }) {
     await db.collection('deviceSyncState').insertOne({
         _id: `${opts.deviceId}::${opts.userId}`,
@@ -102,6 +103,7 @@ async function seedDeviceSyncState(opts: {
         lastSeenTs: opts.lastSeenTs ?? dayjs().toISOString(),
         ...(opts.name ? { name: opts.name } : {}),
         ...(opts.autoLabel ? { autoLabel: opts.autoLabel } : {}),
+        ...(opts.appVersion ? { appVersion: opts.appVersion } : {}),
     });
 }
 
@@ -109,6 +111,7 @@ interface ConnectedDeviceJson {
     deviceId: string;
     name?: string;
     autoLabel?: string;
+    appVersion?: string;
     lastSeenTs: string;
     lastSyncedTs: string;
     opsBehind: number;
@@ -170,6 +173,17 @@ describe('GET /devices', () => {
         const fast = devices.find((d) => d.deviceId === 'dev-fast');
         expect(slow).toMatchObject({ name: 'Old tablet', opsBehind: 2, holdsPurgeFloor: true });
         expect(fast).toMatchObject({ autoLabel: 'Chrome on macOS', opsBehind: 1, holdsPurgeFloor: false });
+    });
+
+    it('reports each device’s last-reported app version, omitting it for a device that never reported one', async () => {
+        const alice = await loginAsAlice();
+        await seedDeviceSyncState({ deviceId: 'dev-new', userId: alice.userId, lastSyncedTs: '2024-01-01T00:00:00.000Z', appVersion: '8b77e17' });
+        await seedDeviceSyncState({ deviceId: 'dev-old', userId: alice.userId, lastSyncedTs: '2024-01-01T00:00:00.000Z' });
+
+        const { devices } = await listDevices(alice.cookie);
+
+        expect(devices.find((d) => d.deviceId === 'dev-new')?.appVersion).toBe('8b77e17');
+        expect(devices.find((d) => d.deviceId === 'dev-old')).not.toHaveProperty('appVersion');
     });
 
     it('a legacy row without lastSyncedId reads as id "" and counts the whole boundary ms as behind', async () => {

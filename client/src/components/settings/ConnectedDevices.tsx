@@ -31,6 +31,27 @@ export function isHoldingBackCleanup(device: Pick<ConnectedDevice, 'holdsPurgeFl
     return device.holdsPurgeFloor && device.opsBehind > 0;
 }
 
+export function describeDeviceBuild(device: Pick<ConnectedDevice, 'appVersion'>): string {
+    return device.appVersion ? `Build ${device.appVersion}` : 'Build not reported';
+}
+
+/**
+ * Compared against the build running THIS page, not a server-side "latest": client and API deploy
+ * independently, so the page's own hash is the only reference this component can vouch for.
+ */
+export function isOnDifferentBuild(device: Pick<ConnectedDevice, 'appVersion'>, currentBuild: string): boolean {
+    return device.appVersion !== undefined && device.appVersion !== currentBuild;
+}
+
+/**
+ * The server holds the hash this device reported on its LAST pull; after a Service Worker update
+ * and reload, Settings can render before the new bundle's first pull lands. For this device the
+ * bundle rendering the page is the ground truth.
+ */
+export function withThisDevicesBuild(devices: ConnectedDevice[], currentDeviceId: string | null): ConnectedDevice[] {
+    return devices.map((device) => (device.deviceId === currentDeviceId ? { ...device, appVersion: __COMMIT_HASH__ } : device));
+}
+
 /** Current device first (it's the reference point), then most recently seen first. */
 export function sortDevicesForDisplay(devices: ConnectedDevice[], currentDeviceId: string | null): ConnectedDevice[] {
     return [...devices].sort((a, b) => {
@@ -211,7 +232,7 @@ function DeviceList({ devices, currentDeviceId, removingId, onRemove, onRename }
     }
     return (
         <ul className={styles.list} data-testid="deviceList">
-            {sortDevicesForDisplay(devices, currentDeviceId).map((device) => (
+            {sortDevicesForDisplay(withThisDevicesBuild(devices, currentDeviceId), currentDeviceId).map((device) => (
                 <DeviceRow
                     key={device.deviceId}
                     device={device}
@@ -241,9 +262,15 @@ function DeviceRow({ device, isCurrentDevice, isRemoving, onRemove, onRename }: 
                     <Text as="span">{deviceDisplayName(device)}</Text>
                     {isCurrentDevice && <Chip tone="accent" variant="outline" label="This device" data-testid="thisDeviceChip" />}
                     {isHoldingBackCleanup(device) && <Chip tone="warning" variant="outline" label="Holding back cleanup" data-testid="holdingCleanupChip" />}
+                    {isOnDifferentBuild(device, __COMMIT_HASH__) && (
+                        <Chip tone="neutral" variant="outline" label="Different build" data-testid="differentBuildChip" />
+                    )}
                 </span>
                 <Text as="span" variant="bodySm" tone="secondary">
                     {describeDeviceActivity(device)}
+                </Text>
+                <Text as="span" variant="caption" tone="secondary" data-testid="deviceBuild">
+                    {describeDeviceBuild(device)}
                 </Text>
             </div>
             <div className={styles.rowActions}>

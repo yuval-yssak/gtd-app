@@ -21,6 +21,18 @@ function fetchDeviceCount(page: Page): Promise<number> {
     }, API_URL);
 }
 
+/** The `appVersion` of every device in GET /devices, as the server stored it. */
+function fetchReportedBuilds(page: Page): Promise<(string | undefined)[]> {
+    return page.evaluate(async (apiUrl) => {
+        const res = await fetch(`${apiUrl}/devices`, { credentials: 'include' });
+        if (!res.ok) {
+            throw new Error(`GET /devices ${res.status}`);
+        }
+        const { devices } = (await res.json()) as { devices: { appVersion?: string }[] };
+        return devices.map((device) => device.appVersion);
+    }, API_URL);
+}
+
 /** True when the server has a deviceSyncState row for this page's device. */
 function isDeviceRegisteredOnServer(page: Page): Promise<boolean> {
     return page.evaluate(async (apiUrl) => {
@@ -64,6 +76,37 @@ test.describe('Connected devices (settings)', () => {
             // The rename persisted server-side — still there after a reload.
             await page.reload();
             await expect(page.getByTestId('deviceRow')).toContainText('My main browser');
+        });
+    });
+
+    test('each device reports the build it runs, and a device on another build is flagged', async ({ browser }) => {
+        const email = `devices-build-${uniqueStamp()}@example.com`;
+        await resetServerForEmails([email]);
+
+        await withTwoLoggedInDevices(browser, email, async (page1, page2) => {
+            // Device 2 stands in for a phone whose Service Worker still serves an older bundle: its
+            // sync requests report a different commit hash than the build under test.
+            await page2.route('**/sync/pull?*', (route) => {
+                const url = new URL(route.request().url());
+                url.searchParams.set('appVersion', '0123abc');
+                return route.continue({ url: url.toString() });
+            });
+            await gtd.pull(page2);
+
+            await expect.poll(() => fetchDeviceCount(page1), { timeout: 15_000 }).toBe(2);
+            await page1.goto(`${CLIENT_URL}/settings`);
+            await expect(page1.getByTestId('deviceRow')).toHaveCount(2);
+
+            const runningBuild = (await page1.getByTestId('appVersion').innerText()).replace('Version:', '').trim();
+            const thisDeviceRow = page1.getByTestId('deviceRow').filter({ has: page1.getByTestId('thisDeviceChip') });
+            const otherDeviceRow = page1.getByTestId('deviceRow').filter({ hasNot: page1.getByTestId('thisDeviceChip') });
+
+            // The row shows the page's own build for this device, so prove the report itself reached the server.
+            await expect.poll(() => fetchReportedBuilds(page1)).toContain(runningBuild);
+            await expect(thisDeviceRow.getByTestId('deviceBuild')).toHaveText(`Build ${runningBuild}`);
+            await expect(thisDeviceRow.getByTestId('differentBuildChip')).toHaveCount(0);
+            await expect(otherDeviceRow.getByTestId('deviceBuild')).toHaveText('Build 0123abc');
+            await expect(otherDeviceRow.getByTestId('differentBuildChip')).toBeVisible();
         });
     });
 

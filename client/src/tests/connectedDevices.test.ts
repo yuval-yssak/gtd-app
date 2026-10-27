@@ -3,7 +3,15 @@
 import dayjs from 'dayjs';
 import { describe, expect, it } from 'vitest';
 import type { ConnectedDevice } from '../api/devicesApi';
-import { describeDeviceActivity, deviceDisplayName, isHoldingBackCleanup, sortDevicesForDisplay } from '../components/settings/ConnectedDevices';
+import {
+    describeDeviceActivity,
+    describeDeviceBuild,
+    deviceDisplayName,
+    isHoldingBackCleanup,
+    isOnDifferentBuild,
+    sortDevicesForDisplay,
+    withThisDevicesBuild,
+} from '../components/settings/ConnectedDevices';
 
 function makeDevice(overrides: Partial<ConnectedDevice> & { deviceId: string }): ConnectedDevice {
     return {
@@ -49,6 +57,45 @@ describe('isHoldingBackCleanup', () => {
         // Some device always holds the floor; a caught-up holder isn't blocking anything.
         expect(isHoldingBackCleanup(makeDevice({ deviceId: 'd1', holdsPurgeFloor: true, opsBehind: 0 }))).toBe(false);
         expect(isHoldingBackCleanup(makeDevice({ deviceId: 'd1', holdsPurgeFloor: false, opsBehind: 5 }))).toBe(false);
+    });
+});
+
+describe('describeDeviceBuild', () => {
+    it('names the build the device last reported', () => {
+        expect(describeDeviceBuild({ appVersion: '8b77e17' })).toBe('Build 8b77e17');
+    });
+
+    it('says so when the device never reported a build (it predates the report)', () => {
+        expect(describeDeviceBuild({})).toBe('Build not reported');
+    });
+});
+
+describe('isOnDifferentBuild', () => {
+    it('flags a device that reported a build other than the one running this page', () => {
+        expect(isOnDifferentBuild({ appVersion: '245e5c6' }, '8b77e17')).toBe(true);
+    });
+
+    it('does not flag a device on the same build', () => {
+        expect(isOnDifferentBuild({ appVersion: '8b77e17' }, '8b77e17')).toBe(false);
+    });
+
+    it('does not flag a device that never reported — there is nothing to compare', () => {
+        expect(isOnDifferentBuild({}, '8b77e17')).toBe(false);
+    });
+});
+
+describe('withThisDevicesBuild', () => {
+    it('shows this device on the build rendering the page, even before its next pull reports it', () => {
+        // Right after a Service Worker update + reload, the server still holds the previous hash.
+        const thisDevice = makeDevice({ deviceId: 'me', appVersion: 'old0000' });
+        const shown = withThisDevicesBuild([thisDevice, makeDevice({ deviceId: 'phone', appVersion: '0123abc' })], 'me');
+        expect(shown.map((d) => d.appVersion)).toEqual([__COMMIT_HASH__, '0123abc']);
+        expect(thisDevice.appVersion).toBe('old0000'); // input untouched
+    });
+
+    it('leaves every row as reported when this device is not yet known', () => {
+        const devices = [makeDevice({ deviceId: 'phone', appVersion: '0123abc' })];
+        expect(withThisDevicesBuild(devices, null)).toEqual(devices);
     });
 });
 

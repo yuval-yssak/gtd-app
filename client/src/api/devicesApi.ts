@@ -7,6 +7,8 @@ export interface ConnectedDevice {
     name?: string;
     /** Client-derived label captured at bootstrap, e.g. "Chrome on macOS". */
     autoLabel?: string;
+    /** Commit hash of the client build the device last reported running on bootstrap/pull. Absent until it reports one. */
+    appVersion?: string;
     lastSeenTs: string;
     lastSyncedTs: string;
     /** Operations recorded after this device's pull cursor — what it would have to catch up on. */

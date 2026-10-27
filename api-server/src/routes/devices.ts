@@ -22,6 +22,8 @@ interface ConnectedDevice {
     name?: string;
     /** Client-derived label captured at bootstrap, e.g. "Chrome on macOS". */
     autoLabel?: string;
+    /** Commit hash of the client build the device last reported running (see DeviceSyncStateInterface). */
+    appVersion?: string;
     lastSeenTs: string;
     lastSyncedTs: string;
     /** Operations recorded after this device's pull cursor — what it would have to catch up on. */
@@ -40,6 +42,7 @@ async function presentConnectedDevice(row: DeviceSyncStateInterface, userId: str
         deviceId: row.deviceId,
         ...(row.name ? { name: row.name } : {}),
         ...(row.autoLabel ? { autoLabel: row.autoLabel } : {}),
+        ...(row.appVersion ? { appVersion: row.appVersion } : {}),
         lastSeenTs: row.lastSeenTs,
         lastSyncedTs: row.lastSyncedTs,
         opsBehind,

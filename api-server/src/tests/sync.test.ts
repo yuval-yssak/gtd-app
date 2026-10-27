@@ -95,7 +95,7 @@ async function push(sessionCookie: string, deviceId: string, ops: ReturnType<typ
 
 async function pull(
     sessionCookie: string,
-    opts: { since?: string; sinceId?: string; ackedTs?: string; ackedId?: string; deviceId?: string; timezone?: string } = {},
+    opts: { since?: string; sinceId?: string; ackedTs?: string; ackedId?: string; deviceId?: string; timezone?: string; appVersion?: string } = {},
 ) {
     const params = new URLSearchParams();
     if (opts.since !== undefined) params.set('since', opts.since);
@@ -104,6 +104,7 @@ async function pull(
     if (opts.ackedId !== undefined) params.set('ackedId', opts.ackedId);
     if (opts.deviceId !== undefined) params.set('deviceId', opts.deviceId);
     if (opts.timezone !== undefined) params.set('timezone', opts.timezone);
+    if (opts.appVersion !== undefined) params.set('appVersion', opts.appVersion);
     const query = params.toString() ? `?${params}` : '';
     return authenticatedRequest(app, { method: 'GET', path: `/sync/pull${query}`, sessionCookie });
 }
@@ -1851,5 +1852,63 @@ describe('Timezone reporting', () => {
 
         const state = await db.collection('deviceSyncState').findOne({ _id: `dev-tz::${userId}` });
         expect(state?.timezone).toBe('Asia/Jerusalem');
+    });
+});
+
+// ─── App version reporting ──────────────────────────────────────────────────
+// The client reports the commit hash of the build it is running (the bundle its Service Worker
+// served) on bootstrap and pull, so Settings → Connected devices can show which build each device runs.
+
+describe('App version reporting', () => {
+    it('bootstrap with ?appVersion= records the version on the device row', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+
+        const res = await authenticatedRequest(app, { method: 'GET', path: '/sync/bootstrap?deviceId=dev-ver&appVersion=8b77e17', sessionCookie: cookie });
+        expect(res.status).toBe(200);
+
+        const state = await db.collection('deviceSyncState').findOne({ _id: `dev-ver::${userId}` });
+        expect(state?.appVersion).toBe('8b77e17');
+    });
+
+    it('pull with ?appVersion= refreshes the version on the existing row', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        await registerDevice('dev-ver', userId);
+
+        await pull(cookie, { deviceId: 'dev-ver', appVersion: '8b77e17' });
+        const res = await pull(cookie, { deviceId: 'dev-ver', appVersion: '245e5c6' });
+        expect(res.status).toBe(200);
+
+        const state = await db.collection('deviceSyncState').findOne({ _id: `dev-ver::${userId}` });
+        expect(state?.appVersion).toBe('245e5c6');
+    });
+
+    it('a malformed version report is ignored and never erases a prior good one', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        await registerDevice('dev-ver', userId);
+
+        await pull(cookie, { deviceId: 'dev-ver', appVersion: '8b77e17' });
+        // 'unknown' is what a build made outside a repository checkout stamps; the rest are not commit hashes at all.
+        for (const malformed of ['unknown', '<script>', 'abc', 'f'.repeat(41)]) {
+            const res = await pull(cookie, { deviceId: 'dev-ver', appVersion: malformed });
+            expect(res.status).toBe(200);
+        }
+
+        const state = await db.collection('deviceSyncState').findOne({ _id: `dev-ver::${userId}` });
+        expect(state?.appVersion).toBe('8b77e17');
+    });
+
+    it('a pull without ?appVersion= (a client older than this report) keeps the previously reported version', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        await registerDevice('dev-ver', userId);
+
+        await pull(cookie, { deviceId: 'dev-ver', appVersion: '8b77e17' });
+        await pull(cookie, { deviceId: 'dev-ver' });
+
+        const state = await db.collection('deviceSyncState').findOne({ _id: `dev-ver::${userId}` });
+        expect(state?.appVersion).toBe('8b77e17');
     });
 });

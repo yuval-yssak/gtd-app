@@ -718,6 +718,12 @@ export interface DeviceSyncStateInterface {
     timezone?: string;
     /** ISO datetime of the last `timezone` report — the recency key for `resolveUserTimezone`. */
     timezoneReportedTs?: string;
+    /**
+     * Commit hash (short or full) of the client build this device last reported on /sync/bootstrap
+     * or /sync/pull — the bundle its Service Worker served. Shown in Settings → Connected devices.
+     * Absent until the device reports a recognizable hash (older clients, or a build stamped 'unknown').
+     */
+    appVersion?: string;
 }
 
 /**

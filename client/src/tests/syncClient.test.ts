@@ -53,6 +53,34 @@ describe('syncClient — bootstrap deviceLabel', () => {
     });
 });
 
+describe('syncClient — app version report', () => {
+    function stubOkFetch() {
+        const fetchSpy = vi.fn().mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve({}) });
+        vi.stubGlobal('fetch', fetchSpy);
+        return fetchSpy;
+    }
+
+    function requestedUrl(fetchSpy: ReturnType<typeof vi.fn>): URL {
+        const [call] = fetchSpy.mock.calls;
+        if (!call) throw new Error('expected one fetch call');
+        return new URL(String(call[0]));
+    }
+
+    it('fetchBootstrap reports the running build’s commit hash', async () => {
+        const fetchSpy = stubOkFetch();
+        await fetchBootstrap('device-1');
+        expect(requestedUrl(fetchSpy).searchParams.get('appVersion')).toBe(__COMMIT_HASH__);
+    });
+
+    it('fetchSyncOps reports the running build’s commit hash alongside the timezone', async () => {
+        const fetchSpy = stubOkFetch();
+        await fetchSyncOps('2025-01-01T00:00:00.000Z', '', '2025-01-01T00:00:00.000Z', '', 'device-1');
+        const { searchParams } = requestedUrl(fetchSpy);
+        expect(searchParams.get('appVersion')).toBe(__COMMIT_HASH__);
+        expect(searchParams.get('timezone')).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
+    });
+});
+
 describe('syncClient — reaped-device signals', () => {
     it('fetchSyncOps throws BootstrapRequiredError on 409 (device row missing server-side)', async () => {
         mockFetchResponse(409, { bootstrapRequired: true });

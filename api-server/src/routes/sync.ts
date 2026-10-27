@@ -1,5 +1,5 @@
 import dayjs from 'dayjs';
-import { Hono } from 'hono';
+import { type Context, Hono } from 'hono';
 import { authenticateRequest } from '../auth/middleware.js';
 import deviceSyncStateDAO from '../dataAccess/deviceSyncStateDAO.js';
 import itemBriefsDAO from '../dataAccess/itemBriefsDAO.js';
@@ -157,27 +157,49 @@ async function recordPullCursorOnExistingRow(
     deviceId: string,
     userId: string,
     cursor: { lastSyncedTs: string; lastSyncedId: string },
-    timezone?: string,
+    report: DeviceReport,
 ): Promise<boolean> {
     const result = await deviceSyncStateDAO.updateOne(
         { _id: deviceSyncStateId(deviceId, userId) },
-        { $set: { ...cursor, deviceId, user: userId, ...timezoneReportFields(timezone) } },
+        { $set: { ...cursor, deviceId, user: userId, ...deviceReportFields(report) } },
         { upsert: false },
     );
     return result.matchedCount > 0;
 }
 
 /**
- * `$set` fragment recording a device's timezone report. Empty when the report is absent or not a
- * real IANA name (raw client-supplied param) — an invalid report must not erase a prior good one.
+ * What a device says about itself on bootstrap and pull — raw, unvalidated query params.
  * Bootstrap and pull are the only report sites; /sync/push deliberately isn't one (a Service
  * Worker background flush can push without pulling, but the next foreground pull refreshes it).
  */
+interface DeviceReport {
+    timezone: string | undefined;
+    appVersion: string | undefined;
+}
+
+function readDeviceReport(c: Context): DeviceReport {
+    return { timezone: c.req.query('timezone'), appVersion: c.req.query('appVersion') };
+}
+
+/** `$set` fragment for a device report. Each field is dropped when invalid, so a bad report never erases a prior good one. */
+function deviceReportFields(report: DeviceReport): Partial<DeviceSyncStateInterface> {
+    return { ...timezoneReportFields(report.timezone), ...appVersionReportFields(report.appVersion) };
+}
+
+/** Empty when the report is absent or not a real IANA name. */
 function timezoneReportFields(timezone: string | undefined): Partial<DeviceSyncStateInterface> {
     if (!timezone || !isValidIanaTimezone(timezone)) {
         return {};
     }
     return { timezone, timezoneReportedTs: dayjs().toISOString() };
+}
+
+// A short-or-full commit hash. Rejects the client build's 'unknown' fallback (built outside a
+// repository checkout) along with anything else, since the value is rendered in Settings.
+const COMMIT_HASH_PATTERN = /^[0-9a-f]{7,40}$/;
+
+function appVersionReportFields(appVersion: string | undefined): Partial<DeviceSyncStateInterface> {
+    return appVersion && COMMIT_HASH_PATTERN.test(appVersion) ? { appVersion } : {};
 }
 
 /**
@@ -212,7 +234,7 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
         // Client-derived display label ("Chrome on macOS") for the connected-devices list. Length-capped
         // server-side — it's a raw user-agent derivative, not a validated field.
         const deviceLabel = c.req.query('deviceLabel')?.trim().slice(0, 80);
-        const timezone = c.req.query('timezone');
+        const deviceReport = readDeviceReport(c);
         // One boundary for both the response body and the deviceSyncState row, so the recorded
         // floor exactly matches what the client claims it has after consuming this response.
         // Held back CURSOR_HOLDBACK_SECONDS: an op whose identity was allocated just before this
@@ -263,7 +285,7 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
                         user: user.id,
                         lastSeenTs: dayjs().toISOString(),
                         ...(deviceLabel ? { autoLabel: deviceLabel } : {}),
-                        ...timezoneReportFields(timezone),
+                        ...deviceReportFields(deviceReport),
                     },
                 },
                 { upsert: true },
@@ -449,7 +471,7 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
                     lastSyncedTs: ackedTs ?? since,
                     lastSyncedId: ackedId ?? sinceId,
                 },
-                c.req.query('timezone'),
+                readDeviceReport(c),
             );
             // Mid-request reap race: a concurrent pull's stale-device sweep removed the row between
             // the top-of-handler registration check and this write. Return 409 INSTEAD of the ops
