@@ -565,7 +565,7 @@ describe('applyAndPublishOperation — never-applied snapshots stay out of pull 
 
     it("an update claiming another item's calendarEventId is quarantined (entity_conflict) and the row keeps its old state", async () => {
         await seedOwnerAndOrphan();
-        const pushSpy = vi.spyOn(calendarPushback, 'maybePushToGCal').mockResolvedValue(undefined);
+        const pushSpy = vi.spyOn(calendarPushback, 'maybePushToGCal').mockResolvedValue([]);
 
         const { op, outcome } = await applyAndPublishOperationWithOutcome(
             userId,
@@ -592,7 +592,7 @@ describe('applyAndPublishOperation — never-applied snapshots stay out of pull 
 
     it('a stale update (lost LWW) is still delivered but its GCal leg is skipped', async () => {
         await itemsDAO.insertOne(calendarSnapshot('owner-item', '2026-09-27T12:40:00Z'));
-        const pushSpy = vi.spyOn(calendarPushback, 'maybePushToGCal').mockResolvedValue(undefined);
+        const pushSpy = vi.spyOn(calendarPushback, 'maybePushToGCal').mockResolvedValue([]);
 
         const { op, outcome } = await applyAndPublishOperationWithOutcome(
             userId,
@@ -614,7 +614,7 @@ describe('applyAndPublishOperation — never-applied snapshots stay out of pull 
 
     it('control: an applied update still reaches GCal pushback (the spy discriminates)', async () => {
         await itemsDAO.insertOne(calendarSnapshot('owner-item', '2026-09-27T12:36:28Z'));
-        const pushSpy = vi.spyOn(calendarPushback, 'maybePushToGCal').mockResolvedValue(undefined);
+        const pushSpy = vi.spyOn(calendarPushback, 'maybePushToGCal').mockResolvedValue([]);
 
         const { op, outcome } = await applyAndPublishOperationWithOutcome(
             userId,
@@ -635,7 +635,7 @@ describe('applyAndPublishOperation — never-applied snapshots stay out of pull 
     it('batch path: quarantines the duplicate-key op, skips GCal for the stale op, and pushes only the applied one', async () => {
         await seedOwnerAndOrphan();
         await itemsDAO.insertOne(baseInboxItem({ _id: 'edited-item', updatedTs: '2026-09-27T12:00:00Z' }));
-        const pushSpy = vi.spyOn(calendarPushback, 'maybePushToGCal').mockResolvedValue(undefined);
+        const pushSpy = vi.spyOn(calendarPushback, 'maybePushToGCal').mockResolvedValue([]);
 
         const { ops, outcomes } = await applyAndPublishOperations(
             userId,

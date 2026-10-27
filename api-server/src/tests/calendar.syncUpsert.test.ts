@@ -773,7 +773,7 @@ describe('POST /calendar/integrations/:id/sync — upsert paths', () => {
         expect(item?.lastSyncedFromGCalTs).toBe(eventUpdated);
 
         // An update operation must be recorded so other devices learn about the revive.
-        const ops = await db.collection('operations').find({ user: userId, entityId: 'item-revive' }).toArray();
+        const ops = await operationsDAO.findArray({ user: userId, entityId: 'item-revive' });
         const reviveOp = ops.find((o) => o.opType === 'update');
         expect(reviveOp).toBeDefined();
     });
@@ -1088,7 +1088,7 @@ describe('POST /calendar/integrations/:id/sync — full-sync reconciliation swee
         const ops = await operationsDAO.findArray({ user: userId, entityType: 'item', entityId: 'item-vanished' });
         const [trashOp] = ops;
         if (!trashOp) throw new Error('expected a recorded trash operation for the reconciled item');
-        expect(trashOp.snapshot?.status).toBe('trash');
+        expect(trashOp.snapshot).toMatchObject({ status: 'trash' });
     });
 
     it('trashes a vanished ALL-DAY item (timeStart is YYYY-MM-DD, not an ISO datetime)', async () => {

@@ -1,0 +1,11 @@
+{
+    "extends": "./tsconfig.json",
+    "compilerOptions": {
+        "noEmit": false,
+        "outDir": "build",
+        "rootDir": "src"
+    },
+    // Emit the server only — the tests would otherwise ship in the image.
+    "include": ["src/**/*.ts"],
+    "exclude": ["node_modules", "src/tests"]
+}

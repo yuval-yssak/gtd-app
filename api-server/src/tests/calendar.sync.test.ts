@@ -1,6 +1,7 @@
 /** biome-ignore-all lint/style/noNonNullAssertion: test code asserts status before using ! */
 import dayjs from 'dayjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { GCalEvent } from '../calendarProviders/CalendarProvider.js';
 import { buildDeterministicGCalId, GoogleCalendarProvider } from '../calendarProviders/GoogleCalendarProvider.js';
 import calendarIntegrationsDAO from '../dataAccess/calendarIntegrationsDAO.js';
 import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';

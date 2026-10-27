@@ -15,6 +15,9 @@ import { cascadePersonReferenceRemoval, cascadeWorkContextReferenceRemoval } fro
 import { closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import type { ItemInterface, PersonInterface, WorkContextInterface } from '../types/entities.js';
 
+/** `vi.spyOn` erases `findArray`'s row-type generic to `unknown` (whose `_id` is an ObjectId); spy through this view to pin it to item rows. */
+type ItemRowsFinder = { findArray: typeof itemsDAO.findArray<ItemInterface> };
+
 beforeAll(async () => {
     await loadDataAccess('gtd_test');
 });
@@ -217,7 +220,7 @@ describe('cascade does not echo breadcrumbs to GCal', () => {
     // pipeline with `suppressGCalPushback: true` so `maybePushToGCal` never sees the cascade-
     // emitted update op.
     it('suppresses GCal pushback when the affected item is calendar-linked', async () => {
-        const pushSpy = vi.spyOn(calendarPushback, 'maybePushToGCal').mockResolvedValue(undefined);
+        const pushSpy = vi.spyOn(calendarPushback, 'maybePushToGCal').mockResolvedValue([]);
         await itemsDAO.insertOne(
             itemOf({
                 _id: 'i-cal-1',
@@ -256,11 +259,11 @@ describe('cascade vs concurrent edits', () => {
         // cascade and the per-item updateOne. We patch findArray to issue the concurrent edit
         // before returning.
         const realFind = itemsDAO.findArray.bind(itemsDAO);
-        vi.spyOn(itemsDAO, 'findArray').mockImplementationOnce(async (...args) => {
-            const result = await realFind(...(args as Parameters<typeof realFind>));
+        vi.spyOn<ItemRowsFinder, 'findArray'>(itemsDAO, 'findArray').mockImplementationOnce(async (...args) => {
+            const result = await realFind(...args);
             // Concurrent device update: edits notes.
             await itemsDAO.updateOne({ _id: 'i-1', user: userId } as never, { $set: { notes: 'edited concurrently', updatedTs: '2026-05-09T12:00:00Z' } });
-            return result as ItemInterface[];
+            return result;
         });
 
         await cascadePersonReferenceRemoval(userId, 'p-jane', 'Jane Doe');

@@ -125,11 +125,11 @@ async function seedBrief(userId: string, itemId: string, origin: BriefOrigin): P
 /** Both at once models the SPA sending its cookie alongside a bearer header — the middleware must prefer the bearer. */
 type Auth = { token: string; sessionCookie?: string } | { sessionCookie: string };
 
-function generate(itemId: string, who: Auth, body?: unknown, origin?: string): Promise<Response> {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if ('token' in who) headers.Authorization = `Bearer ${who.token}`;
-    if (who.sessionCookie) headers.Cookie = `${SESSION_COOKIE}=${who.sessionCookie}`;
-    if (origin) headers.Origin = origin;
+async function generate(itemId: string, who: Auth, body?: unknown, origin?: string): Promise<Response> {
+    const headers = new Headers({ 'Content-Type': 'application/json' });
+    if ('token' in who) headers.set('Authorization', `Bearer ${who.token}`);
+    if (who.sessionCookie) headers.set('Cookie', `${SESSION_COOKIE}=${who.sessionCookie}`);
+    if (origin) headers.set('Origin', origin);
     return app.fetch(new Request(`http://localhost:4000/v1/items/${itemId}/brief/generate`, { method: 'POST', headers, body: JSON.stringify(body ?? {}) }));
 }
 

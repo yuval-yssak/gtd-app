@@ -4,6 +4,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import deviceUsersDAO from '../dataAccess/deviceUsersDAO.js';
 import { closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
+import type { DeviceUserInterface } from '../types/entities.js';
 
 beforeAll(async () => {
     await loadDataAccess('gtd_test');
@@ -21,7 +22,7 @@ describe('deviceUsersDAO.upsert', () => {
     it('inserts a new row when the (deviceId, userId) pair is missing', async () => {
         await deviceUsersDAO.upsert('dev-1', 'user-1');
 
-        const rows = await db.collection('deviceUsers').find({}).toArray();
+        const rows = await db.collection<DeviceUserInterface>('deviceUsers').find({}).toArray();
         expect(rows).toHaveLength(1);
         expect(rows[0]?._id).toBe('dev-1:user-1');
         expect(rows[0]?.deviceId).toBe('dev-1');
@@ -34,28 +35,29 @@ describe('deviceUsersDAO.upsert', () => {
         await deviceUsersDAO.upsert('dev-1', 'user-1');
         await deviceUsersDAO.upsert('dev-1', 'user-1');
 
-        const rows = await db.collection('deviceUsers').find({}).toArray();
+        const rows = await db.collection<DeviceUserInterface>('deviceUsers').find({}).toArray();
         expect(rows).toHaveLength(1);
     });
 
     it('refreshes lastSeenTs on a repeat upsert without rewriting createdTs', async () => {
         await deviceUsersDAO.upsert('dev-1', 'user-1');
-        const original = await db.collection('deviceUsers').findOne({ _id: 'dev-1:user-1' });
+        const original = await db.collection<DeviceUserInterface>('deviceUsers').findOne({ _id: 'dev-1:user-1' });
         // Sleep so the next upsert produces a strictly later ISO timestamp
         await new Promise((r) => setTimeout(r, 5));
         await deviceUsersDAO.upsert('dev-1', 'user-1');
-        const refreshed = await db.collection('deviceUsers').findOne({ _id: 'dev-1:user-1' });
+        const refreshed = await db.collection<DeviceUserInterface>('deviceUsers').findOne({ _id: 'dev-1:user-1' });
 
-        expect(refreshed?.createdTs).toBe(original?.createdTs);
+        if (!original || !refreshed) throw new Error('expected the deviceUsers row before and after the repeat upsert');
+        expect(refreshed.createdTs).toBe(original.createdTs);
         // lastSeenTs must monotonically advance — verifies the upsert touched it
-        expect(refreshed?.lastSeenTs > (original?.lastSeenTs as string)).toBe(true);
+        expect(refreshed.lastSeenTs > original.lastSeenTs).toBe(true);
     });
 
     it('treats the same deviceId with different userIds as separate rows', async () => {
         await deviceUsersDAO.upsert('dev-1', 'user-a');
         await deviceUsersDAO.upsert('dev-1', 'user-b');
 
-        const rows = await db.collection('deviceUsers').find({ deviceId: 'dev-1' }).toArray();
+        const rows = await db.collection<DeviceUserInterface>('deviceUsers').find({ deviceId: 'dev-1' }).toArray();
         expect(rows).toHaveLength(2);
     });
 });
@@ -67,7 +69,7 @@ describe('deviceUsersDAO.remove', () => {
 
         await deviceUsersDAO.remove('dev-1', 'user-a');
 
-        const rows = await db.collection('deviceUsers').find({ deviceId: 'dev-1' }).toArray();
+        const rows = await db.collection<DeviceUserInterface>('deviceUsers').find({ deviceId: 'dev-1' }).toArray();
         expect(rows).toHaveLength(1);
         expect(rows[0]?.userId).toBe('user-b');
     });
@@ -85,8 +87,8 @@ describe('deviceUsersDAO.removeAllForDevice', () => {
 
         await deviceUsersDAO.removeAllForDevice('dev-1');
 
-        expect(await db.collection('deviceUsers').countDocuments({ deviceId: 'dev-1' })).toBe(0);
-        expect(await db.collection('deviceUsers').countDocuments({ deviceId: 'dev-2' })).toBe(1);
+        expect(await db.collection<DeviceUserInterface>('deviceUsers').countDocuments({ deviceId: 'dev-1' })).toBe(0);
+        expect(await db.collection<DeviceUserInterface>('deviceUsers').countDocuments({ deviceId: 'dev-2' })).toBe(1);
     });
 });
 

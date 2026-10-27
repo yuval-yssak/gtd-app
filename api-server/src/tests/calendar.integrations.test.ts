@@ -2235,9 +2235,10 @@ describe('GoogleCalendarProvider.getExceptions — rebased-master id normalizati
         const bareMasterId = 'mleem99efhim4a0tsh3s86797o';
         const suffixedMasterId = `${bareMasterId}_R20260519T123000`;
         // Spy on the prototype so `getExceptions`'s internal `cal.events.list` call hits our mock.
-        const eventsProto = Object.getPrototypeOf(google.calendar({ version: 'v3' }).events) as Record<string, unknown>;
         type ListCall = (params: unknown) => Promise<{ data: { items?: unknown[] } }>;
-        const listSpy = vi.spyOn(eventsProto, 'list' as keyof typeof eventsProto) as unknown as ReturnType<typeof vi.fn<ListCall>>;
+        // `getPrototypeOf` is untyped; view the overloaded googleapis resource through the one `list` shape the provider calls.
+        const eventsProto: { list: ListCall } = Object.getPrototypeOf(google.calendar({ version: 'v3' }).events);
+        const listSpy = vi.spyOn(eventsProto, 'list');
         listSpy.mockResolvedValue({
             data: {
                 items: [
@@ -2265,9 +2266,10 @@ describe('GoogleCalendarProvider.getExceptions — rebased-master id normalizati
 
     it('still matches when both sides are bare master ids — guards against a future regex tweak silently breaking the common case', async () => {
         const bareMasterId = 'bare-no-suffix-anywhere';
-        const eventsProto = Object.getPrototypeOf(google.calendar({ version: 'v3' }).events) as Record<string, unknown>;
         type ListCall = (params: unknown) => Promise<{ data: { items?: unknown[] } }>;
-        const listSpy = vi.spyOn(eventsProto, 'list' as keyof typeof eventsProto) as unknown as ReturnType<typeof vi.fn<ListCall>>;
+        // `getPrototypeOf` is untyped; view the overloaded googleapis resource through the one `list` shape the provider calls.
+        const eventsProto: { list: ListCall } = Object.getPrototypeOf(google.calendar({ version: 'v3' }).events);
+        const listSpy = vi.spyOn(eventsProto, 'list');
         listSpy.mockResolvedValue({
             data: {
                 items: [
@@ -2294,9 +2296,10 @@ describe('GoogleCalendarProvider.getExceptions — rebased-master id normalizati
 // absence.
 describe('GoogleCalendarProvider.listEvents — pagination', () => {
     it('follows nextPageToken across pages and returns the union of all pages', async () => {
-        const eventsProto = Object.getPrototypeOf(google.calendar({ version: 'v3' }).events) as Record<string, unknown>;
         type ListCall = (params: { pageToken?: string }) => Promise<{ data: { items?: unknown[]; nextPageToken?: string } }>;
-        const listSpy = vi.spyOn(eventsProto, 'list' as keyof typeof eventsProto) as unknown as ReturnType<typeof vi.fn<ListCall>>;
+        // `getPrototypeOf` is untyped; view the overloaded googleapis resource through the one `list` shape the provider calls.
+        const eventsProto: { list: ListCall } = Object.getPrototypeOf(google.calendar({ version: 'v3' }).events);
+        const listSpy = vi.spyOn(eventsProto, 'list');
         const pageItem = (id: string) => ({
             id,
             summary: `Event ${id}`,
@@ -2327,9 +2330,10 @@ describe('GoogleCalendarProvider.listEvents — pagination', () => {
 // clamp keeps the GCal API payload bounded.
 describe('GoogleCalendarProvider.getExceptions — timeMin clamping', () => {
     function spyOnEventsList() {
-        const eventsProto = Object.getPrototypeOf(google.calendar({ version: 'v3' }).events) as Record<string, unknown>;
         type ListCall = (params: unknown) => Promise<{ data: { items?: unknown[] } }>;
-        const listSpy = vi.spyOn(eventsProto, 'list' as keyof typeof eventsProto) as unknown as ReturnType<typeof vi.fn<ListCall>>;
+        // `getPrototypeOf` is untyped; view the overloaded googleapis resource through the one `list` shape the provider calls.
+        const eventsProto: { list: ListCall } = Object.getPrototypeOf(google.calendar({ version: 'v3' }).events);
+        const listSpy = vi.spyOn(eventsProto, 'list');
         listSpy.mockResolvedValue({ data: { items: [] } });
         return listSpy;
     }

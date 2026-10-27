@@ -13,7 +13,7 @@ import workContextsDAO from '../dataAccess/workContextsDAO.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { syncRoutes } from '../routes/sync.js';
 import { v1OperationsRoutes } from '../routes/v1/operations.js';
-import type { ApiTokenScope } from '../types/entities.js';
+import type { ApiTokenScope, ItemInterface, RoutineInterface } from '../types/entities.js';
 import { authenticatedRequest, oauthLogin, SESSION_COOKIE } from './helpers.js';
 
 const app = new Hono()
@@ -99,13 +99,12 @@ describe('cross-surface parity: /sync/push vs /v1/operations/batch', () => {
         // 3. Persisted-state parity: both rows exist and carry the same shape modulo _id.
         const syncRow = await workContextsDAO.findByOwnerAndId(syncId, userId);
         const v1Row = await workContextsDAO.findByOwnerAndId(v1Id, userId);
-        expect(syncRow).not.toBeNull();
-        expect(v1Row).not.toBeNull();
+        if (!syncRow || !v1Row) throw new Error('expected both rows');
         // Strip _id to compare the structural shape — and updatedTs, the one DELIBERATE
         // divergence: /sync/push preserves the client clock (offline history) while the public
         // batch surface server-stamps it (see `serverStampUpdatedTs` in applyOperation.ts).
-        const { _id: _s1, updatedTs: syncUpdatedTs, ...syncFields } = syncRow!;
-        const { _id: _s2, updatedTs: v1UpdatedTs, ...v1Fields } = v1Row!;
+        const { _id: _s1, updatedTs: syncUpdatedTs, ...syncFields } = syncRow;
+        const { _id: _s2, updatedTs: v1UpdatedTs, ...v1Fields } = v1Row;
         expect(syncFields).toEqual(v1Fields);
         expect(syncUpdatedTs).toBe(ts);
         expect(dayjs(v1UpdatedTs).isBefore(ts)).toBe(false);
@@ -150,24 +149,22 @@ describe('cross-surface parity: /sync/push vs /v1/operations/batch', () => {
         }).then((r) => expect(r.status).toBe(200));
 
         const v1Id = '44444444-4444-4444-4444-444444444444';
-        await app
-            .fetch(
-                new Request('http://localhost:4000/v1/operations/batch', {
-                    method: 'POST',
-                    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ ops: [{ entityType: 'item', entityId: v1Id, opType: 'create', snapshot: baseItem(v1Id) }] }),
-                }),
-            )
-            .then((r) => expect(r.status).toBe(200));
+        const v1Res = await app.fetch(
+            new Request('http://localhost:4000/v1/operations/batch', {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ops: [{ entityType: 'item', entityId: v1Id, opType: 'create', snapshot: baseItem(v1Id) }] }),
+            }),
+        );
+        expect(v1Res.status).toBe(200);
 
-        const syncRow = await db.collection('items').findOne({ _id: syncId } as never);
-        const v1Row = await db.collection('items').findOne({ _id: v1Id } as never);
-        expect(syncRow).not.toBeNull();
-        expect(v1Row).not.toBeNull();
+        const syncRow = await db.collection<ItemInterface>('items').findOne({ _id: syncId });
+        const v1Row = await db.collection<ItemInterface>('items').findOne({ _id: v1Id });
+        if (!syncRow || !v1Row) throw new Error('expected both rows');
         // updatedTs is the one deliberate divergence: /sync/push keeps the client clock,
         // the public batch surface server-stamps it (serverStampUpdatedTs).
-        const { _id: _s, updatedTs: syncUpdatedTs, ...sSync } = syncRow as Record<string, unknown> & { _id: string; updatedTs: string };
-        const { _id: _v, updatedTs: v1UpdatedTs, ...sV1 } = v1Row as Record<string, unknown> & { _id: string; updatedTs: string };
+        const { _id: _s, updatedTs: syncUpdatedTs, ...sSync } = syncRow;
+        const { _id: _v, updatedTs: v1UpdatedTs, ...sV1 } = v1Row;
         expect(sSync).toEqual(sV1);
         expect(syncUpdatedTs).toBe(ts);
         expect(dayjs(v1UpdatedTs).isBefore(ts)).toBe(false);
@@ -199,24 +196,22 @@ describe('cross-surface parity: /sync/push vs /v1/operations/batch', () => {
         }).then((r) => expect(r.status).toBe(200));
 
         const v1Id = '66666666-6666-6666-6666-666666666666';
-        await app
-            .fetch(
-                new Request('http://localhost:4000/v1/operations/batch', {
-                    method: 'POST',
-                    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ ops: [{ entityType: 'routine', entityId: v1Id, opType: 'create', snapshot: baseRoutine(v1Id) }] }),
-                }),
-            )
-            .then((r) => expect(r.status).toBe(200));
+        const v1Res = await app.fetch(
+            new Request('http://localhost:4000/v1/operations/batch', {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ops: [{ entityType: 'routine', entityId: v1Id, opType: 'create', snapshot: baseRoutine(v1Id) }] }),
+            }),
+        );
+        expect(v1Res.status).toBe(200);
 
-        const syncRow = await db.collection('routines').findOne({ _id: syncId } as never);
-        const v1Row = await db.collection('routines').findOne({ _id: v1Id } as never);
-        expect(syncRow).not.toBeNull();
-        expect(v1Row).not.toBeNull();
+        const syncRow = await db.collection<RoutineInterface>('routines').findOne({ _id: syncId });
+        const v1Row = await db.collection<RoutineInterface>('routines').findOne({ _id: v1Id });
+        if (!syncRow || !v1Row) throw new Error('expected both rows');
         // updatedTs is the one deliberate divergence: /sync/push keeps the client clock,
         // the public batch surface server-stamps it (serverStampUpdatedTs).
-        const { _id: _s, updatedTs: syncUpdatedTs, ...sSync } = syncRow as Record<string, unknown> & { _id: string; updatedTs: string };
-        const { _id: _v, updatedTs: v1UpdatedTs, ...sV1 } = v1Row as Record<string, unknown> & { _id: string; updatedTs: string };
+        const { _id: _s, updatedTs: syncUpdatedTs, ...sSync } = syncRow;
+        const { _id: _v, updatedTs: v1UpdatedTs, ...sV1 } = v1Row;
         expect(sSync).toEqual(sV1);
         expect(syncUpdatedTs).toBe(ts);
         expect(dayjs(v1UpdatedTs).isBefore(ts)).toBe(false);

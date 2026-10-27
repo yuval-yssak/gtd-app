@@ -169,7 +169,8 @@ describe('PUT /v1/items/:id/brief', () => {
         const stored = await itemBriefsDAO.findByOwnerAndId(item._id!, actor.userId);
         expect(stored?.text).toBe('second');
         expect(stored?.createdTs).toBe(first?.createdTs);
-        expect(stored?.generatedTs >= first!.generatedTs).toBe(true);
+        if (!stored || !first) throw new Error('expected the brief to be stored both times');
+        expect(stored.generatedTs >= first.generatedTs).toBe(true);
         expect((await briefOps(actor.userId)).map((op) => op.opType)).toEqual(['create', 'update']);
     });
 

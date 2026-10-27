@@ -105,7 +105,7 @@ const t = (minutesAgo: number) => dayjs('2026-09-20T12:00:00Z').subtract(minutes
 
 /** The ids still carrying the marker, so a test can assert what the sweep settled. */
 async function markedIds(): Promise<string[]> {
-    const rows = await db.collection<ItemInterface>('items').find({ briefStale: true }).project({ _id: 1 }).toArray();
+    const rows = await db.collection<ItemInterface>('items').find({ briefStale: true }).project<Pick<ItemInterface, '_id'>>({ _id: 1 }).toArray();
     return rows.map((row) => String(row._id)).sort();
 }
 
@@ -185,9 +185,11 @@ describe('findBriefTargets', () => {
         // item; an unguarded clear would erase that mark, leaving current content with a stale
         // brief and NOTHING to bring it back. The settle is guarded on the CONTENT it judged.
         await seed([{ id: 'edited-mid-sweep', updatedTs: t(1), brief: { origin: 'model' } }]);
-        const realLoad = itemBriefsDAO.findArray.bind(itemBriefsDAO);
+        // `bind` drops findArray's `<T>`, and vi.spyOn instantiates it as `unknown`; keep the generic
+        // so the passthrough can be called at the spy's own instantiation.
+        const realLoad: typeof itemBriefsDAO.findArray = itemBriefsDAO.findArray.bind(itemBriefsDAO);
         const spy = vi.spyOn(itemBriefsDAO, 'findArray').mockImplementation(async (...args) => {
-            const rows = await realLoad(...args);
+            const rows = await realLoad<unknown>(...args);
             // The concurrent edit, inside the sweep's own read→settle window.
             await itemsDAO.updateOne({ _id: 'edited-mid-sweep' }, { $set: { notes: 'Rewritten while the sweep was thinking.', updatedTs: t(0) } });
             return rows;
@@ -239,7 +241,7 @@ describe('the selection query plan', () => {
             { id: 'y', status: 'done', updatedTs: t(2) },
         ]);
         const { filter, hint } = briefTargetPageQuery('user-a');
-        const explained = (await db.collection('items').find(filter, { hint }).explain('queryPlanner')) as {
+        const explained = (await db.collection<ItemInterface>('items').find(filter, { hint }).explain('queryPlanner')) as {
             queryPlanner: { winningPlan: { stage: string } };
         };
         const { winningPlan } = explained.queryPlanner;
@@ -263,7 +265,7 @@ describe('the selection query plan', () => {
         }));
         await seed(rows);
         const { filter, hint } = briefTargetPageQuery('user-a');
-        const explained = (await db.collection('items').find(filter, { hint }).explain('executionStats')) as {
+        const explained = (await db.collection<ItemInterface>('items').find(filter, { hint }).explain('executionStats')) as {
             executionStats: { totalDocsExamined: number; totalKeysExamined: number; nReturned: number };
         };
         const { totalDocsExamined, totalKeysExamined, nReturned } = explained.executionStats;
@@ -277,7 +279,7 @@ describe('the selection query plan', () => {
         const rows: Seed[] = Array.from({ length: 500 }, (_, i) => ({ id: `s-${i}`, updatedTs: t(i), briefStale: false as const }));
         await seed(rows);
         const { filter, hint } = briefTargetPageQuery('user-a');
-        const explained = (await db.collection('items').find(filter, { hint }).explain('executionStats')) as {
+        const explained = (await db.collection<ItemInterface>('items').find(filter, { hint }).explain('executionStats')) as {
             executionStats: { totalDocsExamined: number; totalKeysExamined: number };
         };
         expect(explained.executionStats.totalKeysExamined).toBe(0);

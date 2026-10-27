@@ -28,7 +28,7 @@ beforeEach(async () => {
 
 function makeRoutine(overrides: Partial<RoutineInterface> = {}): RoutineInterface {
     const now = '2026-01-01T00:00:00.000Z';
-    const routine: RoutineInterface = {
+    return {
         _id: 'r-default',
         user: USER,
         title: 'Standup',
@@ -43,15 +43,15 @@ function makeRoutine(overrides: Partial<RoutineInterface> = {}): RoutineInterfac
         calendarIntegrationId: 'int-1',
         ...overrides,
     };
-    // Real in-app routines OMIT these keys rather than storing null. Strip them when a test passes
-    // undefined so the fixture matches production shape (the migration keys on $exists, not value).
-    if (overrides.calendarEventId === undefined && 'calendarEventId' in overrides) {
-        delete routine.calendarEventId;
-    }
-    if (overrides.calendarIntegrationId === undefined && 'calendarIntegrationId' in overrides) {
-        delete routine.calendarIntegrationId;
-    }
-    return routine;
+}
+
+/**
+ * An in-app routine. Real ones OMIT the GCal link keys rather than storing null, and the migration
+ * keys on $exists, not value — so the fixture must match production shape.
+ */
+function inAppRoutine(overrides: Partial<RoutineInterface> = {}): RoutineInterface {
+    const { calendarEventId: _event, calendarIntegrationId: _integration, ...inApp } = makeRoutine(overrides);
+    return inApp;
 }
 
 describe('dedupeActiveRoutinesPerGCalSeries', () => {
@@ -101,8 +101,8 @@ describe('dedupeActiveRoutinesPerGCalSeries', () => {
     it('ignores inactive routines and in-app routines (no calendarEventId)', async () => {
         await routinesDAO.insertOne(makeRoutine({ _id: 'r-active' }));
         await routinesDAO.insertOne(makeRoutine({ _id: 'r-already-dead', active: false }));
-        await routinesDAO.insertOne(makeRoutine({ _id: 'r-inapp-1', calendarEventId: undefined, calendarIntegrationId: undefined }));
-        await routinesDAO.insertOne(makeRoutine({ _id: 'r-inapp-2', calendarEventId: undefined, calendarIntegrationId: undefined }));
+        await routinesDAO.insertOne(inAppRoutine({ _id: 'r-inapp-1' }));
+        await routinesDAO.insertOne(inAppRoutine({ _id: 'r-inapp-2' }));
 
         await dedupeActiveRoutinesPerGCalSeries(db);
 

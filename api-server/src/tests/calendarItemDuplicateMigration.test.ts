@@ -28,7 +28,7 @@ beforeEach(async () => {
 
 function makeItem(overrides: Partial<ItemInterface> = {}): ItemInterface {
     const now = '2026-01-01T00:00:00.000Z';
-    const item: ItemInterface = {
+    return {
         _id: 'i-default',
         user: USER,
         status: 'calendar',
@@ -41,11 +41,12 @@ function makeItem(overrides: Partial<ItemInterface> = {}): ItemInterface {
         updatedTs: now,
         ...overrides,
     };
-    // Real in-app / routine-instance items OMIT calendarEventId rather than storing null.
-    if (overrides.calendarEventId === undefined && 'calendarEventId' in overrides) {
-        delete item.calendarEventId;
-    }
-    return item;
+}
+
+/** An in-app or routine-instance item: real ones OMIT calendarEventId rather than storing null. */
+function unlinkedItem(overrides: Partial<ItemInterface> = {}): ItemInterface {
+    const { calendarEventId: _omitted, ...unlinked } = makeItem(overrides);
+    return unlinked;
 }
 
 describe('dedupeCalendarItemsPerEvent', () => {
@@ -93,9 +94,9 @@ describe('dedupeCalendarItemsPerEvent', () => {
         // A trashed twin keeps its calendarEventId (so it can be revived) but must not be regrouped.
         await itemsDAO.insertOne(makeItem({ _id: 'i-dead', status: 'trash' }));
         // In-app item: no calendarEventId.
-        await itemsDAO.insertOne(makeItem({ _id: 'i-inapp', calendarEventId: undefined }));
+        await itemsDAO.insertOne(unlinkedItem({ _id: 'i-inapp' }));
         // Routine-instance item: carries calendarInstanceEventId, not calendarEventId.
-        await itemsDAO.insertOne(makeItem({ _id: 'i-instance', calendarEventId: undefined, routineId: 'r-1', calendarInstanceEventId: 'inst-1' }));
+        await itemsDAO.insertOne(unlinkedItem({ _id: 'i-instance', routineId: 'r-1', calendarInstanceEventId: 'inst-1' }));
 
         await dedupeCalendarItemsPerEvent(db);
 

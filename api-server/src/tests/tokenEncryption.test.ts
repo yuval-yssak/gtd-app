@@ -26,6 +26,7 @@ describe('encrypt / decrypt', () => {
     it('throws on a tampered auth tag (GCM authentication failure)', () => {
         const encoded = encrypt('hello');
         const [iv, authTag, ciphertext] = encoded.split(':');
+        if (authTag === undefined) throw new Error('expected an iv:authTag:ciphertext payload');
         // Flip the first byte of the auth tag.
         const tamperedTag = `ff${authTag.slice(2)}`;
         expect(() => decrypt(`${iv}:${tamperedTag}:${ciphertext}`)).toThrow();

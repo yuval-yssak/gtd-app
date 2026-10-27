@@ -29,12 +29,12 @@ Public API reference: [`docs/PUBLIC_API.md`](docs/PUBLIC_API.md). Deploy/infra r
 ### API Server (`cd api-server`)
 ```bash
 npm run dev          # Start dev server with tsx watch (hot reload)
-npm run build        # Compile TypeScript to build/
+npm run build        # tsrs -p tsconfig.build.json → build/ (tests left out)
 npm start            # Run compiled server
 npm run test         # Run Vitest tests
 npm run lint         # Biome lint check
 npm run lint:fix     # Auto-fix lint + format (Biome)
-npm run typecheck    # tsrs --noEmit
+npm run typecheck    # tsrs --noEmit — source and src/tests
 npx vitest run src/tests/auth.test.ts   # single test file
 ```
 

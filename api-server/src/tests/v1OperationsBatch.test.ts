@@ -398,7 +398,7 @@ describe('POST /v1/operations/batch', () => {
             }),
         );
         expect(res.status).toBe(200);
-        const { results } = (await res.json()) as { results: { entityId: string; applyStatus: string }[] };
+        const { results } = (await res.json()) as { results: { entityId: string; applyStatus: string; updatedTs: string | null }[] };
         expect(results.find((r) => r.entityId === 'it-live')?.applyStatus).toBe('applied');
         // The quarantined update did NOT resurrect the missing row, and the caller can see it.
         expect(results.find((r) => r.entityId === 'it-ghost')?.applyStatus).toBe('skipped_missing');

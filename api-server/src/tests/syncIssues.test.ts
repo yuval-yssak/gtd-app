@@ -389,7 +389,8 @@ describe('POST /sync/issues/:opId/retry', () => {
 
         expect((await itemsDAO.findByOwnerAndId(unlinked._id as string, userId))?.calendarEventId).toBe('gcal-evt-retried');
         // The link stamp is a server op: no source device to echo-suppress.
-        const linkFanOut = sseSpy.mock.calls.find(([user, payload]) => user === userId && payload.sourceDeviceId === undefined);
+        const hasNoSourceDevice = (payload: object) => !('sourceDeviceId' in payload) || payload.sourceDeviceId === undefined;
+        const linkFanOut = sseSpy.mock.calls.find(([user, payload]) => user === userId && hasNoSourceDevice(payload));
         expect(linkFanOut).toBeDefined();
     });
 

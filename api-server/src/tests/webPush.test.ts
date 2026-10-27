@@ -21,7 +21,7 @@ import deviceUsersDAO from '../dataAccess/deviceUsersDAO.js';
 import pushSubscriptionsDAO from '../dataAccess/pushSubscriptionsDAO.js';
 import { notifyViaWebPush } from '../lib/webPush.js';
 import { closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
-import type { OperationInterface } from '../types/entities.js';
+import type { DeviceUserInterface, OperationInterface, PushSubscriptionRecord } from '../types/entities.js';
 
 const mockSendNotification = vi.mocked(webPush.sendNotification);
 
@@ -80,7 +80,7 @@ describe('Reactive push subscription cleanup', () => {
         // Give fire-and-forget cleanup a moment
         await new Promise<void>((r) => setTimeout(r, 5));
 
-        expect(await db.collection('pushSubscriptions').countDocuments({ _id: 'dev-gone' })).toBe(0);
+        expect(await db.collection<PushSubscriptionRecord>('pushSubscriptions').countDocuments({ _id: 'dev-gone' })).toBe(0);
     });
 
     it('deletes subscription when sendNotification returns 404 Not Found', async () => {
@@ -90,7 +90,7 @@ describe('Reactive push subscription cleanup', () => {
         await notifyViaWebPush(TEST_USER, null, [makeOp()], dayjs().toISOString());
         await new Promise<void>((r) => setTimeout(r, 5));
 
-        expect(await db.collection('pushSubscriptions').countDocuments({ _id: 'dev-404' })).toBe(0);
+        expect(await db.collection<PushSubscriptionRecord>('pushSubscriptions').countDocuments({ _id: 'dev-404' })).toBe(0);
     });
 
     it('does NOT delete subscription for other errors (e.g. 500)', async () => {
@@ -100,7 +100,7 @@ describe('Reactive push subscription cleanup', () => {
         await notifyViaWebPush(TEST_USER, null, [makeOp()], dayjs().toISOString());
         await new Promise<void>((r) => setTimeout(r, 5));
 
-        expect(await db.collection('pushSubscriptions').countDocuments({ _id: 'dev-500' })).toBe(1);
+        expect(await db.collection<PushSubscriptionRecord>('pushSubscriptions').countDocuments({ _id: 'dev-500' })).toBe(1);
     });
 
     it('also removes deviceUsers join rows when subscription is gone (410)', async () => {
@@ -114,8 +114,8 @@ describe('Reactive push subscription cleanup', () => {
         await notifyViaWebPush(TEST_USER, null, [makeOp()], dayjs().toISOString());
         await new Promise<void>((r) => setTimeout(r, 5));
 
-        expect(await db.collection('pushSubscriptions').countDocuments({ _id: 'dev-shared' })).toBe(0);
-        expect(await db.collection('deviceUsers').countDocuments({ deviceId: 'dev-shared' })).toBe(0);
+        expect(await db.collection<PushSubscriptionRecord>('pushSubscriptions').countDocuments({ _id: 'dev-shared' })).toBe(0);
+        expect(await db.collection<DeviceUserInterface>('deviceUsers').countDocuments({ deviceId: 'dev-shared' })).toBe(0);
     });
 
     it('also removes deviceUsers join rows when subscription returns 404', async () => {
@@ -128,8 +128,8 @@ describe('Reactive push subscription cleanup', () => {
         await notifyViaWebPush(TEST_USER, null, [makeOp()], dayjs().toISOString());
         await new Promise<void>((r) => setTimeout(r, 5));
 
-        expect(await db.collection('pushSubscriptions').countDocuments({ _id: 'dev-404-multi' })).toBe(0);
-        expect(await db.collection('deviceUsers').countDocuments({ deviceId: 'dev-404-multi' })).toBe(0);
+        expect(await db.collection<PushSubscriptionRecord>('pushSubscriptions').countDocuments({ _id: 'dev-404-multi' })).toBe(0);
+        expect(await db.collection<DeviceUserInterface>('deviceUsers').countDocuments({ deviceId: 'dev-404-multi' })).toBe(0);
     });
 
     it('does NOT remove deviceUsers rows on a 5xx (transient error must not invalidate registration)', async () => {
@@ -140,8 +140,8 @@ describe('Reactive push subscription cleanup', () => {
         await notifyViaWebPush(TEST_USER, null, [makeOp()], dayjs().toISOString());
         await new Promise<void>((r) => setTimeout(r, 5));
 
-        expect(await db.collection('pushSubscriptions').countDocuments({ _id: 'dev-500-multi' })).toBe(1);
-        expect(await db.collection('deviceUsers').countDocuments({ deviceId: 'dev-500-multi' })).toBe(1);
+        expect(await db.collection<PushSubscriptionRecord>('pushSubscriptions').countDocuments({ _id: 'dev-500-multi' })).toBe(1);
+        expect(await db.collection<DeviceUserInterface>('deviceUsers').countDocuments({ deviceId: 'dev-500-multi' })).toBe(1);
     });
 });
 

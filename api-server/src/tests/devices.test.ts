@@ -8,6 +8,7 @@ import deviceUsersDAO from '../dataAccess/deviceUsersDAO.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { deviceRoutes } from '../routes/devices.js';
 import { syncRoutes } from '../routes/sync.js';
+import type { DeviceSyncStateInterface, DeviceUserInterface, OperationInterface, PushSubscriptionRecord } from '../types/entities.js';
 import { authenticatedRequest, oauthLogin, SESSION_COOKIE } from './helpers.js';
 
 const app = new Hono()
@@ -70,7 +71,7 @@ async function loginAsBob(): Promise<{ cookie: string; userId: string }> {
 
 /** Inserts an operation row directly with an explicit (ts, _id) so floor control is deterministic. */
 async function seedOp(opts: { id: string; userId: string; ts: string }) {
-    await db.collection('operations').insertOne({
+    await db.collection<OperationInterface>('operations').insertOne({
         _id: opts.id,
         user: opts.userId,
         deviceId: 'seed-dev',
@@ -78,9 +79,12 @@ async function seedOp(opts: { id: string; userId: string; ts: string }) {
         entityType: 'item',
         entityId: 'e1',
         opType: 'update',
-        snapshot: { _id: 'e1', status: 'inbox', title: 'T', createdTs: '2024-01-01T00:00:00.000Z', updatedTs: opts.ts },
+        snapshot: { _id: 'e1', user: opts.userId, status: 'inbox', title: 'T', createdTs: '2024-01-01T00:00:00.000Z', updatedTs: opts.ts },
     });
 }
+
+// Omitting lastSyncedId seeds a legacy row written before the field existed (read as '').
+type LegacyDeviceSyncStateRow = Omit<DeviceSyncStateInterface, 'lastSyncedId'> & Partial<Pick<DeviceSyncStateInterface, 'lastSyncedId'>>;
 
 // lastSeenTs defaults to now() so a seeded device isn't swept by the STALE_DEVICE_DAYS cutoff
 // mid-test; tests that need a stale-looking device pass an explicit old lastSeenTs.
@@ -94,7 +98,7 @@ async function seedDeviceSyncState(opts: {
     autoLabel?: string;
     appVersion?: string;
 }) {
-    await db.collection('deviceSyncState').insertOne({
+    await db.collection<LegacyDeviceSyncStateRow>('deviceSyncState').insertOne({
         _id: `${opts.deviceId}::${opts.userId}`,
         deviceId: opts.deviceId,
         user: opts.userId,
@@ -263,7 +267,7 @@ describe('PATCH /devices/:deviceId', () => {
 
         expect(res.status).toBe(404);
         // A fabricated row would sit at an epoch cursor and re-pin the purge floor.
-        expect(await db.collection('deviceSyncState').countDocuments({ deviceId: 'dev-ghost' })).toBe(0);
+        expect(await db.collection<DeviceSyncStateInterface>('deviceSyncState').countDocuments({ deviceId: 'dev-ghost' })).toBe(0);
     });
 
     it('cannot rename another user’s device row (404, row untouched)', async () => {
@@ -275,7 +279,7 @@ describe('PATCH /devices/:deviceId', () => {
         const res = await authenticatedRequest(app, { method: 'PATCH', path: '/devices/dev-bob', sessionCookie: alice.cookie, body: { name: 'Hijacked' } });
 
         expect(res.status).toBe(404);
-        const bobRow = await db.collection('deviceSyncState').findOne({ _id: `dev-bob::${bob.userId}` } as never);
+        const bobRow = await db.collection<DeviceSyncStateInterface>('deviceSyncState').findOne({ _id: `dev-bob::${bob.userId}` });
         expect(bobRow?.name).toBe('Bob phone');
     });
 });
@@ -298,11 +302,11 @@ describe('DELETE /devices/:deviceId', () => {
         const body = (await res.json()) as { ok: boolean; purgedOps: number };
         expect(body).toEqual({ ok: true, purgedOps: 1 });
         // Floor advanced to dev-fast's cursor: op-old purged, op-new (past the cursor) kept.
-        expect(await db.collection('operations').countDocuments({ user: alice.userId })).toBe(1);
-        expect(await db.collection('operations').countDocuments({ _id: 'op-new' } as never)).toBe(1);
+        expect(await db.collection<OperationInterface>('operations').countDocuments({ user: alice.userId })).toBe(1);
+        expect(await db.collection<OperationInterface>('operations').countDocuments({ _id: 'op-new' })).toBe(1);
         // Sync row and deviceUsers join row are both gone.
-        expect(await db.collection('deviceSyncState').countDocuments({ deviceId: 'dev-slow' })).toBe(0);
-        expect(await db.collection('deviceUsers').countDocuments({ deviceId: 'dev-slow' })).toBe(0);
+        expect(await db.collection<DeviceSyncStateInterface>('deviceSyncState').countDocuments({ deviceId: 'dev-slow' })).toBe(0);
+        expect(await db.collection<DeviceUserInterface>('deviceUsers').countDocuments({ deviceId: 'dev-slow' })).toBe(0);
         const { devices } = await listDevices(alice.cookie);
         expect(devices.map((d) => d.deviceId)).toEqual(['dev-fast']);
     });
@@ -319,7 +323,7 @@ describe('DELETE /devices/:deviceId', () => {
         // No registered rows left → no floor → ops must survive (purging against a fabricated
         // floor could delete ops a future device still needs to see... via bootstrap they won't,
         // but the invariant "no rows → no purge" is what computePurgeFloor guarantees).
-        expect(await db.collection('operations').countDocuments({ user: alice.userId })).toBe(1);
+        expect(await db.collection<OperationInterface>('operations').countDocuments({ user: alice.userId })).toBe(1);
     });
 
     it('answers 404 for an unknown device', async () => {
@@ -338,8 +342,8 @@ describe('DELETE /devices/:deviceId', () => {
         const res = await authenticatedRequest(app, { method: 'DELETE', path: '/devices/dev-bob', sessionCookie: alice.cookie });
 
         expect(res.status).toBe(404);
-        expect(await db.collection('deviceSyncState').countDocuments({ deviceId: 'dev-bob' })).toBe(1);
-        expect(await db.collection('operations').countDocuments({ user: bob.userId })).toBe(1);
+        expect(await db.collection<DeviceSyncStateInterface>('deviceSyncState').countDocuments({ deviceId: 'dev-bob' })).toBe(1);
+        expect(await db.collection<OperationInterface>('operations').countDocuments({ user: bob.userId })).toBe(1);
     });
 
     it('drops the push subscription only once no account still has a sync row on the device', async () => {
@@ -347,41 +351,41 @@ describe('DELETE /devices/:deviceId', () => {
         vi.restoreAllMocks();
         const bob = await loginAsBob();
         // One shared physical device: a single push subscription row keyed by deviceId.
-        await db.collection('pushSubscriptions').insertOne({
+        await db.collection<PushSubscriptionRecord>('pushSubscriptions').insertOne({
             _id: 'dev-shared',
             user: alice.userId,
             endpoint: 'https://push.example/e',
             keys: { p256dh: 'k', auth: 'a' },
             updatedTs: dayjs().toISOString(),
-        } as never);
+        });
         await seedDeviceSyncState({ deviceId: 'dev-shared', userId: alice.userId, lastSyncedTs: '2024-01-01T00:00:00.000Z', lastSyncedId: '' });
         await seedDeviceSyncState({ deviceId: 'dev-shared', userId: bob.userId, lastSyncedTs: '2024-01-01T00:00:00.000Z', lastSyncedId: '' });
 
         await authenticatedRequest(app, { method: 'DELETE', path: '/devices/dev-shared', sessionCookie: alice.cookie });
         // Bob still syncs on this device — the shared subscription must survive.
-        expect(await db.collection('pushSubscriptions').countDocuments({ _id: 'dev-shared' } as never)).toBe(1);
+        expect(await db.collection<PushSubscriptionRecord>('pushSubscriptions').countDocuments({ _id: 'dev-shared' })).toBe(1);
 
         await authenticatedRequest(app, { method: 'DELETE', path: '/devices/dev-shared', sessionCookie: bob.cookie });
         // Fully drained. The subscription row is user-scoped to its registrar (Alice), so Bob's
         // removal can't delete it — matching the stale reaper's semantics; push-delivery failure
         // cleanup (404/410 → removeAllForDevice) handles the leftover.
-        expect(await db.collection('deviceSyncState').countDocuments({ deviceId: 'dev-shared' })).toBe(0);
+        expect(await db.collection<DeviceSyncStateInterface>('deviceSyncState').countDocuments({ deviceId: 'dev-shared' })).toBe(0);
     });
 
     it('drops the push subscription when the removing user drains the device and owns the subscription', async () => {
         const alice = await loginAsAlice();
-        await db.collection('pushSubscriptions').insertOne({
+        await db.collection<PushSubscriptionRecord>('pushSubscriptions').insertOne({
             _id: 'dev-1',
             user: alice.userId,
             endpoint: 'https://push.example/e',
             keys: { p256dh: 'k', auth: 'a' },
             updatedTs: dayjs().toISOString(),
-        } as never);
+        });
         await seedDeviceSyncState({ deviceId: 'dev-1', userId: alice.userId, lastSyncedTs: '2024-01-01T00:00:00.000Z', lastSyncedId: '' });
 
         await authenticatedRequest(app, { method: 'DELETE', path: '/devices/dev-1', sessionCookie: alice.cookie });
 
-        expect(await db.collection('pushSubscriptions').countDocuments({ _id: 'dev-1' } as never)).toBe(0);
+        expect(await db.collection<PushSubscriptionRecord>('pushSubscriptions').countDocuments({ _id: 'dev-1' })).toBe(0);
     });
 
     it('a removed device’s next /sync/pull answers 409 bootstrapRequired (recovery contract)', async () => {
@@ -421,8 +425,8 @@ describe('POST /devices/signout', () => {
 
         expect(res.status).toBe(200);
         // Alice's row is gone; Bob's row remains
-        expect(await db.collection('deviceUsers').countDocuments({ deviceId: 'dev-shared', userId: alice.userId })).toBe(0);
-        expect(await db.collection('deviceUsers').countDocuments({ deviceId: 'dev-shared', userId: bob.userId })).toBe(1);
+        expect(await db.collection<DeviceUserInterface>('deviceUsers').countDocuments({ deviceId: 'dev-shared', userId: alice.userId })).toBe(0);
+        expect(await db.collection<DeviceUserInterface>('deviceUsers').countDocuments({ deviceId: 'dev-shared', userId: bob.userId })).toBe(1);
     });
 
     it('returns 200 even when no row exists (idempotent — safe to retry)', async () => {
@@ -474,7 +478,7 @@ describe('POST /devices/signout', () => {
             body: { deviceId: 'dev-phone' },
         });
 
-        expect(await db.collection('deviceUsers').countDocuments({ deviceId: 'dev-phone' })).toBe(0);
-        expect(await db.collection('deviceUsers').countDocuments({ deviceId: 'dev-laptop' })).toBe(1);
+        expect(await db.collection<DeviceUserInterface>('deviceUsers').countDocuments({ deviceId: 'dev-phone' })).toBe(0);
+        expect(await db.collection<DeviceUserInterface>('deviceUsers').countDocuments({ deviceId: 'dev-laptop' })).toBe(1);
     });
 });

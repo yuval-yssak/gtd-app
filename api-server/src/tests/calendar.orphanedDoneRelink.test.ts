@@ -94,7 +94,9 @@ describe('relink sweep — orphaned done items (link lost before the Google crea
         expect(getEventSpy).toHaveBeenCalledWith('primary', eventId);
         // The ✓ marker the original completion never delivered.
         expect(updateEventSpy).toHaveBeenCalledTimes(1);
-        const [, patchedId, patch] = updateEventSpy.mock.calls[0] as [string, string, { title: string; colorId: string }];
+        const [updateCall] = updateEventSpy.mock.calls;
+        if (!updateCall) throw new Error('expected one updateEvent call');
+        const [, patchedId, patch] = updateCall;
         expect(patchedId).toBe(eventId);
         expect(patch.title).toBe(`✓ ${seeded.title}`);
         expect(patch.colorId).toBe(DONE_COLOR_ID);

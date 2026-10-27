@@ -5,7 +5,7 @@
     "private": true,
     "scripts": {
         "dev": "tsx watch src/index.ts",
-        "build": "tsrs",
+        "build": "tsrs -p tsconfig.build.json",
         "start": "node build/index.js",
         "lint": "biome check",
         "lint:fix": "biome check . --write",

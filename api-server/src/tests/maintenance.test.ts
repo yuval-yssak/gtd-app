@@ -4,6 +4,16 @@ import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { maintenanceRoutes } from '../routes/maintenance.js';
+import type {
+    DeviceSyncStateInterface,
+    DeviceUserInterface,
+    ItemInterface,
+    ItemStatus,
+    OperationInterface,
+    OpType,
+    PushSubscriptionRecord,
+    RoutineInterface,
+} from '../types/entities.js';
 import { authenticatedRequest, oauthLogin, SESSION_COOKIE } from './helpers.js';
 
 const app = new Hono().on(['GET', 'POST'], '/auth/*', (c) => auth.handler(c.req.raw)).route('/maintenance', maintenanceRoutes);
@@ -53,8 +63,8 @@ async function getUserId(sessionCookie: string): Promise<string> {
 }
 
 /** Inserts an operation row directly with an explicit (ts, _id) so floor control is deterministic. */
-async function seedOp(opts: { id: string; userId: string; entityId: string; ts: string; opType?: string; snapshot: Record<string, unknown> | null }) {
-    await db.collection('operations').insertOne({
+async function seedOp(opts: { id: string; userId: string; entityId: string; ts: string; opType?: OpType; snapshot: OperationInterface['snapshot'] }) {
+    await db.collection<OperationInterface>('operations').insertOne({
         _id: opts.id,
         user: opts.userId,
         deviceId: 'seed-dev',
@@ -69,8 +79,11 @@ async function seedOp(opts: { id: string; userId: string; entityId: string; ts: 
 // lastSeenTs defaults to now() so a seeded device isn't accidentally swept by the STALE_DEVICE_DAYS
 // cutoff — the floor-holding rows in these tests must survive a default purge. Tests exercising
 // stale-device removal pass an explicit old lastSeenTs.
+// Omitting lastSyncedId seeds a legacy row written before the field existed (read as '' by the purge).
+type LegacyDeviceSyncStateRow = Omit<DeviceSyncStateInterface, 'lastSyncedId'> & Partial<Pick<DeviceSyncStateInterface, 'lastSyncedId'>>;
+
 async function seedDeviceSyncState(opts: { deviceId: string; userId: string; lastSyncedTs: string; lastSyncedId?: string; lastSeenTs?: string }) {
-    await db.collection('deviceSyncState').insertOne({
+    await db.collection<LegacyDeviceSyncStateRow>('deviceSyncState').insertOne({
         _id: `${opts.deviceId}::${opts.userId}`,
         deviceId: opts.deviceId,
         user: opts.userId,
@@ -80,7 +93,7 @@ async function seedDeviceSyncState(opts: { deviceId: string; userId: string; las
     });
 }
 
-function snap(entityId: string, ts: string, title = 'T') {
+function snap(entityId: string, ts: string, title = 'T'): ItemInterface {
     return { _id: entityId, user: 'u', status: 'inbox', title, createdTs: '2024-01-01T00:00:00.000Z', updatedTs: ts };
 }
 
@@ -110,8 +123,8 @@ describe('POST /maintenance/purge-operations', () => {
         const body = (await res.json()) as { deletedStaleDevices: number; deletedOps: number; floor: { ts: string; id: string } };
         expect(body.deletedOps).toBe(1);
         expect(body.floor).toEqual({ ts: '2024-01-01T00:00:00.000Z', id: 'op-below' });
-        expect(await db.collection('operations').countDocuments({ _id: 'op-below' })).toBe(0);
-        expect(await db.collection('operations').countDocuments({ _id: 'op-above' })).toBe(1);
+        expect(await db.collection<OperationInterface>('operations').countDocuments({ _id: 'op-below' })).toBe(0);
+        expect(await db.collection<OperationInterface>('operations').countDocuments({ _id: 'op-above' })).toBe(1);
     });
 
     it('removes stale devices at the configurable cutoff and unblocks the purge floor', async () => {
@@ -124,10 +137,10 @@ describe('POST /maintenance/purge-operations', () => {
         await seedDeviceSyncState({ deviceId: 'dev-active', userId, lastSyncedTs: '2024-02-01T00:00:00.000Z', lastSyncedId: '￿' });
         await seedOp({ id: 'op-1', userId, entityId: 'e1', ts: '2024-01-15T00:00:00.000Z', snapshot: snap('e1', '2024-01-15T00:00:00.000Z') });
         // deviceUsers join rows ride along with the reap: the stale device's goes, the active one's stays.
-        await db.collection('deviceUsers').insertMany([
+        await db.collection<DeviceUserInterface>('deviceUsers').insertMany([
             { _id: `dev-stale:${userId}`, deviceId: 'dev-stale', userId, createdTs: staleTs, lastSeenTs: staleTs },
             { _id: `dev-active:${userId}`, deviceId: 'dev-active', userId, createdTs: staleTs, lastSeenTs: dayjs().toISOString() },
-        ] as never[]);
+        ]);
 
         // Default (STALE_DEVICE_DAYS) cutoff: dev-stale survives (only 20 days old) → floor stuck at epoch → no purge.
         const noopRes = await purge(cookie);
@@ -140,10 +153,10 @@ describe('POST /maintenance/purge-operations', () => {
         const body = (await res.json()) as { deletedStaleDevices: number; deletedOps: number };
         expect(body.deletedStaleDevices).toBe(1);
         expect(body.deletedOps).toBe(1);
-        expect(await db.collection('deviceSyncState').countDocuments({ deviceId: 'dev-stale' })).toBe(0);
+        expect(await db.collection<DeviceSyncStateInterface>('deviceSyncState').countDocuments({ deviceId: 'dev-stale' })).toBe(0);
         // The reaped pair's deviceUsers row is gone; the active device's row is untouched.
-        expect(await db.collection('deviceUsers').countDocuments({ deviceId: 'dev-stale' })).toBe(0);
-        expect(await db.collection('deviceUsers').countDocuments({ deviceId: 'dev-active' })).toBe(1);
+        expect(await db.collection<DeviceUserInterface>('deviceUsers').countDocuments({ deviceId: 'dev-stale' })).toBe(0);
+        expect(await db.collection<DeviceUserInterface>('deviceUsers').countDocuments({ deviceId: 'dev-active' })).toBe(1);
     });
 
     it('reaping one account’s stale row on a shared device keeps the other account’s join row and the push subscription', async () => {
@@ -157,17 +170,17 @@ describe('POST /maintenance/purge-operations', () => {
         // One physical device hosting both accounts: Alice's sync row is stale, Bob's is live.
         await seedDeviceSyncState({ deviceId: 'dev-shared', userId: aliceId, lastSyncedTs: dayjs(0).toISOString(), lastSyncedId: '', lastSeenTs: staleTs });
         await seedDeviceSyncState({ deviceId: 'dev-shared', userId: bobId, lastSyncedTs: '2024-02-01T00:00:00.000Z', lastSyncedId: '￿' });
-        await db.collection('deviceUsers').insertMany([
+        await db.collection<DeviceUserInterface>('deviceUsers').insertMany([
             { _id: `dev-shared:${aliceId}`, deviceId: 'dev-shared', userId: aliceId, createdTs: staleTs, lastSeenTs: staleTs },
             { _id: `dev-shared:${bobId}`, deviceId: 'dev-shared', userId: bobId, createdTs: staleTs, lastSeenTs: dayjs().toISOString() },
-        ] as never[]);
-        await db.collection('pushSubscriptions').insertOne({
+        ]);
+        await db.collection<PushSubscriptionRecord>('pushSubscriptions').insertOne({
             _id: 'dev-shared',
             user: aliceId,
             endpoint: 'https://push.example/e',
             keys: { p256dh: 'k', auth: 'a' },
             updatedTs: dayjs().toISOString(),
-        } as never);
+        });
 
         const res = await purge(aliceCookie, { staleDeviceDays: 10 });
         const body = (await res.json()) as { deletedStaleDevices: number };
@@ -175,11 +188,11 @@ describe('POST /maintenance/purge-operations', () => {
 
         // Alice's rows are reaped; Bob's sync + join rows survive, and the device is NOT drained,
         // so the shared push subscription must survive for Bob's account.
-        expect(await db.collection('deviceSyncState').countDocuments({ _id: `dev-shared::${aliceId}` } as never)).toBe(0);
-        expect(await db.collection('deviceSyncState').countDocuments({ _id: `dev-shared::${bobId}` } as never)).toBe(1);
-        expect(await db.collection('deviceUsers').countDocuments({ _id: `dev-shared:${aliceId}` } as never)).toBe(0);
-        expect(await db.collection('deviceUsers').countDocuments({ _id: `dev-shared:${bobId}` } as never)).toBe(1);
-        expect(await db.collection('pushSubscriptions').countDocuments({ _id: 'dev-shared' } as never)).toBe(1);
+        expect(await db.collection<DeviceSyncStateInterface>('deviceSyncState').countDocuments({ _id: `dev-shared::${aliceId}` })).toBe(0);
+        expect(await db.collection<DeviceSyncStateInterface>('deviceSyncState').countDocuments({ _id: `dev-shared::${bobId}` })).toBe(1);
+        expect(await db.collection<DeviceUserInterface>('deviceUsers').countDocuments({ _id: `dev-shared:${aliceId}` })).toBe(0);
+        expect(await db.collection<DeviceUserInterface>('deviceUsers').countDocuments({ _id: `dev-shared:${bobId}` })).toBe(1);
+        expect(await db.collection<PushSubscriptionRecord>('pushSubscriptions').countDocuments({ _id: 'dev-shared' })).toBe(1);
     });
 
     it('returns floor=null and deletes nothing when the user has no device rows', async () => {
@@ -191,7 +204,7 @@ describe('POST /maintenance/purge-operations', () => {
         const body = (await res.json()) as { deletedOps: number; floor: null };
         expect(body.floor).toBeNull();
         expect(body.deletedOps).toBe(0);
-        expect(await db.collection('operations').countDocuments({ _id: 'op-orphan' })).toBe(1);
+        expect(await db.collection<OperationInterface>('operations').countDocuments({ _id: 'op-orphan' })).toBe(1);
     });
 
     it('only touches the calling user’s ops (second user untouched)', async () => {
@@ -208,8 +221,8 @@ describe('POST /maintenance/purge-operations', () => {
 
         await purge(aliceCookie);
 
-        expect(await db.collection('operations').countDocuments({ _id: 'alice-op' })).toBe(0);
-        expect(await db.collection('operations').countDocuments({ _id: 'bob-op' })).toBe(1);
+        expect(await db.collection<OperationInterface>('operations').countDocuments({ _id: 'alice-op' })).toBe(0);
+        expect(await db.collection<OperationInterface>('operations').countDocuments({ _id: 'bob-op' })).toBe(1);
     });
 
     it('rejects unauthenticated requests with 401', async () => {
@@ -251,7 +264,7 @@ describe('POST /maintenance/dedup-operations', () => {
         const body = (await res.json()) as { deletedOps: number; scannedEntities: number };
         expect(body.deletedOps).toBe(3); // o2, o3, o4 collapsed; o1 (first) and o5 (distinct/latest) kept
         expect(body.scannedEntities).toBe(1);
-        const survivors = await db.collection('operations').find({}).project({ _id: 1 }).toArray();
+        const survivors = await db.collection<OperationInterface>('operations').find({}).project<Pick<OperationInterface, '_id'>>({ _id: 1 }).toArray();
         expect(survivors.map((o) => o._id).sort()).toEqual(['o1', 'o5']);
     });
 
@@ -266,7 +279,7 @@ describe('POST /maintenance/dedup-operations', () => {
         await seedOp({ id: 'o3', userId, entityId: 'e1', ts: '2024-01-01T00:00:03.000Z', snapshot: x });
 
         await dedup(cookie);
-        const survivors = await db.collection('operations').find({}).project({ _id: 1 }).toArray();
+        const survivors = await db.collection<OperationInterface>('operations').find({}).project<Pick<OperationInterface, '_id'>>({ _id: 1 }).toArray();
         // o1 (first kept anchor) and o3 (latest) survive; only o2 collapses.
         expect(survivors.map((o) => o._id).sort()).toEqual(['o1', 'o3']);
     });
@@ -282,7 +295,7 @@ describe('POST /maintenance/dedup-operations', () => {
         await seedOp({ id: 'o3-del', userId, entityId: 'e1', ts: '2024-01-01T00:00:03.000Z', opType: 'delete', snapshot: null });
 
         await dedup(cookie);
-        const survivors = await db.collection('operations').find({}).project({ _id: 1 }).toArray();
+        const survivors = await db.collection<OperationInterface>('operations').find({}).project<Pick<OperationInterface, '_id'>>({ _id: 1 }).toArray();
         // o2 collapses (dup of o1); o1 kept as anchor; o3-del always kept.
         expect(survivors.map((o) => o._id).sort()).toEqual(['o1', 'o3-del']);
     });
@@ -300,7 +313,7 @@ describe('POST /maintenance/dedup-operations', () => {
         const res = await dedup(cookie);
         const body = (await res.json()) as { deletedOps: number };
         expect(body.deletedOps).toBe(0);
-        const survivors = await db.collection('operations').find({}).project({ _id: 1 }).toArray();
+        const survivors = await db.collection<OperationInterface>('operations').find({}).project<Pick<OperationInterface, '_id'>>({ _id: 1 }).toArray();
         expect(survivors.map((o) => o._id).sort()).toEqual(['r1', 'r2']);
     });
 
@@ -323,7 +336,7 @@ describe('POST /maintenance/dedup-operations', () => {
         // Each entity independently keeps first + latest → nothing collapses (only 2 ops per entity).
         expect(body.deletedOps).toBe(0);
         expect(body.scannedEntities).toBe(2);
-        const survivors = await db.collection('operations').find({}).project({ _id: 1 }).toArray();
+        const survivors = await db.collection<OperationInterface>('operations').find({}).project<Pick<OperationInterface, '_id'>>({ _id: 1 }).toArray();
         expect(survivors.map((o) => o._id).sort()).toEqual(['e1o1', 'e1o2', 'e2o1', 'e2o2']);
     });
 
@@ -345,8 +358,8 @@ describe('POST /maintenance/dedup-operations', () => {
         // (id > '') is preserved because '' is the lowest possible id.
         expect(body.floor).toEqual({ ts: HIGH_FLOOR_TS, id: '' });
         expect(body.deletedOps).toBe(1);
-        expect(await db.collection('operations').countDocuments({ _id: 'op-below' })).toBe(0);
-        expect(await db.collection('operations').countDocuments({ _id: 'op-at-floor-ms' })).toBe(1);
+        expect(await db.collection<OperationInterface>('operations').countDocuments({ _id: 'op-below' })).toBe(0);
+        expect(await db.collection<OperationInterface>('operations').countDocuments({ _id: 'op-at-floor-ms' })).toBe(1);
     });
 
     it('leaves above-floor ops untouched', async () => {
@@ -363,7 +376,7 @@ describe('POST /maintenance/dedup-operations', () => {
         const res = await dedup(cookie);
         const body = (await res.json()) as { deletedOps: number };
         expect(body.deletedOps).toBe(0);
-        expect(await db.collection('operations').countDocuments({ entityId: 'e1' })).toBe(3);
+        expect(await db.collection<OperationInterface>('operations').countDocuments({ entityId: 'e1' })).toBe(3);
     });
 
     it('only touches the calling user’s ops (second user untouched)', async () => {
@@ -391,7 +404,7 @@ describe('POST /maintenance/dedup-operations', () => {
         const body = (await res.json()) as { deletedOps: number; scannedEntities: number };
         expect(body.deletedOps).toBe(1); // only Alice's a1op2
         expect(body.scannedEntities).toBe(1); // only Alice's one entity scanned
-        expect(await db.collection('operations').countDocuments({ user: bobId })).toBe(3);
+        expect(await db.collection<OperationInterface>('operations').countDocuments({ user: bobId })).toBe(3);
     });
 
     it('rejects unauthenticated requests with 401', async () => {
@@ -418,8 +431,8 @@ async function dropCalendarItemIndex() {
         .catch(() => undefined);
 }
 
-async function seedItem(opts: { id: string; userId: string; calendarEventId?: string; status?: string; updatedTs: string }) {
-    await db.collection('items').insertOne({
+async function seedItem(opts: { id: string; userId: string; calendarEventId?: string; status?: ItemStatus; updatedTs: string }) {
+    await db.collection<ItemInterface>('items').insertOne({
         _id: opts.id,
         user: opts.userId,
         status: opts.status ?? 'calendar',
@@ -448,10 +461,10 @@ describe('POST /maintenance/heal-duplicate-calendar-items', () => {
         const res = await heal(cookie);
         const body = (await res.json()) as { trashedItems: number };
         expect(body.trashedItems).toBe(1);
-        expect((await db.collection('items').findOne({ _id: 'keep' }))?.status).toBe('calendar');
-        expect((await db.collection('items').findOne({ _id: 'loser' }))?.status).toBe('trash');
+        expect((await db.collection<ItemInterface>('items').findOne({ _id: 'keep' }))?.status).toBe('calendar');
+        expect((await db.collection<ItemInterface>('items').findOne({ _id: 'loser' }))?.status).toBe('trash');
         // The trash is recorded as an item update op so other devices converge.
-        const ops = await db.collection('operations').find({ entityId: 'loser', entityType: 'item' }).toArray();
+        const ops = await db.collection<OperationInterface>('operations').find({ entityId: 'loser', entityType: 'item' }).toArray();
         expect(ops).toHaveLength(1);
         const [op] = ops;
         if (!op) throw new Error('expected one trash op');
@@ -467,7 +480,7 @@ describe('POST /maintenance/heal-duplicate-calendar-items', () => {
         const second = (await heal(cookie)).clone();
         const body = (await second.json()) as { trashedItems: number };
         expect(body.trashedItems).toBe(0);
-        expect((await db.collection('items').findOne({ _id: 'solo' }))?.status).toBe('calendar');
+        expect((await db.collection<ItemInterface>('items').findOne({ _id: 'solo' }))?.status).toBe('calendar');
     });
 
     it('only touches the calling user’s items', async () => {
@@ -482,7 +495,7 @@ describe('POST /maintenance/heal-duplicate-calendar-items', () => {
         const res = await heal(aliceCookie);
         const body = (await res.json()) as { trashedItems: number };
         expect(body.trashedItems).toBe(0);
-        expect((await db.collection('items').findOne({ _id: 'b-loser' }))?.status).toBe('calendar');
+        expect((await db.collection<ItemInterface>('items').findOne({ _id: 'b-loser' }))?.status).toBe('calendar');
     });
 
     it('rejects unauthenticated requests with 401', async () => {
@@ -508,7 +521,7 @@ async function seedRoutine(opts: {
     updatedTs?: string;
     retiredByGCal?: boolean;
 }) {
-    await db.collection('routines').insertOne({
+    await db.collection<RoutineInterface>('routines').insertOne({
         _id: opts.id,
         user: opts.userId,
         title: 'Daily sync',
@@ -543,18 +556,18 @@ describe('POST /maintenance/heal-stuck-gcal-routines', () => {
         const res = await heal(cookie);
         const body = (await res.json()) as { revivedRoutines: number };
         expect(body.revivedRoutines).toBe(1);
-        const routine = await db.collection('routines').findOne({ _id: 'r-stuck' });
+        const routine = await db.collection<RoutineInterface>('routines').findOne({ _id: 'r-stuck' });
         expect(routine?.rrule).toBe('FREQ=WEEKLY;WKST=SU;BYDAY=MO,TU,WE');
         expect(routine?.active).toBe(true);
-        const ops = await db.collection('operations').find({ entityId: 'r-stuck', entityType: 'routine' }).toArray();
+        const ops = await db.collection<OperationInterface>('operations').find({ entityId: 'r-stuck', entityType: 'routine' }).toArray();
         expect(ops).toHaveLength(1);
         const [op] = ops;
         if (!op) throw new Error('expected one routine revive op');
         expect(op.opType).toBe('update');
         // Reviving an active routine regenerates future calendar items.
-        const itemOps = await db.collection('operations').find({ entityType: 'item' }).toArray();
+        const itemOps = await db.collection<OperationInterface>('operations').find({ entityType: 'item' }).toArray();
         expect(itemOps.length).toBeGreaterThan(0);
-        const liveItems = await db.collection('items').find({ user: userId, routineId: 'r-stuck', status: 'calendar' }).toArray();
+        const liveItems = await db.collection<ItemInterface>('items').find({ user: userId, routineId: 'r-stuck', status: 'calendar' }).toArray();
         expect(liveItems.length).toBeGreaterThan(0);
     });
 
@@ -576,10 +589,10 @@ describe('POST /maintenance/heal-stuck-gcal-routines', () => {
         const res = await heal(cookie);
         const body = (await res.json()) as { revivedRoutines: number };
         expect(body.revivedRoutines).toBe(0);
-        const routine = await db.collection('routines').findOne({ _id: 'r-retired' });
+        const routine = await db.collection<RoutineInterface>('routines').findOne({ _id: 'r-retired' });
         expect(routine?.active).toBe(false);
         expect(routine?.rrule).toContain('UNTIL=');
-        expect(await db.collection('items').countDocuments({ user: userId, routineId: 'r-retired' })).toBe(0);
+        expect(await db.collection<ItemInterface>('items').countDocuments({ user: userId, routineId: 'r-retired' })).toBe(0);
     });
 
     it('leaves a healthy active routine (future UNTIL, active) untouched', async () => {
@@ -590,7 +603,7 @@ describe('POST /maintenance/heal-stuck-gcal-routines', () => {
         const res = await heal(cookie);
         const body = (await res.json()) as { revivedRoutines: number };
         expect(body.revivedRoutines).toBe(0);
-        expect((await db.collection('routines').findOne({ _id: 'r-ok' }))?.active).toBe(true);
+        expect((await db.collection<RoutineInterface>('routines').findOne({ _id: 'r-ok' }))?.active).toBe(true);
     });
 
     it('ignores in-app routines without a calendarEventId', async () => {
@@ -601,7 +614,7 @@ describe('POST /maintenance/heal-stuck-gcal-routines', () => {
         const res = await heal(cookie);
         const body = (await res.json()) as { revivedRoutines: number };
         expect(body.revivedRoutines).toBe(0);
-        expect((await db.collection('routines').findOne({ _id: 'r-inapp' }))?.active).toBe(false);
+        expect((await db.collection<RoutineInterface>('routines').findOne({ _id: 'r-inapp' }))?.active).toBe(false);
     });
 
     it('revives only the most-recent row per series, leaving inactive duplicates inactive', async () => {
@@ -617,8 +630,8 @@ describe('POST /maintenance/heal-stuck-gcal-routines', () => {
         const body = (await res.json()) as { revivedRoutines: number };
         expect(body.revivedRoutines).toBe(1);
         // Only the most-recent row revives — keeps uniq_active_routine_per_gcal_series satisfiable.
-        expect((await db.collection('routines').findOne({ _id: 'r-new' }))?.active).toBe(true);
-        expect((await db.collection('routines').findOne({ _id: 'r-old' }))?.active).toBe(false);
+        expect((await db.collection<RoutineInterface>('routines').findOne({ _id: 'r-new' }))?.active).toBe(true);
+        expect((await db.collection<RoutineInterface>('routines').findOne({ _id: 'r-old' }))?.active).toBe(false);
     });
 
     it('does not double-activate a series that already has a healthy active sibling (no E11000, returns 200)', async () => {
@@ -649,10 +662,10 @@ describe('POST /maintenance/heal-stuck-gcal-routines', () => {
         expect(res.status).toBe(200);
         const body = (await res.json()) as { revivedRoutines: number };
         expect(body.revivedRoutines).toBe(0);
-        expect((await db.collection('routines').findOne({ _id: 'r-active' }))?.active).toBe(true);
-        expect((await db.collection('routines').findOne({ _id: 'r-stuck-inactive' }))?.active).toBe(false);
+        expect((await db.collection<RoutineInterface>('routines').findOne({ _id: 'r-active' }))?.active).toBe(true);
+        expect((await db.collection<RoutineInterface>('routines').findOne({ _id: 'r-stuck-inactive' }))?.active).toBe(false);
         // Exactly one active row on the series → the unique index stays satisfiable.
-        const active = await db.collection('routines').find({ user: userId, calendarEventId: 'evt-mixed', active: true }).toArray();
+        const active = await db.collection<RoutineInterface>('routines').find({ user: userId, calendarEventId: 'evt-mixed', active: true }).toArray();
         expect(active).toHaveLength(1);
     });
 
@@ -701,18 +714,18 @@ describe('POST /maintenance/heal-split-successor-routines', () => {
         const body = (await res.json()) as { revivedSuccessors: number };
         expect(body.revivedSuccessors).toBe(1);
 
-        const successor = await db.collection('routines').findOne({ _id: 'successor-open' });
+        const successor = await db.collection<RoutineInterface>('routines').findOne({ _id: 'successor-open' });
         expect(successor?.active).toBe(true);
         // Parent UNTIL is NEVER stripped — it stays capped (GCal truth) and paused.
         expect(successor?.rrule).toBe('FREQ=WEEKLY;WKST=SU;BYDAY=MO,TU,WE');
         expect(successor?.splitFromRoutineId).toBe('parent-capped');
-        const parent = await db.collection('routines').findOne({ _id: 'parent-capped' });
+        const parent = await db.collection<RoutineInterface>('routines').findOne({ _id: 'parent-capped' });
         expect(parent?.active).toBe(false);
         expect(parent?.rrule).toContain('UNTIL=');
 
-        const op = await db.collection('operations').findOne({ entityId: 'successor-open', entityType: 'routine' });
+        const op = await db.collection<OperationInterface>('operations').findOne({ entityId: 'successor-open', entityType: 'routine' });
         expect(op?.opType).toBe('update');
-        const liveItems = await db.collection('items').find({ user: userId, routineId: 'successor-open', status: 'calendar' }).toArray();
+        const liveItems = await db.collection<ItemInterface>('items').find({ user: userId, routineId: 'successor-open', status: 'calendar' }).toArray();
         expect(liveItems.length).toBeGreaterThan(0);
     });
 
@@ -745,7 +758,7 @@ describe('POST /maintenance/heal-split-successor-routines', () => {
         expect(res.status).toBe(200);
         const body = (await res.json()) as { revivedSuccessors: number };
         expect(body.revivedSuccessors).toBe(0);
-        const active = await db.collection('routines').find({ user: userId, calendarEventId: 'evt-has-active', active: true }).toArray();
+        const active = await db.collection<RoutineInterface>('routines').find({ user: userId, calendarEventId: 'evt-has-active', active: true }).toArray();
         expect(active).toHaveLength(1);
     });
 
@@ -773,7 +786,7 @@ describe('POST /maintenance/heal-split-successor-routines', () => {
         const res = await heal(cookie);
         const body = (await res.json()) as { revivedSuccessors: number };
         expect(body.revivedSuccessors).toBe(0);
-        const active = await db.collection('routines').find({ user: userId, calendarEventId: 'evt-ambig', active: true }).toArray();
+        const active = await db.collection<RoutineInterface>('routines').find({ user: userId, calendarEventId: 'evt-ambig', active: true }).toArray();
         expect(active).toHaveLength(0);
     });
 
@@ -796,7 +809,7 @@ describe('POST /maintenance/heal-split-successor-routines', () => {
         const res = await heal(cookie);
         const body = (await res.json()) as { revivedSuccessors: number };
         expect(body.revivedSuccessors).toBe(0);
-        expect((await db.collection('routines').findOne({ _id: 'retired-tail' }))?.active).toBe(false);
+        expect((await db.collection<RoutineInterface>('routines').findOne({ _id: 'retired-tail' }))?.active).toBe(false);
     });
 
     it('does not revive a deliberately-paused single routine with no capped sibling', async () => {
@@ -808,7 +821,7 @@ describe('POST /maintenance/heal-split-successor-routines', () => {
         const res = await heal(cookie);
         const body = (await res.json()) as { revivedSuccessors: number };
         expect(body.revivedSuccessors).toBe(0);
-        expect((await db.collection('routines').findOne({ _id: 'user-paused' }))?.active).toBe(false);
+        expect((await db.collection<RoutineInterface>('routines').findOne({ _id: 'user-paused' }))?.active).toBe(false);
     });
 
     it('rejects unauthenticated requests with 401', async () => {

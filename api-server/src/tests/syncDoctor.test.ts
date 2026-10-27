@@ -429,7 +429,7 @@ describe('POST /maintenance/sync-doctor', () => {
         expect(report.healthy).toBe(false);
         expect(report.poisonedWatermarks).toHaveLength(1);
         expect(report.healedPoisonedWatermarks).toBe(0);
-        expect((await db.collection('items').findOne({ _id: 'i-endpoint' }))?.updatedTs).toBe('2099-01-01T00:00:00.000Z');
+        expect((await db.collection<ItemInterface>('items').findOne({ _id: 'i-endpoint' }))?.updatedTs).toBe('2099-01-01T00:00:00.000Z');
     });
 
     it('checkCalendarChains runs the chain checks (vacuously clean with no integrations) and marks them checked', async () => {

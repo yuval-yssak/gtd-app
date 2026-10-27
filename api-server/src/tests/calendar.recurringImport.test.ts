@@ -1,6 +1,7 @@
 /** biome-ignore-all lint/style/noNonNullAssertion: test code asserts status before using ! */
 import dayjs from 'dayjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { GCalEvent } from '../calendarProviders/CalendarProvider.js';
 import { GoogleCalendarProvider } from '../calendarProviders/GoogleCalendarProvider.js';
 import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
@@ -183,7 +184,6 @@ describe('POST /calendar/integrations/:id/sync — recurring event import', () =
                 rrule: 'FREQ=WEEKLY;WKST=SU;UNTIL=20251210T215959Z;BYDAY=MO,TU,WE',
                 active: false,
                 updatedTs: dayjs().toISOString(),
-                lastSyncedFromGCalTs: undefined,
             }),
         );
 
@@ -232,7 +232,6 @@ describe('POST /calendar/integrations/:id/sync — recurring event import', () =
                 rrule: 'FREQ=WEEKLY;WKST=SU;UNTIL=20251210T215959Z;BYDAY=MO,TU,WE',
                 active: false,
                 retiredByGCal: true,
-                lastSyncedFromGCalTs: undefined,
             }),
         );
 
@@ -1551,6 +1550,7 @@ describe('classifyRecurringMaster', () => {
         title: 'Daily - Tech sync',
         routineType: 'calendar',
         rrule: 'FREQ=WEEKLY;BYDAY=MO',
+        template: {},
         active: true,
         createdTs: '2026-01-01T00:00:00Z',
         updatedTs: '2026-01-01T00:00:00Z',

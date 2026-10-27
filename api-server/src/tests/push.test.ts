@@ -6,6 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import pushSubscriptionsDAO from '../dataAccess/pushSubscriptionsDAO.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { pushRoutes } from '../routes/push.js';
+import type { DeviceUserInterface } from '../types/entities.js';
 import { authenticatedRequest, oauthLogin, SESSION_COOKIE } from './helpers.js';
 
 const app = new Hono().on(['GET', 'POST'], '/auth/*', (c) => auth.handler(c.req.raw)).route('/push', pushRoutes);
@@ -109,7 +110,7 @@ describe('POST /push/subscribe — deviceUsers upsert side-effect', () => {
         });
 
         expect(res.status).toBe(200);
-        const join = await db.collection('deviceUsers').findOne({ _id: `dev-new:${alice.userId}` });
+        const join = await db.collection<DeviceUserInterface>('deviceUsers').findOne({ _id: `dev-new:${alice.userId}` });
         expect(join?.deviceId).toBe('dev-new');
         expect(join?.userId).toBe(alice.userId);
     });

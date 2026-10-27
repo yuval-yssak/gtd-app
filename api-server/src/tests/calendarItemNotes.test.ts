@@ -7,11 +7,15 @@
  */
 import { randomUUID } from 'node:crypto';
 import dayjs from 'dayjs';
+import type { WithId } from 'mongodb';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import { propagateRoutineNotesToItems } from '../lib/calendarItemNotes.js';
 import { closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import type { ItemInterface } from '../types/entities.js';
+
+/** `vi.spyOn` erases `findArray`'s row-type generic to `unknown` (whose `_id` is an ObjectId); spy through this view to pin it to item rows. */
+type ItemRowsFinder = { findArray: typeof itemsDAO.findArray<ItemInterface> };
 
 const USER_ID = 'user-notes-1';
 const ROUTINE_ID = 'routine-notes-1';
@@ -29,9 +33,9 @@ beforeEach(async () => {
     vi.restoreAllMocks();
 });
 
-async function seedItem(overrides: Partial<ItemInterface> = {}): Promise<ItemInterface> {
+async function seedItem(overrides: Partial<ItemInterface> = {}): Promise<WithId<ItemInterface>> {
     const now = dayjs().toISOString();
-    const item: ItemInterface = {
+    const item: WithId<ItemInterface> = {
         _id: randomUUID(),
         user: USER_ID,
         status: 'calendar',
@@ -103,7 +107,7 @@ describe('propagateRoutineNotesToItems', () => {
         const item = await seedItem();
         const staleSnapshot = { ...item };
         await itemsDAO.updateMany({ _id: item._id } as never, { $set: { status: 'nextAction' } });
-        vi.spyOn(itemsDAO, 'findArray').mockResolvedValueOnce([staleSnapshot]);
+        vi.spyOn<ItemRowsFinder, 'findArray'>(itemsDAO, 'findArray').mockResolvedValueOnce([staleSnapshot]);
 
         const ops = await propagateRoutineNotesToItems(ROUTINE_ID, 'bring goggles', USER_ID);
 
@@ -121,7 +125,7 @@ describe('propagateRoutineNotesToItems', () => {
         const item = await seedItem();
         const staleSnapshot = { ...item };
         await itemsDAO.updateMany({ _id: item._id } as never, { $set: { status: 'trash' } });
-        vi.spyOn(itemsDAO, 'findArray').mockResolvedValueOnce([staleSnapshot]);
+        vi.spyOn<ItemRowsFinder, 'findArray'>(itemsDAO, 'findArray').mockResolvedValueOnce([staleSnapshot]);
 
         const ops = await propagateRoutineNotesToItems(ROUTINE_ID, 'bring goggles', USER_ID);
 

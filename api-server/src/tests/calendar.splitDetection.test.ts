@@ -1284,12 +1284,10 @@ describe('integration auth status — sync, pushback, OAuth reconnect', () => {
             entityId: 'item-1',
             opType: 'update',
             ts: dayjs().toISOString(),
+            deviceId: 'device-1',
             snapshot: item,
         };
-        await maybePushToGCal(
-            op,
-            () => new GoogleCalendarProvider({ accessToken: 'at', refreshToken: 'rt', tokenExpiry: dayjs().toISOString() }, async () => {}),
-        );
+        await maybePushToGCal(op, () => new GoogleCalendarProvider(makeIntegration(userId), async () => {}));
 
         // Both `provider.updateEvent` and `provider.deleteEvent` must NOT be called — the suspended
         // status short-circuits inside resolvePushContext.

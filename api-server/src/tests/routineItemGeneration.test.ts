@@ -11,7 +11,7 @@
 import { randomUUID } from 'node:crypto';
 import dayjs from 'dayjs';
 import { Hono } from 'hono';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { issueApiToken } from '../auth/apiTokens.js';
 import { __resetDefaultStoreForTests } from '../auth/rateLimitMiddleware.js';
 import deviceSyncStateDAO from '../dataAccess/deviceSyncStateDAO.js';
@@ -796,13 +796,13 @@ describe('regenerateFutureRoutineItems — idempotency & delta reconciliation', 
         await itemsDAO.replaceById(first._id, { ...first, status: 'done', updatedTs: dayjs().toISOString() });
         // Co-locate a SEPARATE live calendar row on the same date, drifted off the 09:00 schedule. This is
         // the row whose date the old code wrongly un-vetoed, then recreated beside the done one.
+        const { calendarInstanceEventId: _doneRowsClaim, ...unclaimed } = first;
         await itemsDAO.insertOne({
-            ...first,
+            ...unclaimed,
             _id: randomUUID(),
             status: 'calendar',
             timeStart: `${claimedDate}T07:00:00`,
             timeEnd: `${claimedDate}T07:30:00`,
-            calendarInstanceEventId: undefined,
             updatedTs: dayjs().toISOString(),
         });
 
@@ -829,8 +829,9 @@ describe('regenerateFutureRoutineItems — idempotency & delta reconciliation', 
         await regenerateFutureRoutineItems(moved, userId, dayjs().toISOString(), TZ);
 
         const live = await itemsDAO.findArray({ user: userId, routineId: routine._id, status: 'calendar' });
-        const datesWithMultipleLive = [...Map.groupBy(live, (i) => (i.timeStart ?? '').slice(0, 10))].filter(([, items]) => items.length > 1);
-        expect(datesWithMultipleLive).toHaveLength(0);
+        const liveDates = live.map((i) => (i.timeStart ?? '').slice(0, 10));
+        // No date carries more than one live row.
+        expect(new Set(liveDates).size).toBe(liveDates.length);
         expect(live.every((i) => (i.timeStart ?? '').endsWith('T14:30:00'))).toBe(true);
     });
 
@@ -897,8 +898,12 @@ describe('regenerateFutureRoutineItems — exception-moved rows', () => {
         const cancelledRow = rows.find((row) => row.timeStart?.startsWith(cancelled));
         if (!movedRow || !cancelledRow) throw new Error('expected generated rows on both dates');
         // The moved row keeps its instance id and takes the exception's time; the cancelled row is trashed with its id freed.
-        await db.collection('items').updateOne({ _id: movedRow._id }, { $set: { timeStart: movedTimeStart, timeEnd: `${cancelled}T15:30:00+03:00` } });
-        await db.collection('items').updateOne({ _id: cancelledRow._id }, { $set: { status: 'trash' }, $unset: { calendarInstanceEventId: '' } });
+        await db
+            .collection<ItemInterface>('items')
+            .updateOne({ _id: movedRow._id }, { $set: { timeStart: movedTimeStart, timeEnd: `${cancelled}T15:30:00+03:00` } });
+        await db
+            .collection<ItemInterface>('items')
+            .updateOne({ _id: cancelledRow._id }, { $set: { status: 'trash' }, $unset: { calendarInstanceEventId: '' } });
         const withExceptions: RoutineInterface = {
             ...routine,
             routineExceptions: [
@@ -949,7 +954,7 @@ describe('regenerateFutureRoutineItems — exception-moved rows', () => {
         const routine = await seedDailyLinkedRoutine(userId);
         const { withExceptions, movedFrom, movedRow } = await seedMovedOntoCancelled(userId, routine);
         const overriddenTitle = 'ALL HANDS (moved — extended agenda)';
-        await db.collection('items').updateOne({ _id: movedRow._id }, { $set: { title: overriddenTitle } });
+        await db.collection<ItemInterface>('items').updateOne({ _id: movedRow._id }, { $set: { title: overriddenTitle } });
         const exceptions = (withExceptions.routineExceptions ?? []).map((e) => (e.date === movedFrom ? { ...e, title: overriddenTitle } : e));
 
         await propagateRoutineContentToItems({ ...withExceptions, routineExceptions: exceptions, title: 'ALL HANDS (renamed)' }, userId, dayjs().toISOString());

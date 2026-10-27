@@ -3,8 +3,9 @@
         "target": "ES2023",
         "module": "NodeNext",
         "moduleResolution": "NodeNext",
-        "outDir": "build",
-        "rootDir": "src",
+        // Typecheck-only, tests included: `npm run build` emits through tsconfig.build.json, which drops
+        // the tests and pins rootDir. No rootDir here — mcpToolParity.test.ts imports mcp-server sources.
+        "noEmit": true,
         "strict": true,
         // better-auth's .d.mts files reference bun:sqlite, @cloudflare/workers-types, and
         // a zod version conflict — all in node_modules, none of which affect our code
@@ -25,6 +26,7 @@
         // DOM needed for Hono's types that reference Web API globals (RequestInfo, BufferSource, etc.)
         "lib": ["ES2023", "DOM"]
     },
-    "include": ["src/**/*.ts"],
-    "exclude": ["node_modules", "src/tests"]
+    // mcp-server's env.d.ts declares the process.env keys its tool sources (pulled in by mcpToolParity) read.
+    "include": ["src/**/*.ts", "../mcp-server/src/env.d.ts"],
+    "exclude": ["node_modules"]
 }

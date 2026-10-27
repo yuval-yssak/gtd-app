@@ -7,7 +7,8 @@ import { __resetDefaultStoreForTests } from '../auth/rateLimitMiddleware.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { v1ItemsRoutes } from '../routes/v1/items.js';
-import type { ItemInterface } from '../types/entities.js';
+import type { PublicItem } from '../routes/v1/projections/item.js';
+import type { ApiTokenInterface, ItemInterface, OperationInterface } from '../types/entities.js';
 import { oauthLogin, SESSION_COOKIE } from './helpers.js';
 
 const app = new Hono().on(['GET', 'POST'], '/auth/*', (c) => auth.handler(c.req.raw)).route('/v1', v1ItemsRoutes);
@@ -86,9 +87,9 @@ interface ApiCallOptions {
 }
 
 async function callApi({ method, path, token, body }: ApiCallOptions): Promise<Response> {
-    const headers: Record<string, string> = {};
-    if (token) headers.Authorization = `Bearer ${token}`;
-    if (body !== undefined) headers['Content-Type'] = 'application/json';
+    const headers = new Headers();
+    if (token) headers.set('Authorization', `Bearer ${token}`);
+    if (body !== undefined) headers.set('Content-Type', 'application/json');
     return app.fetch(
         new Request(`http://localhost:4000${path}`, {
             method,
@@ -115,7 +116,7 @@ describe('v1 bearer auth', () => {
 
     it('returns 401 for revoked tokens', async () => {
         const { plaintext, tokenId } = await newUserWithToken();
-        await db.collection('apiTokens').updateOne({ _id: tokenId }, { $set: { revokedTs: dayjs().toISOString() } } as never);
+        await db.collection<ApiTokenInterface>('apiTokens').updateOne({ _id: tokenId }, { $set: { revokedTs: dayjs().toISOString() } });
         const res = await callApi({ method: 'GET', path: '/v1/items', token: plaintext });
         expect(res.status).toBe(401);
     });
@@ -140,13 +141,13 @@ describe('v1 bearer auth', () => {
 
     it('bumps lastUsedTs on a successful authenticated call (best-effort)', async () => {
         const { plaintext, tokenId } = await newUserWithToken();
-        const before = await db.collection('apiTokens').findOne({ _id: tokenId } as never);
+        const before = await db.collection<ApiTokenInterface>('apiTokens').findOne({ _id: tokenId });
         expect(before?.lastUsedTs).toBeUndefined();
         const res = await callApi({ method: 'GET', path: '/v1/items', token: plaintext });
         expect(res.status).toBe(200);
         // Fire-and-forget; poll briefly to avoid flakes if the update hasn't landed yet.
         for (let i = 0; i < 20; i++) {
-            const after = await db.collection('apiTokens').findOne({ _id: tokenId } as never);
+            const after = await db.collection<ApiTokenInterface>('apiTokens').findOne({ _id: tokenId });
             if (after?.lastUsedTs) return;
             await new Promise((r) => setTimeout(r, 10));
         }
@@ -537,7 +538,8 @@ describe('GET /v1/items', () => {
             },
         });
         const res = await callApi({ method: 'GET', path: '/v1/items', token: plaintext });
-        const body = (await res.json()) as { items: Record<string, unknown>[] };
+        // Probed by arbitrary key below to prove internal fields are absent, so not just PublicItem.
+        const body = (await res.json()) as { items: Array<Record<string, unknown> & Pick<PublicItem, 'title'>> };
         expect(body.items).toHaveLength(1);
         const presented = body.items[0]!;
         for (const internal of ['contentHash', 'lastPushedToGCalTs', 'lastSyncedFromGCalTs', 'lastSyncedNotes']) {
@@ -568,7 +570,7 @@ describe('GET /v1/items', () => {
             ignoreBefore: '2026-05-15',
         } as never);
         const res = await callApi({ method: 'GET', path: `/v1/items/${_id}`, token: plaintext });
-        const body = (await res.json()) as Record<string, unknown>;
+        const body = (await res.json()) as PublicItem;
         expect(body.workContextIds).toEqual(['ctx-1', 'ctx-2']);
         expect(body.peopleIds).toEqual(['p-1']);
         expect(body.energy).toBe('high');
@@ -1077,7 +1079,7 @@ describe('PATCH /v1/items/:id — null clears optional fields', () => {
         const item = await seedWaitingFor(userId);
         const res = await callApi({ method: 'PATCH', path: `/v1/items/${item._id}`, token: plaintext, body: { waitingForPersonId: null } });
         expect(res.status).toBe(200);
-        const body = (await res.json()) as Record<string, unknown>;
+        const body = (await res.json()) as PublicItem;
         expect(body).not.toHaveProperty('waitingForPersonId');
         expect(body.status).toBe('waitingFor');
         expect(body._id).toBe(item._id);
@@ -1098,18 +1100,20 @@ describe('PATCH /v1/items/:id — null clears optional fields', () => {
         const res = await callApi({ method: 'PATCH', path: `/v1/items/${item._id}`, token: plaintext, body: { waitingForPersonId: null } });
         expect(res.status).toBe(200);
         const ops = await db
-            .collection('operations')
-            .find({ user: userId, entityId: item._id, opType: 'update' } as never)
+            .collection<OperationInterface>('operations')
+            .find({ user: userId, entityId: item._id ?? '', opType: 'update' })
             .toArray();
         expect(ops).toHaveLength(1);
         const [op] = ops;
         if (!op) throw new Error('expected one update op');
-        const snapshot = op.snapshot as Record<string, unknown>;
+        const { snapshot } = op;
+        // `snapshot` is a union of every synced entity; only an item snapshot carries `status`.
+        if (!snapshot || !('status' in snapshot)) throw new Error('expected an item snapshot');
         expect(snapshot).not.toHaveProperty('waitingForPersonId');
         expect(snapshot.status).toBe('waitingFor');
         // updatedTs moved forward — a device holding the pre-clear copy loses LWW to this snapshot.
-        expect(dayjs(snapshot.updatedTs as string).isAfter(dayjs(before).subtract(1, 'second'))).toBe(true);
-        expect(dayjs(snapshot.updatedTs as string).isAfter(dayjs(item.updatedTs).subtract(1, 'millisecond'))).toBe(true);
+        expect(dayjs(snapshot.updatedTs).isAfter(dayjs(before).subtract(1, 'second'))).toBe(true);
+        expect(dayjs(snapshot.updatedTs).isAfter(dayjs(item.updatedTs).subtract(1, 'millisecond'))).toBe(true);
     });
 
     it('re-applying a pre-clear snapshot through the pipeline loses LWW to the cleared row', async () => {
@@ -1156,7 +1160,7 @@ describe('PATCH /v1/items/:id — null clears optional fields', () => {
         };
         const res = await callApi({ method: 'PATCH', path: `/v1/items/${item._id}`, token: plaintext, body: cleared });
         expect(res.status).toBe(200);
-        const stored = (await itemsDAO.findByOwnerAndId(item._id ?? '', userId)) as Record<string, unknown> | null;
+        const stored = await itemsDAO.findByOwnerAndId(item._id ?? '', userId);
         expect(stored).not.toBeNull();
         for (const field of Object.keys(cleared)) {
             expect(stored, field).not.toHaveProperty(field);

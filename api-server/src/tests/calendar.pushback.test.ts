@@ -26,6 +26,11 @@ import { authenticatedRequest, oauthLogin } from './helpers.js';
 
 useCalendarTestLifecycle();
 
+/** The row with no scheduled time — `exactOptionalPropertyTypes` rules out an explicit `undefined` override. */
+function withoutTimes({ timeStart: _start, timeEnd: _end, ...untimed }: ItemInterface): ItemInterface {
+    return untimed;
+}
+
 describe('calendar push-back — existing items', () => {
     it('deletes GCal event when item is trashed', async () => {
         const sessionCookie = await loginAsAlice();
@@ -157,7 +162,7 @@ describe('calendar push-back — new items', () => {
         const userId = await getUserId(sessionCookie);
         await insertIntegrationWithConfig(userId);
 
-        const item = makeItem(userId, { timeStart: undefined, timeEnd: undefined });
+        const item = withoutTimes(makeItem(userId));
 
         const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockResolvedValue({ eventId: 'new-id' });
 
@@ -334,7 +339,7 @@ describe('calendar push-back — routine instance overrides', () => {
         await setupRoutineWithEvent(userId);
 
         // Items without timeStart can't have a rrule date — skip gracefully.
-        const item = makeItem(userId, { _id: 'item-no-ts', routineId: 'routine-1', timeStart: undefined, timeEnd: undefined });
+        const item = withoutTimes(makeItem(userId, { _id: 'item-no-ts', routineId: 'routine-1' }));
 
         const spy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateRecurringInstance').mockResolvedValue(undefined);
 
@@ -646,13 +651,7 @@ describe('calendar push-back — routine instance overrides', () => {
         await setupRoutineWithEvent(userId);
 
         // Without timeStart the helper can't derive an original rrule date — skip gracefully.
-        const item = makeItem(userId, {
-            _id: 'item-trash-no-ts',
-            routineId: 'routine-1',
-            status: 'trash',
-            timeStart: undefined,
-            timeEnd: undefined,
-        });
+        const item = withoutTimes(makeItem(userId, { _id: 'item-trash-no-ts', routineId: 'routine-1', status: 'trash' }));
 
         const cancelSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'cancelRecurringInstance').mockResolvedValue(undefined);
 
@@ -875,7 +874,7 @@ describe('calendar push-back — failure surfacing (ops marked syncFailed)', () 
             calendarSyncConfigId: 'sync-config-1',
         });
         // Post-detach snapshot: active status, GCal linkage stripped by the status matrix.
-        const snapshot = makeItem(userId, { _id: 'item-detached', status: 'nextAction', timeStart: undefined, timeEnd: undefined });
+        const snapshot = withoutTimes(makeItem(userId, { _id: 'item-detached', status: 'nextAction' }));
 
         vi.spyOn(GoogleCalendarProvider.prototype, 'deleteEvent').mockRejectedValue(gcalServerError());
 
@@ -1109,7 +1108,8 @@ describe('calendar push-back — routines', () => {
         // Each cascade-trashed item records an update op so other devices sync the state change.
         const ops = await operationsDAO.findArray({ entityId: { $in: ['gen-1', 'gen-2', 'gen-nextaction'] } });
         expect(ops).toHaveLength(3);
-        expect(ops.every((op) => op.opType === 'update' && op.snapshot?.status === 'trash')).toBe(true);
+        // `snapshot` is a union of every entity; `in` narrows it to the ones carrying a status.
+        expect(ops.every((op) => op.opType === 'update' && op.snapshot !== null && 'status' in op.snapshot && op.snapshot.status === 'trash')).toBe(true);
     });
 
     it('on routine delete without calendarEventId: trashes generated items but skips GCal call', async () => {
@@ -1367,7 +1367,9 @@ describe('findNeedingWebhook', () => {
         const horizon = dayjs().add(1, 'day').toISOString();
         const results = await calendarSyncConfigsDAO.findNeedingWebhook(horizon);
         expect(results).toHaveLength(1);
-        expect(results[0]._id).toBe('sync-config-1');
+        const [config] = results;
+        if (!config) throw new Error('expected one config');
+        expect(config._id).toBe('sync-config-1');
     });
 
     it('returns enabled configs with expired webhookExpiry', async () => {
@@ -1423,11 +1425,13 @@ describe('calendar push-back — all-day items (outbound)', () => {
         await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
 
         const params = getInsertRequestBody(insertSpy);
-        expect(params.requestBody?.start).toEqual({ date: '2026-05-27' });
-        expect(params.requestBody?.end).toEqual({ date: '2026-05-28' });
+        // The kit types requestBody as an index signature; destructuring reads keys without dot access.
+        const { start, end } = params.requestBody ?? {};
+        expect(start).toEqual({ date: '2026-05-27' });
+        expect(end).toEqual({ date: '2026-05-28' });
         // No timeZone field at all on the start/end objects — GCal must treat them as owner-local.
-        expect(params.requestBody?.start).not.toHaveProperty('timeZone');
-        expect(params.requestBody?.end).not.toHaveProperty('timeZone');
+        expect(start).not.toHaveProperty('timeZone');
+        expect(end).not.toHaveProperty('timeZone');
     });
 
     it('updateEvent for an all-day item emits { date } start/end (no timeZone)', async () => {
@@ -1450,8 +1454,9 @@ describe('calendar push-back — all-day items (outbound)', () => {
         await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
 
         const params = getPatchRequestBody(patchSpy);
-        expect(params.requestBody?.start).toEqual({ date: '2026-05-27' });
-        expect(params.requestBody?.end).toEqual({ date: '2026-05-28' });
+        const { start, end } = params.requestBody ?? {};
+        expect(start).toEqual({ date: '2026-05-27' });
+        expect(end).toEqual({ date: '2026-05-28' });
     });
 
     it('createRecurringEvent for an all-day template emits { date } start/end and the routine rrule', async () => {
@@ -1475,10 +1480,11 @@ describe('calendar push-back — all-day items (outbound)', () => {
         await maybePushToGCal(makeOp(userId, { entityType: 'routine', entityId: routine._id, snapshot: routine }), mockBuildProvider());
 
         const params = getInsertRequestBody(insertSpy);
+        const { start, end, recurrence } = params.requestBody ?? {};
         // start.date = the rrule-anchored series start (Monday 2026-05-25). end = start + 1 day.
-        expect(params.requestBody?.start).toEqual({ date: '2026-05-25' });
-        expect(params.requestBody?.end).toEqual({ date: '2026-05-26' });
-        expect(params.requestBody?.recurrence).toEqual(['RRULE:FREQ=WEEKLY;BYDAY=MO']);
+        expect(start).toEqual({ date: '2026-05-25' });
+        expect(end).toEqual({ date: '2026-05-26' });
+        expect(recurrence).toEqual(['RRULE:FREQ=WEEKLY;BYDAY=MO']);
     });
 });
 
@@ -1528,7 +1534,8 @@ describe('calendar push-back — attendees + sendUpdates threading', () => {
         await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
 
         const params = getPatchRequestBody(patchSpy);
-        expect(params.requestBody?.attendees).toEqual(attendees);
+        const { attendees: sentAttendees } = params.requestBody ?? {};
+        expect(sentAttendees).toEqual(attendees);
     });
 
     it("op gcalMeta.sendUpdates='all' propagates to events.patch sendUpdates param", async () => {
@@ -1670,8 +1677,9 @@ describe('calendar push-back — attendees + sendUpdates threading', () => {
         await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id ?? '', snapshot: item }), mockBuildProvider());
 
         const params = getPatchRequestBody(patchSpy);
+        const { attendees } = params.requestBody ?? {};
         expect(params.requestBody).toHaveProperty('attendees');
-        expect(params.requestBody.attendees).toEqual(divergentAttendees);
+        expect(attendees).toEqual(divergentAttendees);
     });
 
     it('all-day item done-marker push emits { date } start/end (not { dateTime })', async () => {
@@ -1695,8 +1703,9 @@ describe('calendar push-back — attendees + sendUpdates threading', () => {
         await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id ?? '', snapshot: item }), mockBuildProvider());
 
         const params = getPatchRequestBody(patchSpy);
-        expect(params.requestBody?.start).toEqual({ date: '2026-05-27' });
-        expect(params.requestBody?.end).toEqual({ date: '2026-05-28' });
+        const { start, end } = params.requestBody ?? {};
+        expect(start).toEqual({ date: '2026-05-27' });
+        expect(end).toEqual({ date: '2026-05-28' });
     });
 });
 
@@ -1704,8 +1713,8 @@ describe('calendar push-back — attendees + sendUpdates threading', () => {
 
 describe('POST /calendar/items/:itemId/rsvp', () => {
     /** Inserts a linked calendar item with an existing self attendee in `needsAction`. */
-    async function insertLinkedCalendarItem(userId: string, overrides: Partial<ItemInterface> = {}): Promise<ItemInterface> {
-        const item = makeItem(userId, {
+    function makeLinkedCalendarItem(userId: string, overrides: Partial<ItemInterface> = {}) {
+        return makeItem(userId, {
             _id: 'item-rsvp-1',
             calendarEventId: 'gcal-rsvp-ev',
             calendarIntegrationId: 'int-1',
@@ -1717,6 +1726,10 @@ describe('POST /calendar/items/:itemId/rsvp', () => {
             responseStatus: 'needsAction',
             ...overrides,
         });
+    }
+
+    async function insertLinkedCalendarItem(userId: string, overrides: Partial<ItemInterface> = {}): Promise<ItemInterface> {
+        const item = makeLinkedCalendarItem(userId, overrides);
         await itemsDAO.insertOne(item);
         return item;
     }
@@ -1794,11 +1807,11 @@ describe('POST /calendar/items/:itemId/rsvp', () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
         await insertIntegrationWithConfig(userId);
-        await insertLinkedCalendarItem(userId, {
+        const { responseStatus: _none, ...withoutResponseStatus } = makeLinkedCalendarItem(userId, {
             // No self entry — the user wasn't on the invite list (e.g. delegated mailbox case).
             attendees: [{ email: 'organizer@example.com', responseStatus: 'accepted', organizer: true }],
-            responseStatus: undefined,
         });
+        await itemsDAO.insertOne(withoutResponseStatus);
 
         vi.spyOn(GoogleCalendarProvider.prototype, 'getMyEmail').mockResolvedValueOnce('alice@example.com');
         const patchSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'patchEventAttendees').mockResolvedValueOnce(undefined);
@@ -1919,7 +1932,7 @@ describe('POST /calendar/items/:itemId/rsvp', () => {
         const userId = await getUserId(sessionCookie);
         await insertIntegrationWithConfig(userId);
         // nextAction item — no calendarEventId either, so the calendar-shape guard rejects.
-        await itemsDAO.insertOne(makeItem(userId, { _id: 'item-na-1', status: 'nextAction', calendarEventId: undefined, calendarIntegrationId: undefined }));
+        await itemsDAO.insertOne(makeItem(userId, { _id: 'item-na-1', status: 'nextAction' }));
 
         const res = await authenticatedRequest(app, {
             method: 'POST',

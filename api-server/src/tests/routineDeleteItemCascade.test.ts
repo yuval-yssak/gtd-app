@@ -5,6 +5,7 @@
 /** biome-ignore-all lint/style/noNonNullAssertion: test code asserts result before using ! */
 import dayjs from 'dayjs';
 import { Hono } from 'hono';
+import type { WithId } from 'mongodb';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { issueApiToken } from '../auth/apiTokens.js';
 import { __resetDefaultStoreForTests } from '../auth/rateLimitMiddleware.js';
@@ -69,7 +70,7 @@ function makeRoutine(userId: string, overrides: Partial<RoutineInterface> = {}):
     };
 }
 
-function makeItem(userId: string, routineId: string, overrides: Partial<ItemInterface> = {}): ItemInterface {
+function makeItem(userId: string, routineId: string, overrides: Partial<ItemInterface> = {}): WithId<ItemInterface> {
     const now = dayjs().toISOString();
     return {
         _id: `i-${Math.random()}`,
@@ -108,8 +109,8 @@ describe('DELETE /v1/routines/:id cascades to generated nextAction items', () =>
         const res = await deleteRoutine('r-delete-cascade', token);
         expect(res.status).toBe(200);
 
-        await waitFor(async () => (await itemsDAO.findByOwnerAndId(item._id!, userId))?.status === 'trash');
-        const stored = await itemsDAO.findByOwnerAndId(item._id!, userId);
+        await waitFor(async () => (await itemsDAO.findByOwnerAndId(item._id, userId))?.status === 'trash');
+        const stored = await itemsDAO.findByOwnerAndId(item._id, userId);
         expect(stored?.status).toBe('trash');
         const ops = await operationsDAO.findArray({ entityId: item._id, opType: 'update' });
         expect(ops.length).toBeGreaterThanOrEqual(1);
@@ -125,8 +126,8 @@ describe('DELETE /v1/routines/:id cascades to generated nextAction items', () =>
         const res = await deleteRoutine('r-delete-cascade', token);
         expect(res.status).toBe(200);
 
-        await waitFor(async () => (await itemsDAO.findByOwnerAndId(pastDueItem._id!, userId))?.status === 'trash');
-        const stored = await itemsDAO.findByOwnerAndId(pastDueItem._id!, userId);
+        await waitFor(async () => (await itemsDAO.findByOwnerAndId(pastDueItem._id, userId))?.status === 'trash');
+        const stored = await itemsDAO.findByOwnerAndId(pastDueItem._id, userId);
         expect(stored?.status).toBe('trash');
     });
 
@@ -145,8 +146,8 @@ describe('DELETE /v1/routines/:id cascades to generated nextAction items', () =>
         // Give the fire-and-forget cascade a moment to run (nothing to poll for since no state
         // should change) before asserting neither item was touched.
         await new Promise((r) => setTimeout(r, 100));
-        const storedDone = await itemsDAO.findByOwnerAndId(doneItem._id!, userId);
-        const storedTrashed = await itemsDAO.findByOwnerAndId(trashedItem._id!, userId);
+        const storedDone = await itemsDAO.findByOwnerAndId(doneItem._id, userId);
+        const storedTrashed = await itemsDAO.findByOwnerAndId(trashedItem._id, userId);
         expect(storedDone?.updatedTs).toBe(doneItem.updatedTs);
         expect(storedTrashed?.updatedTs).toBe(trashedItem.updatedTs);
         expect(await operationsDAO.findArray({ entityId: doneItem._id, opType: 'update' })).toHaveLength(0);
@@ -176,8 +177,8 @@ describe('DELETE /v1/routines/:id cascades to generated nextAction items', () =>
         const res = await deleteRoutine('r-delete-cascade', token);
         expect(res.status).toBe(200);
 
-        await waitFor(async () => (await itemsDAO.findByOwnerAndId(calendarItem._id!, userId))?.status === 'trash');
-        const stored = await itemsDAO.findByOwnerAndId(calendarItem._id!, userId);
+        await waitFor(async () => (await itemsDAO.findByOwnerAndId(calendarItem._id, userId))?.status === 'trash');
+        const stored = await itemsDAO.findByOwnerAndId(calendarItem._id, userId);
         expect(stored?.status).toBe('trash');
     });
 });

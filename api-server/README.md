@@ -20,12 +20,12 @@ docker compose up      # MongoDB on :27017, API on :4000
 
 ```bash
 npm run dev          # tsx watch — hot reload on port 4000
-npm run build        # compile TypeScript to build/
+npm run build        # tsrs -p tsconfig.build.json → build/ (tests left out)
 npm start            # node build/index.js (production)
 npm test             # run Vitest tests
 npm run lint         # Biome lint check
 npm run lint:fix     # auto-fix lint + format
-npm run typecheck    # tsrs --noEmit
+npm run typecheck    # tsrs --noEmit — source and src/tests
 ```
 
 ## Architecture

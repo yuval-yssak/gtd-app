@@ -286,7 +286,7 @@ describe('deleteUserCompletely — ordering against in-flight work', () => {
         // The sync finished BEFORE the deletion erased anything (no tombstone yet), and both the seeded
         // item and the one the sync wrote are gone.
         expect(tombstoneSeenBySync).toBeNull();
-        expect(report.deleted.items).toBe(2);
+        expect(report.deleted).toHaveProperty('items', 2);
         expect(await db.collection('items').countDocuments({ user: ALICE.userId })).toBe(0);
     });
 
@@ -403,7 +403,7 @@ describe('deleteUserCompletely — crash-safety order', () => {
 
         const report = await deleteUserCompletely(ALICE.userId);
 
-        expect(report.deleted.items).toBe(2);
+        expect(report.deleted).toHaveProperty('items', 2);
         expect(await db.collection('items').countDocuments({ user: ALICE.userId })).toBe(0);
     });
 });
@@ -430,7 +430,7 @@ describe('deleteUserCompletely — push subscriptions on a shared device', () =>
             user: BOB.userId,
             endpoint: 'https://push.test/shared',
         });
-        expect(report.deleted.pushSubscriptions).toBe(1);
+        expect(report.deleted).toHaveProperty('pushSubscriptions', 1);
         expect(await db.collection('deviceUsers').countDocuments({ deviceId: 'shared' })).toBe(1);
         expect(await db.collection('pushSubscriptions').countDocuments({ user: ALICE.userId })).toBe(0);
     });
@@ -447,7 +447,7 @@ describe('deleteUserCompletely — push subscriptions on a shared device', () =>
 
         const report = await deleteUserCompletely(ALICE.userId, { dryRun: true });
 
-        expect(report.deleted.pushSubscriptions).toBe(1);
+        expect(report.deleted).toHaveProperty('pushSubscriptions', 1);
         expect(await db.collection('pushSubscriptions').countDocuments({ user: ALICE.userId })).toBe(2);
     });
 });

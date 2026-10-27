@@ -127,7 +127,7 @@ describe('authenticatedRateLimit middleware', () => {
         // Stub authenticateBearer with a static apiAuth so we don't need real tokens for these tests.
         return new Hono<{ Variables: BearerVariables }>()
             .use('*', async (c, next) => {
-                c.set('apiAuth', { userId: 'u1', tokenId: 'tok-1' });
+                c.set('apiAuth', { userId: 'u1', tokenId: 'tok-1', scopes: [] });
                 await next();
             })
             .use('*', authenticatedRateLimit({ store, now }))

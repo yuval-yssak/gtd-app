@@ -116,7 +116,8 @@ async function postReassign(cookieHeader: string, body: unknown): Promise<Respon
 
 // ── Fixture builders ───────────────────────────────────────────────────────────
 
-function makeItem(userId: string, overrides: Partial<ItemInterface> = {}): ItemInterface {
+// `_id` is optional on ItemInterface but always generated here; the narrower type lets callers use it as a filter.
+function makeItem(userId: string, overrides: Partial<ItemInterface> = {}): ItemInterface & { _id: string } {
     const now = dayjs().toISOString();
     return {
         _id: generateId(16),

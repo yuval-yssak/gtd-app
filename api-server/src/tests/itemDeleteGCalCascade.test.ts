@@ -84,7 +84,7 @@ describe('item-delete cascades to GCal via maybePushToGCal', () => {
     it('hydrates snapshot:null delete ops with the pre-delete row before pushback runs', async () => {
         await seedCalendarIntegration();
         await itemsDAO.insertOne(calendarItem());
-        const pushSpy = vi.spyOn(calendarPushback, 'maybePushToGCal').mockResolvedValue(undefined);
+        const pushSpy = vi.spyOn(calendarPushback, 'maybePushToGCal').mockResolvedValue([]);
 
         const op = await applyAndPublishOperation(
             userId,

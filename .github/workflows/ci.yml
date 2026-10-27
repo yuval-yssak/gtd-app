@@ -36,12 +36,18 @@ jobs:
               with:
                   node-version: 22
                   cache: npm
-                  cache-dependency-path: api-server/package-lock.json
+                  cache-dependency-path: |
+                      api-server/package-lock.json
+                      mcp-server/package-lock.json
             # npm ci fails on macOS-generated lock files because optional WASM packages
             # (cpu: wasm32 chain: rolldown → @rolldown/binding-wasm32-wasi → @napi-rs/wasm-runtime)
             # record peer dep references without resolving them on macOS, making the lock file
             # structurally inconsistent per npm ci's validator. npm install skips that check.
             - run: npm install
-            - run: npm run typecheck   # tsrs --noEmit
+            # mcpToolParity.test.ts imports mcp-server's tool sources, so the typecheck resolves their
+            # zod / MCP SDK imports from mcp-server/node_modules. --ignore-scripts skips its `prepare` build.
+            - run: npm install --ignore-scripts
+              working-directory: mcp-server
+            - run: npm run typecheck   # tsrs --noEmit (source + src/tests)
             - run: npm run lint        # biome lint + format
             - run: npm test          # vitest

@@ -218,14 +218,15 @@ export async function expectSoleActiveRoutine(userId: string, bareId: string): P
 export function spyOnGCalEventsApi() {
     // Each google.calendar() call returns a fresh Resource$Events; the methods we care about
     // live on its shared prototype. Patching the prototype affects every future instance.
-    const eventsProto = Object.getPrototypeOf(google.calendar({ version: 'v3' }).events) as Record<string, unknown>;
     type ApiCall = (
         params: unknown,
     ) => Promise<{ data: { id?: string; htmlLink?: string; items?: Array<{ id?: string; originalStartTime?: { dateTime?: string; date?: string } }> } }>;
-    const insertSpy = vi.spyOn(eventsProto, 'insert' as keyof typeof eventsProto) as unknown as ReturnType<typeof vi.fn<ApiCall>>;
-    const patchSpy = vi.spyOn(eventsProto, 'patch' as keyof typeof eventsProto) as unknown as ReturnType<typeof vi.fn<ApiCall>>;
+    // `getPrototypeOf` is untyped; view the overloaded googleapis resource through the one call shape the provider uses.
+    const eventsProto: Record<'insert' | 'patch' | 'instances', ApiCall> = Object.getPrototypeOf(google.calendar({ version: 'v3' }).events);
+    const insertSpy = vi.spyOn(eventsProto, 'insert');
+    const patchSpy = vi.spyOn(eventsProto, 'patch');
     // routine-instance overrides hit cal.events.instances first to resolve the master+date → instance id.
-    const instancesSpy = vi.spyOn(eventsProto, 'instances' as keyof typeof eventsProto) as unknown as ReturnType<typeof vi.fn<ApiCall>>;
+    const instancesSpy = vi.spyOn(eventsProto, 'instances');
     insertSpy.mockResolvedValue({ data: { id: 'mocked-id' } });
     patchSpy.mockResolvedValue({ data: {} });
     instancesSpy.mockImplementation(async () => ({

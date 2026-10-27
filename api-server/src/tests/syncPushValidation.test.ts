@@ -4,7 +4,7 @@ import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { syncRoutes } from '../routes/sync.js';
-import type { EntityType, OpType } from '../types/entities.js';
+import type { EntityType, ItemInterface, OpType } from '../types/entities.js';
 import { authenticatedRequest, oauthLogin, SESSION_COOKIE } from './helpers.js';
 
 // `/sync/push` flips to strict-mode validation in Phase 1 step 10. A bad op rejects the whole
@@ -192,7 +192,7 @@ describe('POST /sync/push — strict-mode validation', () => {
         ]);
 
         expect(res.status).toBe(200);
-        expect(await db.collection('items').countDocuments({ _id: entityId })).toBe(1);
+        expect(await db.collection<ItemInterface>('items').countDocuments({ _id: entityId })).toBe(1);
     });
 
     it('accepts a snapshot carrying the server-owned briefStale, and re-stamps rather than trusting it', async () => {
@@ -218,7 +218,7 @@ describe('POST /sync/push — strict-mode validation', () => {
         ]);
 
         expect(res.status).toBe(200);
-        const stored = await db.collection('items').findOne({ _id: entityId } as never);
+        const stored = await db.collection<ItemInterface>('items').findOne({ _id: entityId });
         // The DAO re-stamps from the document, so the claim is discarded and the sweep still sees it.
         expect(stored?.briefStale).toBe(true);
     });

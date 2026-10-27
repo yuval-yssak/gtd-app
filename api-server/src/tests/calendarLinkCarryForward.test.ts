@@ -95,6 +95,12 @@ function clientSnapshot(overrides: Partial<ItemInterface> = {}): ItemInterface {
     };
 }
 
+/** The snapshot a client sends after re-clarifying the item out of the calendar: an untimed next action. */
+function nextActionSnapshot(overrides: Partial<ItemInterface> = {}): ItemInterface {
+    const { timeStart: _start, timeEnd: _end, ...untimed } = clientSnapshot({ status: 'nextAction', ...overrides });
+    return untimed;
+}
+
 interface FakeGoogle {
     createEvent: ReturnType<typeof vi.fn>;
     updateEvent: ReturnType<typeof vi.fn>;
@@ -212,7 +218,7 @@ describe('carryForwardCalendarLink (pure)', () => {
 
 describe('create in flight — the op lands before the link stamp (nothing could push it yet)', () => {
     /** Client creates; BEFORE pushback has created the Google event, a second client op applies. */
-    async function createThenApplyBeforePush(second: Partial<ItemInterface>) {
+    async function createThenApplyBeforePush(second: ItemInterface) {
         const createOp = await applyAndPublishOperation(
             userId,
             { entityType: 'item', opType: 'create', entityId: itemId, snapshot: clientSnapshot() },
@@ -220,7 +226,7 @@ describe('create in flight — the op lands before the link stamp (nothing could
         );
         await applyAndPublishOperation(
             userId,
-            { entityType: 'item', opType: 'update', entityId: itemId, snapshot: clientSnapshot({ ...second, updatedTs: afterLinkStamp() }) },
+            { entityType: 'item', opType: 'update', entityId: itemId, snapshot: { ...second, updatedTs: afterLinkStamp() } },
             { deviceId: 'device-lcf', suppressGCalPushback: true },
         );
         return createOp;
@@ -229,7 +235,7 @@ describe('create in flight — the op lands before the link stamp (nothing could
     it('done during the create: the event is created, then marked ✓ from the row’s current state; the stamp op carries done + link', async () => {
         await seedCalendarIntegration();
         const google = fakeGoogle();
-        const createOp = await createThenApplyBeforePush({ status: 'done' });
+        const createOp = await createThenApplyBeforePush(clientSnapshot({ status: 'done' }));
 
         const recorded = await maybePushToGCal(createOp, google.factory);
 
@@ -248,7 +254,7 @@ describe('create in flight — the op lands before the link stamp (nothing could
     it('edit during the create: the event is updated to the edited title instead of staying at the create-time state', async () => {
         await seedCalendarIntegration();
         const google = fakeGoogle();
-        const createOp = await createThenApplyBeforePush({ title: 'Demo (renamed mid-flight)' });
+        const createOp = await createThenApplyBeforePush(clientSnapshot({ title: 'Demo (renamed mid-flight)' }));
 
         await maybePushToGCal(createOp, google.factory);
 
@@ -259,7 +265,7 @@ describe('create in flight — the op lands before the link stamp (nothing could
     it('trash during the create: the just-created event is deleted', async () => {
         await seedCalendarIntegration();
         const google = fakeGoogle();
-        const createOp = await createThenApplyBeforePush({ status: 'trash' });
+        const createOp = await createThenApplyBeforePush(clientSnapshot({ status: 'trash' }));
 
         await maybePushToGCal(createOp, google.factory);
 
@@ -273,7 +279,7 @@ describe('create in flight — the op lands before the link stamp (nothing could
     it('detach during the create: the just-created event is deleted again and the link comes off the non-calendar row', async () => {
         await seedCalendarIntegration();
         const google = fakeGoogle();
-        const createOp = await createThenApplyBeforePush({ status: 'nextAction', timeStart: undefined, timeEnd: undefined });
+        const createOp = await createThenApplyBeforePush(nextActionSnapshot());
 
         const recorded = await maybePushToGCal(createOp, google.factory);
 
@@ -290,7 +296,7 @@ describe('create in flight — the op lands before the link stamp (nothing could
         await seedCalendarIntegration();
         const google = fakeGoogle();
         google.updateEvent.mockRejectedValueOnce(Object.assign(new Error('Rate Limit Exceeded'), { code: 403 }));
-        const createOp = await createThenApplyBeforePush({ status: 'done' });
+        const createOp = await createThenApplyBeforePush(clientSnapshot({ status: 'done' }));
 
         await maybePushToGCal(createOp, google.factory);
         const failedOp = await operationsDAO.findOne({ _id: createOp._id });
@@ -394,7 +400,7 @@ describe('apply pipeline — the incident: done before the link round-tripped', 
                 entityType: 'item',
                 opType: 'update',
                 entityId: itemId,
-                snapshot: clientSnapshot({ status: 'nextAction', timeStart: undefined, timeEnd: undefined, updatedTs: afterLinkStamp() }),
+                snapshot: nextActionSnapshot({ updatedTs: afterLinkStamp() }),
             },
             { deviceId: 'device-lcf', suppressGCalPushback: true },
         );

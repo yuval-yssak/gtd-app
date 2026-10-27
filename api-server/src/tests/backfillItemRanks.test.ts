@@ -36,6 +36,9 @@ const OPTS: BackfillOptions = { dryRun: false, timezone: 'UTC', force: false };
 
 type LegacyItem = ItemInterface & { focus?: boolean };
 
+/** `vi.spyOn` erases `findArray`'s row-type generic to `unknown` (whose `_id` is an ObjectId); spy through this view to pin it to item rows. */
+type ItemRowsFinder = { findArray: typeof itemsDAO.findArray<ItemInterface> };
+
 function seed(id: string, overrides: Partial<LegacyItem> = {}): LegacyItem {
     return { _id: id, user: USER, status: 'nextAction', title: id, createdTs: '2026-10-01T00:00:00.000Z', updatedTs: '2026-10-01T00:00:00.000Z', ...overrides };
 }
@@ -189,7 +192,7 @@ describe('backfillUserItemRanks', () => {
         await itemsDAO.insertMany([seed('edited', { updatedTs: '2026-10-01T00:00:00.000Z' }), seed('completed', {}), seed('plain', {})]);
         // Plan against the seeded rows, then let two rows move on before the write lands.
         const original = itemsDAO.findArray.bind(itemsDAO);
-        const spy = vi.spyOn(itemsDAO, 'findArray').mockImplementationOnce(async (...args) => {
+        const spy = vi.spyOn<ItemRowsFinder, 'findArray'>(itemsDAO, 'findArray').mockImplementationOnce(async (...args) => {
             const planned = await original(...args);
             await itemsDAO.updateOne(
                 { _id: 'edited', user: USER } as never,
@@ -215,7 +218,7 @@ describe('backfillUserItemRanks', () => {
         const original = itemsDAO.findArray.bind(itemsDAO);
         // The second read is the open lists': let a device rank `movedOn` (a newer updatedTs) before the write lands.
         const spy = vi
-            .spyOn(itemsDAO, 'findArray')
+            .spyOn<ItemRowsFinder, 'findArray'>(itemsDAO, 'findArray')
             .mockImplementationOnce(original)
             .mockImplementationOnce(async (...args) => {
                 const planned = await original(...args);

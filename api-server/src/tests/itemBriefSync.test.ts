@@ -6,7 +6,14 @@ import { briefSourceHash } from '../lib/briefSource.js';
 import { reassignEntity } from '../lib/reassignEntity.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { syncRoutes } from '../routes/sync.js';
-import { deviceSyncStateId, type EntityType, type ItemBriefInterface, type OperationInterface, type OpType } from '../types/entities.js';
+import {
+    type DeviceSyncStateInterface,
+    deviceSyncStateId,
+    type EntityType,
+    type ItemBriefInterface,
+    type OperationInterface,
+    type OpType,
+} from '../types/entities.js';
 import { authenticatedRequest, oauthLogin, SESSION_COOKIE } from './helpers.js';
 
 const app = new Hono().on(['GET', 'POST'], '/auth/*', (c) => auth.handler(c.req.raw)).route('/sync', syncRoutes);
@@ -82,7 +89,7 @@ async function pullOps(sessionCookie: string, deviceId: string) {
 }
 
 async function registerDevice(deviceId: string, userId: string) {
-    await db.collection('deviceSyncState').insertOne({
+    await db.collection<DeviceSyncStateInterface>('deviceSyncState').insertOne({
         _id: deviceSyncStateId(deviceId, userId),
         deviceId,
         user: userId,

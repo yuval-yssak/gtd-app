@@ -13,7 +13,7 @@ import itemsDAO from '../dataAccess/itemsDAO.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { tokensRoutes } from '../routes/tokens.js';
 import { v1ItemsRoutes } from '../routes/v1/items.js';
-import { ItemStatus } from '../types/entities.js';
+import { type ApiTokenInterface, ItemStatus } from '../types/entities.js';
 import { oauthLogin, SESSION_COOKIE } from './helpers.js';
 
 const app = new Hono()
@@ -328,7 +328,7 @@ describe('Token scopes', () => {
         const userId = await login();
         // Mint a "legacy" token by issuing one and stripping scopes from the row.
         const { plaintext, record } = await issueApiToken(userId, 'legacy', ['items.capture', 'items.read']);
-        await db.collection('apiTokens').updateOne({ _id: record._id }, { $unset: { scopes: '' } });
+        await db.collection<ApiTokenInterface>('apiTokens').updateOne({ _id: record._id }, { $unset: { scopes: '' } });
 
         // First authenticated call: capture works (default scopes include items.capture), backfill kicks in.
         const create = await app.fetch(

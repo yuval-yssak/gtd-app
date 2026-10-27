@@ -267,9 +267,11 @@ describe('runMissedPushSweep — routine instances', () => {
         await seedCalendarIntegration();
         await routinesDAO.insertOne(linkedRoutine());
         await itemsDAO.insertOne(movedRoutineItem());
-        await itemsDAO.insertOne(
-            movedRoutineItem({ _id: 'item-mps-claimer', routineId: undefined, calendarInstanceEventId: `${masterEventId}_20260801T070000Z` }),
-        );
+        const { routineId: _notARoutineItem, ...claimer } = movedRoutineItem({
+            _id: 'item-mps-claimer',
+            calendarInstanceEventId: `${masterEventId}_20260801T070000Z`,
+        });
+        await itemsDAO.insertOne(claimer);
         const provider = fakeProvider();
 
         const result = await runMissedPushSweep({ userId, integrationId, before: dayjs().toISOString() }, () => provider as never);
@@ -316,7 +318,8 @@ describe('runMissedPushSweep — standalone linked items', () => {
 
     it('skips an anchor-less linked item — no evidence which side is newer', async () => {
         await seedCalendarIntegration();
-        await itemsDAO.insertOne(standaloneItem({ lastPushedToGCalTs: undefined }));
+        const { lastPushedToGCalTs: _noAnchor, ...anchorless } = standaloneItem();
+        await itemsDAO.insertOne(anchorless);
         const provider = fakeProvider();
 
         const result = await runMissedPushSweep({ userId, integrationId, before: dayjs().toISOString() }, () => provider as never);
@@ -386,10 +389,11 @@ describe('inbound exception apply stamps the item-level anchor', () => {
         );
 
         const row = await itemsDAO.findByOwnerAndId('item-mps-moved', userId);
-        expect(row?.lastSyncedFromGCalTs).toBe(now);
-        expect(row?.updatedTs).toBe(now);
+        if (!row) throw new Error('expected the moved item');
+        expect(row.lastSyncedFromGCalTs).toBe(now);
+        expect(row.updatedTs).toBe(now);
         // The freshly-applied Google edit must not qualify for a re-push.
-        expect(isMissedPush({ updatedTs: row?.updatedTs ?? '', lastSyncedFromGCalTs: row?.lastSyncedFromGCalTs })).toBe(false);
+        expect(isMissedPush(row)).toBe(false);
     });
 
     it('createItemForOrphanedException stamps lastSyncedFromGCalTs on the created row', async () => {
@@ -419,6 +423,6 @@ describe('inbound exception apply stamps the item-level anchor', () => {
         const [created] = rows;
         if (!created) throw new Error('expected one orphan-created item');
         expect(created.lastSyncedFromGCalTs).toBe(now);
-        expect(isMissedPush({ updatedTs: created.updatedTs, lastSyncedFromGCalTs: created.lastSyncedFromGCalTs })).toBe(false);
+        expect(isMissedPush(created)).toBe(false);
     });
 });

@@ -1,9 +1,13 @@
 /** Tests for the agent-error classifier (`src/lib/claude/agentError.ts`). */
-import Anthropic from '@anthropic-ai/sdk';
+import Anthropic, { type APIError } from '@anthropic-ai/sdk';
 import { describe, expect, it } from 'vitest';
 import { classifyAgentError } from '../lib/claude/agentError.js';
 
-function makeApiError(ErrorClass: typeof Anthropic.APIError, status: number, message: string, requestId = 'req_test'): Anthropic.APIError {
+// Each SDK subclass pins its status literal (BadRequestError takes only 400), so the class and the
+// status are tied through one generic rather than widened to the base `typeof APIError`.
+type ApiErrorClass<TStatus extends number> = new (status: TStatus, error: object, message: string, headers: Headers) => APIError;
+
+function makeApiError<TStatus extends number>(ErrorClass: ApiErrorClass<TStatus>, status: TStatus, message: string, requestId = 'req_test') {
     const body = { type: 'error', error: { type: 'invalid_request_error', message } };
     // The SDK reads the request id off a Headers instance via headers.get('request-id').
     return new ErrorClass(status, body, message, new Headers({ 'request-id': requestId }));

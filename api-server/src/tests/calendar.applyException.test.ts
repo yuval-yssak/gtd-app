@@ -9,7 +9,7 @@ import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
-import type { RoutineInterface } from '../types/entities.js';
+import type { ItemInterface, RoutineInterface } from '../types/entities.js';
 import {
     app,
     getUserId,
@@ -21,6 +21,9 @@ import {
     useCalendarTestLifecycle,
 } from './calendarTestKit.js';
 import { authenticatedRequest, SESSION_COOKIE } from './helpers.js';
+
+/** `vi.spyOn` erases `findArray`'s row-type generic to `unknown` (whose `_id` is an ObjectId); spy through this view to pin it to item rows. */
+type ItemRowsFinder = { findArray: typeof itemsDAO.findArray<ItemInterface> };
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -764,7 +767,7 @@ describe('applyExceptionToItems — tiered lookup + create-on-miss', () => {
 
         // Mock the resolver-internal findArray to return the STALE pre-race snapshot, exactly the
         // window we're guarding against. The actual write goes through the real DB.
-        const findArraySpy = vi.spyOn(itemsDAO, 'findArray');
+        const findArraySpy = vi.spyOn<ItemRowsFinder, 'findArray'>(itemsDAO, 'findArray');
         let staleReturned = false;
         findArraySpy.mockImplementationOnce(async () => {
             staleReturned = true;
@@ -1180,7 +1183,7 @@ describe('applyExceptionToItems — tiered lookup + create-on-miss', () => {
         const repairOps = await operationsDAO.findArray({ user: userId, entityType: 'routine', entityId: 'routine-same-account' });
         const [latestRepairOp] = repairOps.sort((a, b) => b.ts.localeCompare(a.ts));
         if (!latestRepairOp) throw new Error('expected a repair op for routine-same-account');
-        expect(latestRepairOp.snapshot?.lastKnownCalendarIntegrationId).toBe(liveIntegration._id);
+        expect(latestRepairOp.snapshot).toMatchObject({ lastKnownCalendarIntegrationId: liveIntegration._id });
     });
 
     it('cross-account reconnect: a STAMPED different-account marker is left intact (not rewritten, not wiped)', async () => {

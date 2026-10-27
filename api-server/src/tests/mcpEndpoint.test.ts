@@ -68,10 +68,11 @@ async function seedUserAndToken(): Promise<{ userId: string; token: string }> {
 
 /** Sends one JSON-RPC message to /mcp and returns the parsed JSON body (enableJsonResponse mode). */
 async function callMcp(token: string | null, message: unknown): Promise<{ status: number; body: unknown; wwwAuth: string | null }> {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' };
-    if (token) {
-        headers.Authorization = `Bearer ${token}`;
-    }
+    const headers = {
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    };
     const res = await app.fetch(new Request(`${ORIGIN}/mcp`, { method: 'POST', headers, body: JSON.stringify(message) }));
     const text = await res.text();
     return { status: res.status, body: text ? JSON.parse(text) : null, wwwAuth: res.headers.get('www-authenticate') };

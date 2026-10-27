@@ -55,7 +55,7 @@ describe('handleAuthFailure', () => {
     });
 
     it('treats a row with no status field as active (legacy lazy default)', async () => {
-        const integration = makeIntegration({ status: undefined });
+        const integration = makeIntegration();
         vi.spyOn(calendarIntegrationsDAO, 'findById')
             .mockResolvedValueOnce(integration)
             .mockResolvedValueOnce({ ...integration, status: 'suspended' });

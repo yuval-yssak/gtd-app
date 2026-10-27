@@ -15,6 +15,7 @@ import itemsDAO from '../dataAccess/itemsDAO.js';
 import { inventoriedCollectionNames } from '../lib/userDataInventory.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { accountRoutes, exportRoutes } from '../routes/account.js';
+import type { ItemInterface } from '../types/entities.js';
 import { authenticatedRequest, oauthLogin, SESSION_COOKIE, stubGoogleRevokeEndpoint } from './helpers.js';
 
 const app = new Hono()
@@ -110,7 +111,8 @@ describe('DELETE /auth/me', () => {
 
         const res = await authenticatedRequest(app, { method: 'DELETE', path: `/auth/me?expectedUserId=${encodeURIComponent(userId)}`, sessionCookie: cookie });
         expect(res.status).toBe(200);
-        const body = (await res.json()) as { ok: boolean; deletedUserId: string; report: { deleted: Record<string, number> } };
+        // `deleted` maps every inventoried collection to a count; the test reads only these two.
+        const body = (await res.json()) as { ok: boolean; deletedUserId: string; report: { deleted: { items?: number; user?: number } } };
         expect(body.ok).toBe(true);
         expect(body.deletedUserId).toBe(userId);
         expect(body.report.deleted.items).toBe(1);
@@ -186,8 +188,15 @@ describe('GET /export', () => {
         const body = (await res.json()) as {
             format: string;
             user: { _id: string; email: string } | null;
-            collections: Record<string, Array<Record<string, unknown>>>;
-            omitted: Record<string, { reason: string; count: number }>;
+            // Keyed by collection name; declared only for the sections this test inspects.
+            collections: {
+                items?: Array<Pick<ItemInterface, 'title'>>;
+                apiTokens?: Array<Record<string, unknown>>;
+                calendarIntegrations?: Array<Record<string, unknown>>;
+                account?: Array<Record<string, unknown>>;
+                session?: Array<Record<string, unknown>>;
+            };
+            omitted: { operations?: { reason: string; count: number } };
         };
         expect(body.format).toBe('done-export/1');
         expect(body.user?.email).toBe('alice@example.com');

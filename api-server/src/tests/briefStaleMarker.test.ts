@@ -50,6 +50,12 @@ function item(overrides: Partial<ItemInterface> = {}): ItemInterface & { _id: st
     };
 }
 
+/** An item whose stored row has no `notes` field at all — absent, not merely empty. */
+function notelessItem(id: string): ItemInterface & { _id: string } {
+    const { notes: _absent, ...noteless } = item({ _id: id });
+    return noteless;
+}
+
 /** Reads the marker straight off the collection, bypassing the DAO that maintains it. */
 async function markerOf(itemId: string): Promise<boolean | undefined> {
     const row = await db.collection<ItemInterface>('items').findOne({ _id: itemId } as never);
@@ -187,7 +193,7 @@ describe('every DAO write path maintains the marker', () => {
 
 describe('the settle guard', () => {
     it('settles an item against its own content, whether its notes are absent or empty', async () => {
-        await itemsDAO.insertMany([item({ _id: 'absent', notes: undefined }), item({ _id: 'empty', notes: '' })]);
+        await itemsDAO.insertMany([notelessItem('absent'), item({ _id: 'empty', notes: '' })]);
         await itemsDAO.clearBriefStale('absent', USER, { title: 'Renew passport', notes: undefined, status: 'nextAction' });
         await itemsDAO.clearBriefStale('empty', USER, { title: 'Renew passport', notes: '', status: 'nextAction' });
         expect(await markerOf('absent')).toBe(false);
@@ -197,7 +203,7 @@ describe('the settle guard', () => {
     it('refuses to settle when the content does not match — absent and empty notes are distinct', async () => {
         // `notes: undefined` becomes `notes: null` in the filter so it matches ONLY a missing field.
         // Were it dropped instead, the guard would match any notes at all and settle the wrong item.
-        await itemsDAO.insertMany([item({ _id: 'absent', notes: undefined }), item({ _id: 'empty', notes: '' })]);
+        await itemsDAO.insertMany([notelessItem('absent'), item({ _id: 'empty', notes: '' })]);
         await itemsDAO.clearBriefStale('absent', USER, { title: 'Renew passport', notes: '', status: 'nextAction' });
         await itemsDAO.clearBriefStale('empty', USER, { title: 'Renew passport', notes: undefined, status: 'nextAction' });
         expect(await markerOf('absent')).toBe(true);

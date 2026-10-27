@@ -230,8 +230,19 @@ describe('validateOperation — structural errors', () => {
 });
 
 describe('validateSnapshot — entity-only validation helper', () => {
+    // validateSnapshot takes an entity, not a loosely-typed wire snapshot like baseItem.
+    const itemEntity = (overrides: Partial<ItemInterface>): ItemInterface => ({
+        _id: 'item-1',
+        user: 'user-1',
+        status: 'inbox',
+        title: 'buy milk',
+        createdTs: '2026-05-08T10:00:00Z',
+        updatedTs: '2026-05-08T10:00:00Z',
+        ...overrides,
+    });
+
     it('accepts a conformant item snapshot', () => {
-        const result = validateSnapshot('item', 'item-1', baseItem({ status: 'nextAction', energy: 'low' }));
+        const result = validateSnapshot('item', 'item-1', itemEntity({ status: 'nextAction', energy: 'low' }));
         expect(result.ok).toBe(true);
     });
 
@@ -239,7 +250,7 @@ describe('validateSnapshot — entity-only validation helper', () => {
         const result = validateSnapshot(
             'item',
             'item-1',
-            baseItem({ status: 'calendar', timeStart: '2026-05-09T10:00:00Z', timeEnd: '2026-05-09T11:00:00Z', ignoreBefore: '2026-05-08' }),
+            itemEntity({ status: 'calendar', timeStart: '2026-05-09T10:00:00Z', timeEnd: '2026-05-09T11:00:00Z', ignoreBefore: '2026-05-08' }),
         );
         expect(result.ok).toBe(false);
         if (result.ok) return;

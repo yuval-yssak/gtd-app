@@ -14,6 +14,7 @@ import { pkceS256Challenge, verifyPkceS256 } from '../lib/mcpOAuth.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { mcpRoutes } from '../routes/mcp.js';
 import { authorizationServerMetadata, mcpOAuthRoutes, protectedResourceMetadata, withAccountChooser } from '../routes/mcpOAuth.js';
+import type { OAuthAuthCodeInterface, OAuthRefreshTokenInterface } from '../types/entities.js';
 import { collectCookies, GOOGLE_PROFILE, GOOGLE_TOKEN, makeFakeIdToken, mockGoogleOAuth, oauthLogin, SESSION_COOKIE } from './helpers.js';
 
 const ORIGIN = 'http://localhost:4000';
@@ -42,8 +43,8 @@ beforeEach(async () => {
         db.collection('verification').deleteMany({}),
         db.collection('apiTokens').deleteMany({}),
         db.collection('oauthClients').deleteMany({}),
-        db.collection('oauthAuthCodes').deleteMany({}),
-        db.collection('oauthRefreshTokens').deleteMany({}),
+        db.collection<OAuthAuthCodeInterface>('oauthAuthCodes').deleteMany({}),
+        db.collection<OAuthRefreshTokenInterface>('oauthRefreshTokens').deleteMany({}),
     ]);
     __resetDefaultStoreForTests();
     vi.restoreAllMocks();
@@ -304,7 +305,7 @@ describe('choosing the account to connect', () => {
 
         const code = issuedCode(await postDecision(allowFormFields(html, 'bob@example.com'), jar));
         const bob = await db.collection('user').findOne({ email: 'bob@example.com' });
-        const codeRow = await db.collection('oauthAuthCodes').findOne({});
+        const codeRow = await db.collection<OAuthAuthCodeInterface>('oauthAuthCodes').findOne({});
         expect(code).toBeTruthy();
         expect(codeRow?.user).toBe(bob?._id.toString());
     });
@@ -319,7 +320,7 @@ describe('choosing the account to connect', () => {
 
         issuedCode(await postDecision(bobForm, flipped));
         const bob = await db.collection('user').findOne({ email: 'bob@example.com' });
-        expect((await db.collection('oauthAuthCodes').findOne({}))?.user).toBe(bob?._id.toString());
+        expect((await db.collection<OAuthAuthCodeInterface>('oauthAuthCodes').findOne({}))?.user).toBe(bob?._id.toString());
     });
 });
 
@@ -332,7 +333,7 @@ describe('consent forgery protection', () => {
 
     async function expectNoCodeIssued(res: Response) {
         expect(res.status).not.toBe(302);
-        expect(await db.collection('oauthAuthCodes').countDocuments()).toBe(0);
+        expect(await db.collection<OAuthAuthCodeInterface>('oauthAuthCodes').countDocuments()).toBe(0);
     }
 
     it('an Allow without the CSRF token re-renders consent and issues no code', async () => {
@@ -527,7 +528,9 @@ describe('refresh token grant', () => {
         const first = await getInitialTokens(clientId, sessionCookie);
 
         // Force the refresh row past its expiry, then attempt a refresh.
-        await db.collection('oauthRefreshTokens').updateOne({ _id: hashToken(first.refresh_token) }, { $set: { expiresTs: '2000-01-01T00:00:00.000Z' } });
+        await db
+            .collection<OAuthRefreshTokenInterface>('oauthRefreshTokens')
+            .updateOne({ _id: hashToken(first.refresh_token) }, { $set: { expiresTs: '2000-01-01T00:00:00.000Z' } });
         const res = await refresh(clientId, first.refresh_token);
         expect(res.status).toBe(400);
         expect(((await res.json()) as { error: string }).error).toBe('invalid_grant');

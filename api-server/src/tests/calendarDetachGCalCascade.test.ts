@@ -82,6 +82,12 @@ function calendarItem(overrides: Partial<ItemInterface> = {}): ItemInterface {
     };
 }
 
+/** A calendar item with no Google link of its own — a routine instance, or a standalone whose link was renamed away on disconnect. */
+function unlinkedCalendarItem(overrides: Partial<ItemInterface> = {}): ItemInterface {
+    const { calendarEventId: _event, calendarIntegrationId: _integration, calendarSyncConfigId: _config, ...unlinked } = calendarItem(overrides);
+    return unlinked;
+}
+
 /** Update snapshot for the same item re-clarified to a non-calendar status (linkage stripped, like real clients do). */
 function detachedSnapshot(status: ItemStatus, overrides: Partial<ItemInterface> = {}): ItemInterface {
     return {
@@ -164,13 +170,7 @@ describe('calendar → active-status transition cascades to GCal event removal',
             calendarSyncConfigId: configId,
         } as RoutineInterface;
         await routinesDAO.insertOne(routine);
-        const instance: ItemInterface = calendarItem({
-            _id: 'item-inst-1',
-            calendarEventId: undefined,
-            calendarIntegrationId: undefined,
-            calendarSyncConfigId: undefined,
-            routineId: 'routine-detach-1',
-        });
+        const instance = unlinkedCalendarItem({ _id: 'item-inst-1', routineId: 'routine-detach-1' });
         await itemsDAO.insertOne(instance);
         const cancelInstance = vi.fn().mockResolvedValue(undefined);
 
@@ -212,7 +212,8 @@ describe('calendar → active-status transition cascades to GCal event removal',
     });
 
     it('no-ops when the existing row is not a calendar item (nextAction → somedayMaybe)', async () => {
-        await itemsDAO.insertOne(calendarItem({ status: 'nextAction', calendarEventId: undefined, timeStart: undefined, timeEnd: undefined }));
+        const { calendarEventId: _event, timeStart: _start, timeEnd: _end, ...nextAction } = calendarItem({ status: 'nextAction' });
+        await itemsDAO.insertOne(nextAction);
         const deleteEvent = vi.fn();
 
         const op = await applyAndPublishOperation(
@@ -260,15 +261,7 @@ describe('calendar → active-status transition cascades to GCal event removal',
             lastKnownCalendarEventId: 'gcal-master-kept',
         } as RoutineInterface;
         await routinesDAO.insertOne(routine);
-        await itemsDAO.insertOne(
-            calendarItem({
-                _id: 'item-kept-inst-1',
-                calendarEventId: undefined,
-                calendarIntegrationId: undefined,
-                calendarSyncConfigId: undefined,
-                routineId: 'routine-kept-1',
-            }),
-        );
+        await itemsDAO.insertOne(unlinkedCalendarItem({ _id: 'item-kept-inst-1', routineId: 'routine-kept-1' }));
         const cancelInstance = vi.fn();
 
         const op = await applyAndPublishOperation(
@@ -287,14 +280,7 @@ describe('calendar → active-status transition cascades to GCal event removal',
     });
 
     it('does not hydrate detachedCalendar for a disconnect-kept standalone item (linkage already renamed away)', async () => {
-        await itemsDAO.insertOne(
-            calendarItem({
-                calendarEventId: undefined,
-                calendarIntegrationId: undefined,
-                calendarSyncConfigId: undefined,
-                lastKnownCalendarEventId: 'gcal-evt-kept',
-            }),
-        );
+        await itemsDAO.insertOne(unlinkedCalendarItem({ lastKnownCalendarEventId: 'gcal-evt-kept' }));
 
         const op = await applyAndPublishOperation(
             userId,

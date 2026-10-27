@@ -11,7 +11,7 @@ import { notifyChange, notifyChanges } from '../lib/notifyChange.js';
 import * as sseConnections from '../lib/sseConnections.js';
 import * as webPush from '../lib/webPush.js';
 import { closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
-import type { OperationInterface } from '../types/entities.js';
+import type { ItemInterface, OperationInterface } from '../types/entities.js';
 
 beforeAll(async () => {
     await loadDataAccess('gtd_test');
@@ -26,6 +26,15 @@ beforeEach(async () => {
     vi.restoreAllMocks();
 });
 
+const sampleItem: ItemInterface = {
+    _id: 'item-1',
+    user: 'user-notify-test',
+    status: 'inbox',
+    title: 'hello',
+    createdTs: '2026-05-09T10:00:00.000Z',
+    updatedTs: '2026-05-09T10:00:00.000Z',
+};
+
 const sampleOp: OperationInterface = {
     _id: 'op-1',
     user: 'user-notify-test',
@@ -34,14 +43,7 @@ const sampleOp: OperationInterface = {
     entityType: 'item',
     entityId: 'item-1',
     opType: 'create',
-    snapshot: {
-        _id: 'item-1',
-        user: 'user-notify-test',
-        status: 'inbox',
-        title: 'hello',
-        createdTs: '2026-05-09T10:00:00.000Z',
-        updatedTs: '2026-05-09T10:00:00.000Z',
-    },
+    snapshot: sampleItem,
 };
 
 describe('notifyChange — notifyViaWebPush failure handling', () => {
@@ -80,7 +82,7 @@ describe('notifyChange — fan-out of ops the GCal push recorded server-side (th
         _id: 'op-link-stamp',
         deviceId: 'server',
         opType: 'update',
-        snapshot: { ...(sampleOp.snapshot as Record<string, unknown>), status: 'calendar', calendarEventId: 'gtd-evt-1' } as OperationInterface['snapshot'],
+        snapshot: { ...sampleItem, status: 'calendar', calendarEventId: 'gtd-evt-1' },
     };
 
     it('notifies EVERY device of the link-stamp op — the originating device included — and pushes nothing back to Google for it', async () => {

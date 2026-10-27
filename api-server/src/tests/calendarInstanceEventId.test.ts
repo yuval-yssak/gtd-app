@@ -50,6 +50,12 @@ function makeRoutine(overrides: Partial<RoutineInterface> = {}): RoutineInterfac
     };
 }
 
+/** A routine with no GCal series behind it — its `calendarEventId` is absent, as on real in-app routines. */
+function inAppRoutine(overrides: Partial<RoutineInterface> = {}): RoutineInterface {
+    const { calendarEventId: _omitted, ...inApp } = makeRoutine(overrides);
+    return inApp;
+}
+
 describe('buildCalendarInstanceEventId — format', () => {
     it('emits <masterEventId>_<YYYYMMDDTHHMMSSZ> for a UTC routine', () => {
         const date = dayjs.utc('2026-05-19').toDate();
@@ -140,7 +146,7 @@ describe('regenerateFutureRoutineItems — sets calendarInstanceEventId', () => 
     });
 
     it('routine without calendarEventId (in-app only): field is unset on items', async () => {
-        const routine = makeRoutine({ calendarEventId: undefined });
+        const routine = inAppRoutine();
         await routinesDAO.insertOne(routine);
 
         await regenerateFutureRoutineItems(routine, USER, dayjs().toISOString(), 'UTC');
@@ -187,7 +193,7 @@ describe('regenerateFutureRoutineItems — sets calendarInstanceEventId', () => 
     });
 
     it('all-day routine without calendarEventId: items get allDay=true but no instance id', async () => {
-        const routine = makeRoutine({ calendarItemTemplate: { allDay: true }, calendarEventId: undefined });
+        const routine = inAppRoutine({ calendarItemTemplate: { allDay: true } });
         await routinesDAO.insertOne(routine);
 
         await regenerateFutureRoutineItems(routine, USER, dayjs().toISOString(), 'UTC');

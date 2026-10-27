@@ -7,7 +7,20 @@ import { STALE_DEVICE_DAYS } from '../lib/purgeFloor.js';
 import { sseConnectionCountForUser } from '../lib/sseConnections.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { syncRoutes } from '../routes/sync.js';
-import { deviceSyncStateId, type EntityType, MAX_OP_ID, type OpType } from '../types/entities.js';
+import {
+    type DeviceSyncStateInterface,
+    type DeviceUserInterface,
+    deviceSyncStateId,
+    type EntityType,
+    type ItemInterface,
+    MAX_OP_ID,
+    type OperationInterface,
+    type OpType,
+    type PersonInterface,
+    type PushSubscriptionRecord,
+    type RoutineInterface,
+    type WorkContextInterface,
+} from '../types/entities.js';
 import { authenticatedRequest, oauthLogin, SESSION_COOKIE } from './helpers.js';
 
 const app = new Hono().on(['GET', 'POST'], '/auth/*', (c) => auth.handler(c.req.raw)).route('/sync', syncRoutes);
@@ -116,7 +129,7 @@ async function pull(
  * bootstraps before its first pull, which is exactly what this stands in for.
  */
 async function registerDevice(deviceId: string, userId: string, row: { lastSyncedTs?: string; lastSyncedId?: string; lastSeenTs?: string } = {}) {
-    await db.collection('deviceSyncState').insertOne({
+    await db.collection<DeviceSyncStateInterface>('deviceSyncState').insertOne({
         _id: deviceSyncStateId(deviceId, userId),
         deviceId,
         user: userId,
@@ -125,6 +138,9 @@ async function registerDevice(deviceId: string, userId: string, row: { lastSynce
         lastSeenTs: row.lastSeenTs ?? dayjs().toISOString(),
     });
 }
+
+/** A deviceSyncState row as written before the compound (ts, _id) cursor existed: no `lastSyncedId` (read back as ''). */
+type LegacyDeviceSyncStateRow = Omit<DeviceSyncStateInterface, 'lastSyncedId'>;
 
 /** Small delay to guarantee strictly-ordered ISO timestamps across sequential operations. */
 const tick = () => new Promise<void>((r) => setTimeout(r, 5));
@@ -164,8 +180,8 @@ describe('POST /sync/push', () => {
         const res = await push(cookie, 'dev-1', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, '2024-01-01T00:00:00.000Z'))]);
 
         expect(res.status).toBe(200);
-        expect(await db.collection('items').countDocuments({ _id: entityId })).toBe(1);
-        expect(await db.collection('operations').countDocuments({ entityId })).toBe(1);
+        expect(await db.collection<ItemInterface>('items').countDocuments({ _id: entityId })).toBe(1);
+        expect(await db.collection<OperationInterface>('operations').countDocuments({ entityId })).toBe(1);
     });
 
     it('item update last-write-wins: newer ts replaces, older ts is ignored', async () => {
@@ -174,7 +190,7 @@ describe('POST /sync/push', () => {
         const entityId = crypto.randomUUID();
 
         // Seed an item directly at T1
-        await db.collection('items').insertOne({
+        await db.collection<ItemInterface>('items').insertOne({
             _id: entityId,
             user: userId,
             status: 'inbox',
@@ -185,12 +201,12 @@ describe('POST /sync/push', () => {
 
         // Push update with T2 > T1 → should replace
         await push(cookie, 'dev-1', [makeClientOp('item', entityId, 'update', makeItemSnapshot(entityId, '2024-01-03T00:00:00.000Z', { title: 'Updated' }))]);
-        const afterNewer = await db.collection('items').findOne({ _id: entityId });
+        const afterNewer = await db.collection<ItemInterface>('items').findOne({ _id: entityId });
         expect(afterNewer?.title).toBe('Updated');
 
         // Push update with T0 < current updatedTs → should be ignored (stale write rejected)
         await push(cookie, 'dev-1', [makeClientOp('item', entityId, 'update', makeItemSnapshot(entityId, '2024-01-01T00:00:00.000Z', { title: 'Stale' }))]);
-        const afterStale = await db.collection('items').findOne({ _id: entityId });
+        const afterStale = await db.collection<ItemInterface>('items').findOne({ _id: entityId });
         expect(afterStale?.title).toBe('Updated');
     });
 
@@ -199,7 +215,7 @@ describe('POST /sync/push', () => {
         const userId = await getUserId(cookie);
         const entityId = crypto.randomUUID();
 
-        await db.collection('items').insertOne({
+        await db.collection<ItemInterface>('items').insertOne({
             _id: entityId,
             user: userId,
             status: 'inbox',
@@ -211,8 +227,8 @@ describe('POST /sync/push', () => {
         const res = await push(cookie, 'dev-1', [makeClientOp('item', entityId, 'delete', null)]);
 
         expect(res.status).toBe(200);
-        expect(await db.collection('items').countDocuments({ _id: entityId })).toBe(0);
-        expect(await db.collection('operations').countDocuments({ entityId, opType: 'delete' })).toBe(1);
+        expect(await db.collection<ItemInterface>('items').countDocuments({ _id: entityId })).toBe(0);
+        expect(await db.collection<OperationInterface>('operations').countDocuments({ entityId, opType: 'delete' })).toBe(1);
     });
 
     it('routine delete: succeeds when routine is already gone (concurrent delete from another device)', async () => {
@@ -221,7 +237,7 @@ describe('POST /sync/push', () => {
         // Routine intentionally NOT inserted: models the case where another device's delete arrived first.
         const res = await push(cookie, 'dev-1', [makeClientOp('routine', routineId, 'delete', null)]);
         expect(res.status).toBe(200);
-        const op = await db.collection('operations').findOne({ entityId: routineId, opType: 'delete' });
+        const op = await db.collection<OperationInterface>('operations').findOne({ entityId: routineId, opType: 'delete' });
         expect(op?.snapshot).toBeNull();
     });
 
@@ -237,7 +253,7 @@ describe('POST /sync/push', () => {
         const successorId = crypto.randomUUID();
         const instanceKey = 'gcal-evt-abc_20260803T071500Z';
 
-        await db.collection('items').insertOne({
+        await db.collection<ItemInterface>('items').insertOne({
             _id: successorId,
             user: userId,
             status: 'done',
@@ -266,10 +282,10 @@ describe('POST /sync/push', () => {
 
         expect(res.status).toBe(200);
         // Not resurrected, and the successor still solely owns the unique key.
-        expect(await db.collection('items').countDocuments({ _id: staleId })).toBe(0);
-        expect(await db.collection('items').countDocuments({ user: userId, calendarInstanceEventId: instanceKey })).toBe(1);
+        expect(await db.collection<ItemInterface>('items').countDocuments({ _id: staleId })).toBe(0);
+        expect(await db.collection<ItemInterface>('items').countDocuments({ user: userId, calendarInstanceEventId: instanceKey })).toBe(1);
         // The op is still recorded for audit.
-        expect(await db.collection('operations').countDocuments({ entityId: staleId })).toBe(1);
+        expect(await db.collection<OperationInterface>('operations').countDocuments({ entityId: staleId })).toBe(1);
     });
 
     it('routine delete: pre-delete snapshot is captured on the recorded op', async () => {
@@ -279,7 +295,7 @@ describe('POST /sync/push', () => {
         const userId = await getUserId(cookie);
         const routineId = crypto.randomUUID();
 
-        await db.collection('routines').insertOne({
+        await db.collection<RoutineInterface>('routines').insertOne({
             _id: routineId,
             user: userId,
             title: 'Weekly standup',
@@ -295,8 +311,8 @@ describe('POST /sync/push', () => {
 
         await push(cookie, 'dev-1', [makeClientOp('routine', routineId, 'delete', null)]);
 
-        expect(await db.collection('routines').countDocuments({ _id: routineId })).toBe(0);
-        const op = await db.collection('operations').findOne({ entityId: routineId, opType: 'delete' });
+        expect(await db.collection<RoutineInterface>('routines').countDocuments({ _id: routineId })).toBe(0);
+        const op = await db.collection<OperationInterface>('operations').findOne({ entityId: routineId, opType: 'delete' });
         expect(op?.snapshot).toMatchObject({ _id: routineId, calendarEventId: 'gcal-evt-xyz', calendarIntegrationId: 'int-xyz' });
     });
 
@@ -326,10 +342,10 @@ describe('POST /sync/push', () => {
             makeClientOp('workContext', workContextId, 'create', { _id: workContextId, userId, name: 'At desk', createdTs: ts, updatedTs: ts }),
         ]);
 
-        expect(await db.collection('items').countDocuments({ _id: itemId })).toBe(1);
-        expect(await db.collection('routines').countDocuments({ _id: routineId })).toBe(1);
-        expect(await db.collection('people').countDocuments({ _id: personId })).toBe(1);
-        expect(await db.collection('workContexts').countDocuments({ _id: workContextId })).toBe(1);
+        expect(await db.collection<ItemInterface>('items').countDocuments({ _id: itemId })).toBe(1);
+        expect(await db.collection<RoutineInterface>('routines').countDocuments({ _id: routineId })).toBe(1);
+        expect(await db.collection<PersonInterface>('people').countDocuments({ _id: personId })).toBe(1);
+        expect(await db.collection<WorkContextInterface>('workContexts').countDocuments({ _id: workContextId })).toBe(1);
     });
 
     it('empty ops array: returns 200 without writing anything', async () => {
@@ -338,7 +354,7 @@ describe('POST /sync/push', () => {
         const res = await push(cookie, 'dev-1', []);
 
         expect(res.status).toBe(200);
-        expect(await db.collection('operations').countDocuments()).toBe(0);
+        expect(await db.collection<OperationInterface>('operations').countDocuments()).toBe(0);
     });
 
     it('unauthenticated push returns 401', async () => {
@@ -362,10 +378,10 @@ describe('POST /sync/push', () => {
         // (which rejects forged userIds) doesn't fire on the legitimate-but-tagged path.
         await push(cookie, 'dev-1', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, '2024-01-01T00:00:00.000Z', { userId }))]);
 
-        const op = await db.collection('operations').findOne({ entityId });
+        const op = await db.collection<OperationInterface>('operations').findOne({ entityId });
         // The snapshot stored on the op should expose `user`, not `userId` — the server's strip+remap.
-        expect((op?.snapshot as Record<string, unknown>)?.user).toBe(userId);
-        expect((op?.snapshot as Record<string, unknown>)?.userId).toBeUndefined();
+        expect(op?.snapshot).toMatchObject({ user: userId });
+        expect(op?.snapshot).not.toHaveProperty('userId');
     });
 });
 
@@ -397,9 +413,9 @@ describe('GET /sync/pull', () => {
 
         await push(cookie, 'dev-1', [makeClientOp('item', id1, 'create', makeItemSnapshot(id1, '2024-01-01T00:00:00.000Z'))]);
         // Record the (ts, _id) of the first op to use as the compound cursor
-        const firstOp = await db.collection('operations').findOne({ entityId: id1 });
-        const t1 = firstOp!.ts as string;
-        const opId1 = firstOp!._id as string;
+        const firstOp = await db.collection<OperationInterface>('operations').findOne({ entityId: id1 });
+        const t1 = firstOp!.ts;
+        const opId1 = firstOp!._id;
 
         // Small delay ensures the second push gets a strictly later server ts
         await tick();
@@ -421,8 +437,8 @@ describe('GET /sync/pull', () => {
         await registerDevice('dev-2', userId);
 
         await push(cookie, 'dev-1', [makeClientOp('item', id1, 'create', makeItemSnapshot(id1, '2024-01-01T00:00:00.000Z'))]);
-        const firstOp = await db.collection('operations').findOne({ entityId: id1 });
-        const t1 = firstOp!.ts as string;
+        const firstOp = await db.collection<OperationInterface>('operations').findOne({ entityId: id1 });
+        const t1 = firstOp!.ts;
         await tick();
         await push(cookie, 'dev-1', [makeClientOp('item', id2, 'create', makeItemSnapshot(id2, '2024-01-02T00:00:00.000Z'))]);
 
@@ -451,7 +467,7 @@ describe('GET /sync/pull', () => {
         const res = await pull(cookie, { since: ackedTs, ackedTs, deviceId: 'dev-2' });
         expect(res.status).toBe(200);
 
-        const state = await db.collection('deviceSyncState').findOne({ _id: `dev-2::${userId}` });
+        const state = await db.collection<DeviceSyncStateInterface>('deviceSyncState').findOne({ _id: `dev-2::${userId}` });
         expect(state?.lastSyncedTs).toBe(ackedTs);
         expect(state?.deviceId).toBe('dev-2');
         expect(state?.user).toBe(userId);
@@ -464,7 +480,7 @@ describe('GET /sync/pull', () => {
         const res = await pull(cookie);
         expect(res.status).toBe(200);
 
-        expect(await db.collection('deviceSyncState').countDocuments()).toBe(0);
+        expect(await db.collection<DeviceSyncStateInterface>('deviceSyncState').countDocuments()).toBe(0);
     });
 
     it('per-user cursor: explicit since=T does not exclude another user’s op also at ts=T (strict-$gt regression)', async () => {
@@ -485,7 +501,7 @@ describe('GET /sync/pull', () => {
         const bobItemId = crypto.randomUUID();
         await registerDevice('shared-dev', aliceId);
         await registerDevice('shared-dev', bobId);
-        await db.collection('operations').insertMany([
+        await db.collection<OperationInterface>('operations').insertMany([
             {
                 _id: crypto.randomUUID(),
                 user: aliceId,
@@ -554,8 +570,8 @@ describe('GET /sync/pull', () => {
         expect(bobOps.map((o) => o.entityId)).toEqual([bobItemId]);
 
         // Both per-(device, user) cursor rows exist independently.
-        const aliceState = await db.collection('deviceSyncState').findOne({ _id: `shared-dev::${aliceId}` });
-        const bobState = await db.collection('deviceSyncState').findOne({ _id: `shared-dev::${bobId}` });
+        const aliceState = await db.collection<DeviceSyncStateInterface>('deviceSyncState').findOne({ _id: `shared-dev::${aliceId}` });
+        const bobState = await db.collection<DeviceSyncStateInterface>('deviceSyncState').findOne({ _id: `shared-dev::${bobId}` });
         expect(aliceState).not.toBeNull();
         expect(bobState).not.toBeNull();
         expect(aliceState?.user).toBe(aliceId);
@@ -593,7 +609,7 @@ describe('GET /sync/pull', () => {
         );
 
         // The persisted ops, in the exact (ts, _id) order the server paginates by.
-        const persisted = await db.collection('operations').find({}).sort({ ts: 1, _id: 1 }).toArray();
+        const persisted = await db.collection<OperationInterface>('operations').find({}).sort({ ts: 1, _id: 1 }).toArray();
         expect(persisted).toHaveLength(15);
 
         // allocateOpIdentity reads the real wall clock per op (see opIdentity.ts), so under CI load
@@ -608,7 +624,7 @@ describe('GET /sync/pull', () => {
             throw new Error('expected at least one same-ts pair among 15 rapidly-allocated ops; opIdentity allocator may be broken');
         }
         const boundary = persisted[K - 1];
-        const second = (await (await pull(cookie, { since: boundary!.ts as string, sinceId: boundary!._id as string, deviceId: 'dev-2' })).json()) as {
+        const second = (await (await pull(cookie, { since: boundary!.ts, sinceId: boundary!._id, deviceId: 'dev-2' })).json()) as {
             ops: { entityId: string }[];
         };
 
@@ -638,8 +654,10 @@ describe('GET /sync/bootstrap', () => {
         const ts = '2024-01-01T00:00:00.000Z';
 
         await Promise.all([
-            db.collection('items').insertOne({ _id: crypto.randomUUID(), user: userId, status: 'inbox', title: 'Item', createdTs: ts, updatedTs: ts }),
-            db.collection('routines').insertOne({
+            db
+                .collection<ItemInterface>('items')
+                .insertOne({ _id: crypto.randomUUID(), user: userId, status: 'inbox', title: 'Item', createdTs: ts, updatedTs: ts }),
+            db.collection<RoutineInterface>('routines').insertOne({
                 _id: crypto.randomUUID(),
                 user: userId,
                 title: 'Routine',
@@ -650,8 +668,10 @@ describe('GET /sync/bootstrap', () => {
                 createdTs: ts,
                 updatedTs: ts,
             }),
-            db.collection('people').insertOne({ _id: crypto.randomUUID(), user: userId, name: 'Alice', createdTs: ts, updatedTs: ts }),
-            db.collection('workContexts').insertOne({ _id: crypto.randomUUID(), user: userId, name: 'At desk', createdTs: ts, updatedTs: ts }),
+            db.collection<PersonInterface>('people').insertOne({ _id: crypto.randomUUID(), user: userId, name: 'Alice', createdTs: ts, updatedTs: ts }),
+            db
+                .collection<WorkContextInterface>('workContexts')
+                .insertOne({ _id: crypto.randomUUID(), user: userId, name: 'At desk', createdTs: ts, updatedTs: ts }),
         ]);
 
         const res = await authenticatedRequest(app, { method: 'GET', path: '/sync/bootstrap', sessionCookie: cookie });
@@ -674,9 +694,11 @@ describe('GET /sync/bootstrap', () => {
 
         const ts = '2024-01-01T00:00:00.000Z';
         await db
-            .collection('items')
+            .collection<ItemInterface>('items')
             .insertOne({ _id: crypto.randomUUID(), user: aliceId, status: 'inbox', title: "Alice's item", createdTs: ts, updatedTs: ts });
-        await db.collection('items').insertOne({ _id: crypto.randomUUID(), user: bobId, status: 'inbox', title: "Bob's item", createdTs: ts, updatedTs: ts });
+        await db
+            .collection<ItemInterface>('items')
+            .insertOne({ _id: crypto.randomUUID(), user: bobId, status: 'inbox', title: "Bob's item", createdTs: ts, updatedTs: ts });
 
         const res = await authenticatedRequest(app, { method: 'GET', path: '/sync/bootstrap', sessionCookie: aliceCookie });
         const { items } = (await res.json()) as { items: { title: string }[] };
@@ -715,7 +737,7 @@ describe('GET /sync/bootstrap', () => {
         const res = await authenticatedRequest(app, { method: 'GET', path: '/sync/bootstrap?deviceId=dev-boot', sessionCookie: cookie });
         const { serverTs } = (await res.json()) as { serverTs: string };
 
-        const state = await db.collection('deviceSyncState').findOne({ _id: `dev-boot::${userId}` });
+        const state = await db.collection<DeviceSyncStateInterface>('deviceSyncState').findOne({ _id: `dev-boot::${userId}` });
         expect(state?.lastSyncedTs).toBe(serverTs);
         expect(state?.deviceId).toBe('dev-boot');
         expect(state?.user).toBe(userId);
@@ -737,7 +759,7 @@ describe('GET /sync/bootstrap', () => {
             sessionCookie: cookie,
         });
 
-        const state = await db.collection('deviceSyncState').findOne({ _id: `dev-boot::${userId}` });
+        const state = await db.collection<DeviceSyncStateInterface>('deviceSyncState').findOne({ _id: `dev-boot::${userId}` });
         expect(state?.autoLabel).toBe(longLabel.trim().slice(0, 80));
     });
 
@@ -748,7 +770,7 @@ describe('GET /sync/bootstrap', () => {
         await authenticatedRequest(app, { method: 'GET', path: '/sync/bootstrap?deviceId=dev-boot&deviceLabel=Firefox%20on%20Linux', sessionCookie: cookie });
         await authenticatedRequest(app, { method: 'GET', path: '/sync/bootstrap?deviceId=dev-boot', sessionCookie: cookie });
 
-        const state = await db.collection('deviceSyncState').findOne({ _id: `dev-boot::${userId}` });
+        const state = await db.collection<DeviceSyncStateInterface>('deviceSyncState').findOne({ _id: `dev-boot::${userId}` });
         expect(state?.autoLabel).toBe('Firefox on Linux');
     });
 
@@ -772,7 +794,7 @@ describe('GET /sync/bootstrap', () => {
         expect(MAX_OP_ID > serverId).toBe(true); // legacy sentinel rows must still sort above the new boundary ids
 
         // The floor written for the device matches the advertised boundary exactly.
-        const state = await db.collection('deviceSyncState').findOne({ _id: `dev-boot::${userId}` });
+        const state = await db.collection<DeviceSyncStateInterface>('deviceSyncState').findOne({ _id: `dev-boot::${userId}` });
         expect(state?.lastSyncedTs).toBe(serverTs);
         expect(state?.lastSyncedId).toBe('');
 
@@ -788,7 +810,7 @@ describe('GET /sync/bootstrap', () => {
         const cookie = await loginAsAlice();
         const res = await authenticatedRequest(app, { method: 'GET', path: '/sync/bootstrap', sessionCookie: cookie });
         expect(res.status).toBe(200);
-        expect(await db.collection('deviceSyncState').countDocuments()).toBe(0);
+        expect(await db.collection<DeviceSyncStateInterface>('deviceSyncState').countDocuments()).toBe(0);
     });
 
     it('round-trips routine.startDate through push + bootstrap', async () => {
@@ -838,7 +860,7 @@ describe('Purge logic', () => {
         const first = await pull(cookie, { since: dayjs(0).toISOString(), ackedTs: dayjs(0).toISOString(), deviceId: 'dev-1' });
         const firstBody = (await first.json()) as { ops: unknown[] };
         expect(firstBody.ops).toHaveLength(1);
-        const recorded = await db.collection('deviceSyncState').findOne({ _id: `dev-1::${userId}` });
+        const recorded = await db.collection<DeviceSyncStateInterface>('deviceSyncState').findOne({ _id: `dev-1::${userId}` });
         expect(recorded?.lastSyncedTs).toBe(dayjs(0).toISOString());
 
         // Simulate lost response: client retries with the SAME since AND ackedTs (its IDB cursor
@@ -868,7 +890,7 @@ describe('Purge logic', () => {
         const body = (await res.json()) as { ops: unknown[] };
         expect(body.ops).toHaveLength(1);
 
-        const recorded = await db.collection('deviceSyncState').findOne({ _id: `dev-1::${userId}` });
+        const recorded = await db.collection<DeviceSyncStateInterface>('deviceSyncState').findOne({ _id: `dev-1::${userId}` });
         expect(recorded?.lastSyncedTs).toBe(dayjs(0).toISOString());
     });
 
@@ -917,8 +939,8 @@ describe('Purge logic', () => {
         });
 
         // Purge is fire-and-forget — poll until it converges instead of guessing a fixed delay.
-        await waitForPurge(async () => (await db.collection('operations').countDocuments()) === 0);
-        expect(await db.collection('operations').countDocuments()).toBe(0);
+        await waitForPurge(async () => (await db.collection<OperationInterface>('operations').countDocuments()) === 0);
+        expect(await db.collection<OperationInterface>('operations').countDocuments()).toBe(0);
     });
 
     it('single device: push then two pulls deletes all older ops (ackedTs advances floor)', async () => {
@@ -937,8 +959,8 @@ describe('Purge logic', () => {
         // Second pull acknowledges the previous response (both components) — server advances the floor.
         await pull(cookie, { since: first.serverTs, sinceId: first.serverId, ackedTs: first.serverTs, ackedId: first.serverId, deviceId: 'dev-1' });
 
-        await waitForPurge(async () => (await db.collection('operations').countDocuments()) === 0);
-        expect(await db.collection('operations').countDocuments()).toBe(0);
+        await waitForPurge(async () => (await db.collection<OperationInterface>('operations').countDocuments()) === 0);
+        expect(await db.collection<OperationInterface>('operations').countDocuments()).toBe(0);
     });
 
     it('boundary safety: same-ms ops past the acked _id are NOT purged prematurely', async () => {
@@ -953,22 +975,22 @@ describe('Purge logic', () => {
             'dev-1',
             ids.map((id) => makeClientOp('item', id, 'create', makeItemSnapshot(id, '2024-01-01T00:00:00.000Z'))),
         );
-        const persisted = await db.collection('operations').find({}).sort({ ts: 1, _id: 1 }).toArray();
+        const persisted = await db.collection<OperationInterface>('operations').find({}).sort({ ts: 1, _id: 1 }).toArray();
         expect(persisted).toHaveLength(3);
         const [op1, , op3] = persisted;
 
         // Device acks only through op1 (the first of the tie-group). The floor is (T, op1._id).
         // deleteOlderThan must delete only op1 (_id <= op1._id at ts T), leaving op2/op3 — the dual
         // of the pull bug: a naive `ts <= T` purge would wipe the unacked survivors.
-        await pull(cookie, { ackedTs: op1!.ts as string, ackedId: op1!._id as string, deviceId: 'dev-1' });
-        await waitForPurge(async () => (await db.collection('operations').countDocuments()) === 2);
-        expect(await db.collection('operations').countDocuments()).toBe(2);
-        expect(await db.collection('operations').countDocuments({ _id: op1!._id })).toBe(0);
+        await pull(cookie, { ackedTs: op1!.ts, ackedId: op1!._id, deviceId: 'dev-1' });
+        await waitForPurge(async () => (await db.collection<OperationInterface>('operations').countDocuments()) === 2);
+        expect(await db.collection<OperationInterface>('operations').countDocuments()).toBe(2);
+        expect(await db.collection<OperationInterface>('operations').countDocuments({ _id: op1!._id })).toBe(0);
 
         // Once the device acks through op3, the rest of the ms purges.
-        await pull(cookie, { ackedTs: op3!.ts as string, ackedId: op3!._id as string, deviceId: 'dev-1' });
-        await waitForPurge(async () => (await db.collection('operations').countDocuments()) === 0);
-        expect(await db.collection('operations').countDocuments()).toBe(0);
+        await pull(cookie, { ackedTs: op3!.ts, ackedId: op3!._id, deviceId: 'dev-1' });
+        await waitForPurge(async () => (await db.collection<OperationInterface>('operations').countDocuments()) === 0);
+        expect(await db.collection<OperationInterface>('operations').countDocuments()).toBe(0);
     });
 
     it('compound-min floor: two devices at the same ts, different _id → floor is the lower _id', async () => {
@@ -986,19 +1008,19 @@ describe('Purge logic', () => {
             'dev-A',
             ids.map((id) => makeClientOp('item', id, 'create', makeItemSnapshot(id, '2024-01-01T00:00:00.000Z'))),
         );
-        const persisted = await db.collection('operations').find({}).sort({ ts: 1, _id: 1 }).toArray();
+        const persisted = await db.collection<OperationInterface>('operations').find({}).sort({ ts: 1, _id: 1 }).toArray();
         const [op1, , op3] = persisted;
-        const T = op1!.ts as string;
+        const T = op1!.ts;
 
         // dev-A acks through op1 (lower _id), dev-B acks through op3 (higher _id). The compound-min
         // floor must be (T, op1._id) — the LOWER pair — not independent mins that would fabricate a
         // floor no device reached. So only op1 may purge; op2/op3 survive (dev-A hasn't received them).
-        await pull(cookie, { ackedTs: T, ackedId: op1!._id as string, deviceId: 'dev-A' });
-        await pull(cookie, { ackedTs: T, ackedId: op3!._id as string, deviceId: 'dev-B' });
+        await pull(cookie, { ackedTs: T, ackedId: op1!._id, deviceId: 'dev-A' });
+        await pull(cookie, { ackedTs: T, ackedId: op3!._id, deviceId: 'dev-B' });
 
-        await waitForPurge(async () => (await db.collection('operations').countDocuments()) === 2);
-        expect(await db.collection('operations').countDocuments()).toBe(2);
-        expect(await db.collection('operations').countDocuments({ _id: op1!._id })).toBe(0);
+        await waitForPurge(async () => (await db.collection<OperationInterface>('operations').countDocuments()) === 2);
+        expect(await db.collection<OperationInterface>('operations').countDocuments()).toBe(2);
+        expect(await db.collection<OperationInterface>('operations').countDocuments({ _id: op1!._id })).toBe(0);
     });
 
     it('legacy device row without lastSyncedId blocks purge of its boundary ms (conservative)', async () => {
@@ -1014,22 +1036,22 @@ describe('Purge logic', () => {
             'dev-active',
             ids.map((id) => makeClientOp('item', id, 'create', makeItemSnapshot(id, '2024-01-01T00:00:00.000Z'))),
         );
-        const persisted = await db.collection('operations').find({}).sort({ ts: 1, _id: 1 }).toArray();
+        const persisted = await db.collection<OperationInterface>('operations').find({}).sort({ ts: 1, _id: 1 }).toArray();
         const [op1, op2] = persisted;
-        const T = op1!.ts as string;
+        const T = op1!.ts;
 
         // A legacy (pre-fix) row: lastSyncedTs set to the boundary ms, but no lastSyncedId field.
         // Read as '' (lowest id) → floor (T, '') → boundary clause `_id <= ''` matches nothing.
         await db
-            .collection('deviceSyncState')
+            .collection<LegacyDeviceSyncStateRow>('deviceSyncState')
             .insertOne({ _id: `dev-legacy::${userId}`, deviceId: 'dev-legacy', user: userId, lastSeenTs: T, lastSyncedTs: T });
 
         // The active device fully acks past the whole batch — were it the only device, both ops would
         // purge. The legacy row is what holds them: floor = min((T, ''), (T, op2._id)) = (T, ''), whose
         // boundary clause deletes nothing at T. Confirms the `?? ''` legacy path is strictly conservative.
-        await pull(cookie, { ackedTs: T, ackedId: op2!._id as string, deviceId: 'dev-active' });
-        await waitForPurge(async () => (await db.collection('operations').countDocuments()) < 2, 300);
-        expect(await db.collection('operations').countDocuments()).toBe(2);
+        await pull(cookie, { ackedTs: T, ackedId: op2!._id, deviceId: 'dev-active' });
+        await waitForPurge(async () => (await db.collection<OperationInterface>('operations').countDocuments()) < 2, 300);
+        expect(await db.collection<OperationInterface>('operations').countDocuments()).toBe(2);
     });
 
     it('pull response is returned before purge completes (purge is non-blocking)', async () => {
@@ -1064,15 +1086,15 @@ describe('Stale device cleanup', () => {
         // Per-(device, user) row for the stale device. The push subscription is still keyed by
         // raw deviceId (subscriptions are device-scoped, not user-scoped).
         await db
-            .collection('deviceSyncState')
+            .collection<LegacyDeviceSyncStateRow>('deviceSyncState')
             .insertOne({ _id: `dev-stale::${userId}`, deviceId: 'dev-stale', user: userId, lastSeenTs: staleTs, lastSyncedTs: staleTs });
         await db
-            .collection('pushSubscriptions')
+            .collection<PushSubscriptionRecord>('pushSubscriptions')
             .insertOne({ _id: 'dev-stale', user: userId, endpoint: 'https://push.example.com/stale', keys: { p256dh: 'k1', auth: 'k2' }, updatedTs: staleTs });
         // deviceUsers join row rides along with the reap so push fan-out stops targeting the pair.
         await db
-            .collection('deviceUsers')
-            .insertOne({ _id: `dev-stale:${userId}`, deviceId: 'dev-stale', userId, createdTs: staleTs, lastSeenTs: staleTs } as never);
+            .collection<DeviceUserInterface>('deviceUsers')
+            .insertOne({ _id: `dev-stale:${userId}`, deviceId: 'dev-stale', userId, createdTs: staleTs, lastSeenTs: staleTs });
         await registerDevice('dev-active', userId);
 
         // Active device pushes and pulls — pull triggers purge
@@ -1081,12 +1103,12 @@ describe('Stale device cleanup', () => {
         await tick();
         await pull(cookie, { deviceId: 'dev-active' });
 
-        await waitForPurge(async () => (await db.collection('deviceSyncState').countDocuments({ deviceId: 'dev-stale' })) === 0);
-        expect(await db.collection('deviceSyncState').countDocuments({ deviceId: 'dev-stale' })).toBe(0);
-        expect(await db.collection('pushSubscriptions').countDocuments({ _id: 'dev-stale' })).toBe(0);
-        expect(await db.collection('deviceUsers').countDocuments({ deviceId: 'dev-stale' })).toBe(0);
+        await waitForPurge(async () => (await db.collection<DeviceSyncStateInterface>('deviceSyncState').countDocuments({ deviceId: 'dev-stale' })) === 0);
+        expect(await db.collection<DeviceSyncStateInterface>('deviceSyncState').countDocuments({ deviceId: 'dev-stale' })).toBe(0);
+        expect(await db.collection<PushSubscriptionRecord>('pushSubscriptions').countDocuments({ _id: 'dev-stale' })).toBe(0);
+        expect(await db.collection<DeviceUserInterface>('deviceUsers').countDocuments({ deviceId: 'dev-stale' })).toBe(0);
         // Active device still exists
-        expect(await db.collection('deviceSyncState').countDocuments({ deviceId: 'dev-active' })).toBe(1);
+        expect(await db.collection<DeviceSyncStateInterface>('deviceSyncState').countDocuments({ deviceId: 'dev-active' })).toBe(1);
     });
 
     it('devices active within STALE_DEVICE_DAYS are not pruned', async () => {
@@ -1097,7 +1119,7 @@ describe('Stale device cleanup', () => {
             .toISOString();
 
         await db
-            .collection('deviceSyncState')
+            .collection<LegacyDeviceSyncStateRow>('deviceSyncState')
             .insertOne({ _id: `dev-recent::${userId}`, deviceId: 'dev-recent', user: userId, lastSeenTs: recentTs, lastSyncedTs: recentTs });
         await registerDevice('dev-active', userId);
 
@@ -1107,7 +1129,7 @@ describe('Stale device cleanup', () => {
         await pull(cookie, { deviceId: 'dev-active' });
         await tick();
 
-        expect(await db.collection('deviceSyncState').countDocuments({ deviceId: 'dev-recent' })).toBe(1);
+        expect(await db.collection<DeviceSyncStateInterface>('deviceSyncState').countDocuments({ deviceId: 'dev-recent' })).toBe(1);
     });
 
     it('stale device removal unblocks operation purging', async () => {
@@ -1119,7 +1141,7 @@ describe('Stale device cleanup', () => {
 
         // Abandoned device with epoch lastSyncedTs blocks purge
         await db
-            .collection('deviceSyncState')
+            .collection<LegacyDeviceSyncStateRow>('deviceSyncState')
             .insertOne({ _id: `dev-abandoned::${userId}`, deviceId: 'dev-abandoned', user: userId, lastSeenTs: staleTs, lastSyncedTs: dayjs(0).toISOString() });
         await registerDevice('dev-active', userId);
 
@@ -1136,10 +1158,10 @@ describe('Stale device cleanup', () => {
 
         // Purge runs in two phases: first the abandoned device row is removed, then the now-
         // unblocked operations purge fires. Wait for the second phase since it's the slower one.
-        await waitForPurge(async () => (await db.collection('operations').countDocuments()) === 0);
+        await waitForPurge(async () => (await db.collection<OperationInterface>('operations').countDocuments()) === 0);
         // Abandoned (device, user) row pruned, so ops can be purged
-        expect(await db.collection('deviceSyncState').countDocuments({ deviceId: 'dev-abandoned' })).toBe(0);
-        expect(await db.collection('operations').countDocuments()).toBe(0);
+        expect(await db.collection<DeviceSyncStateInterface>('deviceSyncState').countDocuments({ deviceId: 'dev-abandoned' })).toBe(0);
+        expect(await db.collection<OperationInterface>('operations').countDocuments()).toBe(0);
     });
 
     it('device with stale lastSeenTs but recent lastSyncedTs is not pruned', async () => {
@@ -1152,7 +1174,7 @@ describe('Stale device cleanup', () => {
 
         // lastSeenTs is stale but lastSyncedTs is recent — device still pulls, just doesn't push
         await db
-            .collection('deviceSyncState')
+            .collection<LegacyDeviceSyncStateRow>('deviceSyncState')
             .insertOne({ _id: `dev-pull-only::${userId}`, deviceId: 'dev-pull-only', user: userId, lastSeenTs: staleTs, lastSyncedTs: recentTs });
         await registerDevice('dev-active', userId);
 
@@ -1162,7 +1184,7 @@ describe('Stale device cleanup', () => {
         await pull(cookie, { deviceId: 'dev-active' });
         await tick();
 
-        expect(await db.collection('deviceSyncState').countDocuments({ deviceId: 'dev-pull-only' })).toBe(1);
+        expect(await db.collection<DeviceSyncStateInterface>('deviceSyncState').countDocuments({ deviceId: 'dev-pull-only' })).toBe(1);
     });
 
     it('multi-user device: prunes only the stale (device, user) row and keeps the push subscription alive', async () => {
@@ -1182,12 +1204,12 @@ describe('Stale device cleanup', () => {
         const recentTs = dayjs().subtract(1, 'day').toISOString();
 
         await db
-            .collection('deviceSyncState')
+            .collection<LegacyDeviceSyncStateRow>('deviceSyncState')
             .insertOne({ _id: `dev-multi::${aliceId}`, deviceId: 'dev-multi', user: aliceId, lastSeenTs: staleTs, lastSyncedTs: staleTs });
         await db
-            .collection('deviceSyncState')
+            .collection<LegacyDeviceSyncStateRow>('deviceSyncState')
             .insertOne({ _id: `dev-multi::${bobId}`, deviceId: 'dev-multi', user: bobId, lastSeenTs: recentTs, lastSyncedTs: recentTs });
-        await db.collection('pushSubscriptions').insertOne({
+        await db.collection<PushSubscriptionRecord>('pushSubscriptions').insertOne({
             _id: 'dev-multi',
             user: aliceId,
             endpoint: 'https://push.example.com/multi',
@@ -1202,11 +1224,13 @@ describe('Stale device cleanup', () => {
         await tick();
         await pull(aliceCookie, { deviceId: 'dev-alice-active' });
 
-        await waitForPurge(async () => (await db.collection('deviceSyncState').countDocuments({ _id: `dev-multi::${aliceId}` })) === 0);
-        expect(await db.collection('deviceSyncState').countDocuments({ _id: `dev-multi::${aliceId}` })).toBe(0);
-        expect(await db.collection('deviceSyncState').countDocuments({ _id: `dev-multi::${bobId}` })).toBe(1);
+        await waitForPurge(
+            async () => (await db.collection<DeviceSyncStateInterface>('deviceSyncState').countDocuments({ _id: `dev-multi::${aliceId}` })) === 0,
+        );
+        expect(await db.collection<DeviceSyncStateInterface>('deviceSyncState').countDocuments({ _id: `dev-multi::${aliceId}` })).toBe(0);
+        expect(await db.collection<DeviceSyncStateInterface>('deviceSyncState').countDocuments({ _id: `dev-multi::${bobId}` })).toBe(1);
         // bob still uses dev-multi → push subscription survives
-        expect(await db.collection('pushSubscriptions').countDocuments({ _id: 'dev-multi' })).toBe(1);
+        expect(await db.collection<PushSubscriptionRecord>('pushSubscriptions').countDocuments({ _id: 'dev-multi' })).toBe(1);
     });
 });
 
@@ -1230,7 +1254,7 @@ describe('Reaped-device bootstrap guard', () => {
         expect(res.status).toBe(409);
         // Re-registering the row on this path would pin the stale cursor back into the purge
         // floor — the exact silent-data-loss bug the guard exists to prevent.
-        expect(await db.collection('deviceSyncState').countDocuments()).toBe(0);
+        expect(await db.collection<DeviceSyncStateInterface>('deviceSyncState').countDocuments()).toBe(0);
     });
 
     it('regression (rejected Attempt-A design): a registered device whose full history was purged pulls 200 + newer ops', async () => {
@@ -1243,10 +1267,10 @@ describe('Reaped-device bootstrap guard', () => {
 
         const id1 = crypto.randomUUID();
         await push(cookie, 'dev-src', [makeClientOp('item', id1, 'create', makeItemSnapshot(id1, '2024-01-01T00:00:00.000Z'))]);
-        const ackedOp = await db.collection('operations').findOne({ entityId: id1 });
+        const ackedOp = await db.collection<OperationInterface>('operations').findOne({ entityId: id1 });
         if (!ackedOp) throw new Error('expected the pushed op to be recorded');
         // dev-A registered exactly at the op's compound position — it has acked all history.
-        await registerDevice('dev-A', userId, { lastSyncedTs: ackedOp.ts as string, lastSyncedId: ackedOp._id as string });
+        await registerDevice('dev-A', userId, { lastSyncedTs: ackedOp.ts, lastSyncedId: ackedOp._id });
         // Purge everything at-or-below dev-A's cursor (what purgeOldOperations would have done).
         await db.collection('operations').deleteMany({});
 
@@ -1254,7 +1278,7 @@ describe('Reaped-device bootstrap guard', () => {
         const id2 = crypto.randomUUID();
         await push(cookie, 'dev-src', [makeClientOp('item', id2, 'create', makeItemSnapshot(id2, '2024-01-02T00:00:00.000Z'))]);
 
-        const res = await pull(cookie, { since: ackedOp.ts as string, sinceId: ackedOp._id as string, deviceId: 'dev-A' });
+        const res = await pull(cookie, { since: ackedOp.ts, sinceId: ackedOp._id, deviceId: 'dev-A' });
         expect(res.status).toBe(200);
         const { ops } = (await res.json()) as { ops: { entityId: string }[] };
         expect(ops.map((o) => o.entityId)).toEqual([id2]);
@@ -1272,8 +1296,8 @@ describe('Reaped-device bootstrap guard', () => {
         // The active device's pull fires the (fire-and-forget) stale-device reaper.
         const activeRes = await pull(cookie, { deviceId: 'dev-active' });
         expect(activeRes.status).toBe(200);
-        await waitForPurge(async () => (await db.collection('deviceSyncState').countDocuments({ deviceId: 'dev-dormant' })) === 0);
-        expect(await db.collection('deviceSyncState').countDocuments({ deviceId: 'dev-dormant' })).toBe(0);
+        await waitForPurge(async () => (await db.collection<DeviceSyncStateInterface>('deviceSyncState').countDocuments({ deviceId: 'dev-dormant' })) === 0);
+        expect(await db.collection<DeviceSyncStateInterface>('deviceSyncState').countDocuments({ deviceId: 'dev-dormant' })).toBe(0);
 
         // The reaped device comes back online and pulls from its stale cursor → forced bootstrap.
         const res = await pull(cookie, { since: staleTs, deviceId: 'dev-dormant' });
@@ -1289,11 +1313,11 @@ describe('Reaped-device bootstrap guard', () => {
 
         expect(res.status).toBe(200);
         // Offline work is never dropped: flushed ops land in entities + op log regardless.
-        expect(await db.collection('items').countDocuments({ _id: entityId })).toBe(1);
-        expect(await db.collection('operations').countDocuments({ entityId })).toBe(1);
+        expect(await db.collection<ItemInterface>('items').countDocuments({ _id: entityId })).toBe(1);
+        expect(await db.collection<OperationInterface>('operations').countDocuments({ entityId })).toBe(1);
         // But the row is NOT resurrected — that would mask the row-missing 409 on the following
         // pull and re-pin the purge floor at an epoch cursor (indefinitely, via the SW flush).
-        expect(await db.collection('deviceSyncState').countDocuments()).toBe(0);
+        expect(await db.collection<DeviceSyncStateInterface>('deviceSyncState').countDocuments()).toBe(0);
     });
 
     it('push with an existing row refreshes lastSeenTs and leaves lastSyncedTs untouched', async () => {
@@ -1306,9 +1330,9 @@ describe('Reaped-device bootstrap guard', () => {
         const entityId = crypto.randomUUID();
         await push(cookie, 'dev-1', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, '2024-01-01T00:00:00.000Z'))]);
 
-        const row = await db.collection('deviceSyncState').findOne({ _id: `dev-1::${userId}` });
+        const row = await db.collection<DeviceSyncStateInterface>('deviceSyncState').findOne({ _id: `dev-1::${userId}` });
         expect(row?.lastSyncedTs).toBe(cursorTs);
-        expect(dayjs(row?.lastSeenTs as string).isAfter(oldSeenTs)).toBe(true);
+        expect(dayjs(row?.lastSeenTs).isAfter(oldSeenTs)).toBe(true);
     });
 
     it('device-status: registered:false before bootstrap, true after', async () => {
@@ -1342,7 +1366,7 @@ describe('Reaped-device bootstrap guard', () => {
         const res = await authenticatedRequest(app, { method: 'GET', path: '/sync/bootstrap?deviceId=dev-fresh', sessionCookie: cookie });
         const { serverTs } = (await res.json()) as { serverTs: string };
 
-        const row = await db.collection('deviceSyncState').findOne({ _id: `dev-fresh::${userId}` });
+        const row = await db.collection<DeviceSyncStateInterface>('deviceSyncState').findOne({ _id: `dev-fresh::${userId}` });
         // serverTs is the held-back cursor boundary; lastSeenTs is the live clock at-or-after it.
         expect(String(row?.lastSeenTs) >= serverTs).toBe(true);
         expect(dayjs().diff(dayjs(String(row?.lastSeenTs)), 'second')).toBeLessThan(30);
@@ -1394,12 +1418,12 @@ describe('Multi-device round-trip', () => {
 
         // Device-1 pulls — should receive the update op. Explicit-ack: dev-1 acknowledges epoch
         // (it has nothing committed yet) and asks for ops > createOp.ts.
-        const dev1LastOp = await db.collection('operations').findOne({ entityId: itemId, opType: 'create' });
+        const dev1LastOp = await db.collection<OperationInterface>('operations').findOne({ entityId: itemId, opType: 'create' });
         // Pass the create op's _id as sinceId so the compound cursor excludes it (dev-1 already has
         // it) and returns only the later update — without it, '' would re-include the create ($gte).
         const pullRes2 = await pull(dev1Cookie, {
-            since: dev1LastOp!.ts as string,
-            sinceId: dev1LastOp!._id as string,
+            since: dev1LastOp!.ts,
+            sinceId: dev1LastOp!._id,
             ackedTs: dayjs(0).toISOString(),
             deviceId: 'dev-1',
         });
@@ -1416,7 +1440,7 @@ describe('Multi-device round-trip', () => {
         expect(opsForDev1[0]!.opType).toBe('update');
 
         // Verify the item reflects the update
-        const item = await db.collection('items').findOne({ _id: itemId });
+        const item = await db.collection<ItemInterface>('items').findOne({ _id: itemId });
         expect(item?.title).toBe('Updated by dev-2');
 
         // For purge to fire, each device's compound floor (= recorded ackedTs/ackedId) must reach
@@ -1441,8 +1465,8 @@ describe('Multi-device round-trip', () => {
         });
 
         // Both devices have now pulled past all ops → purge fires → operations collection empty
-        await waitForPurge(async () => (await db.collection('operations').countDocuments()) === 0);
-        expect(await db.collection('operations').countDocuments()).toBe(0);
+        await waitForPurge(async () => (await db.collection<OperationInterface>('operations').countDocuments()) === 0);
+        expect(await db.collection<OperationInterface>('operations').countDocuments()).toBe(0);
     });
 });
 
@@ -1519,7 +1543,7 @@ describe('Stale-run-clock op delivery (moved-meeting IDB-staleness regression)',
             serverTs: string;
             serverId: string;
         };
-        const storedOp = await db.collection('operations').findOne({ entityId });
+        const storedOp = await db.collection<OperationInterface>('operations').findOne({ entityId });
         if (!storedOp) throw new Error('expected the pushed op to be persisted');
 
         // The fresh op is returned, but the advertised cursor stays behind it: an op committing
@@ -1602,7 +1626,7 @@ describe('Stale-run-clock op delivery (moved-meeting IDB-staleness regression)',
         expect(serverTs).toBe(advancedTs);
         expect(serverId).toBe('op-xyz');
 
-        const row = await db.collection('deviceSyncState').findOne({ _id: `dev-boot-again::${userId}` });
+        const row = await db.collection<DeviceSyncStateInterface>('deviceSyncState').findOne({ _id: `dev-boot-again::${userId}` });
         expect(row?.lastSyncedTs).toBe(advancedTs);
         expect(row?.lastSyncedId).toBe('op-xyz');
     });
@@ -1623,7 +1647,7 @@ describe('Stale-run-clock op delivery (moved-meeting IDB-staleness regression)',
                 ops: { entityId: string }[];
                 serverTs: string;
             };
-            const storedOp = await db.collection('operations').findOne({ entityId });
+            const storedOp = await db.collection<OperationInterface>('operations').findOne({ entityId });
             expect(body.ops.map((o) => o.entityId)).toContain(entityId);
             // Default 5s holdback in effect → boundary held below the fresh op, never at/past it.
             expect(body.serverTs < String(storedOp?.ts)).toBe(true);
@@ -1654,7 +1678,7 @@ describe('Auth middleware deviceUsers upsert', () => {
         expect(res.status).toBe(200);
         await tick();
 
-        const row = await db.collection('deviceUsers').findOne({ _id: `dev-via-header:${userId}` });
+        const row = await db.collection<DeviceUserInterface>('deviceUsers').findOne({ _id: `dev-via-header:${userId}` });
         expect(row).not.toBeNull();
         expect(row?.deviceId).toBe('dev-via-header');
         expect(row?.userId).toBe(userId);
@@ -1667,7 +1691,7 @@ describe('Auth middleware deviceUsers upsert', () => {
         expect(res.status).toBe(200);
         await tick();
 
-        expect(await db.collection('deviceUsers').countDocuments()).toBe(0);
+        expect(await db.collection<DeviceUserInterface>('deviceUsers').countDocuments()).toBe(0);
     });
 
     it('does not upsert a deviceUsers row for an unauthenticated request even when X-Device-Id is set', async () => {
@@ -1680,7 +1704,7 @@ describe('Auth middleware deviceUsers upsert', () => {
         expect(res.status).toBe(401);
         await tick();
 
-        expect(await db.collection('deviceUsers').countDocuments()).toBe(0);
+        expect(await db.collection<DeviceUserInterface>('deviceUsers').countDocuments()).toBe(0);
     });
 });
 
@@ -1811,7 +1835,7 @@ describe('Timezone reporting', () => {
         });
         expect(res.status).toBe(200);
 
-        const state = await db.collection('deviceSyncState').findOne({ _id: `dev-tz::${userId}` });
+        const state = await db.collection<DeviceSyncStateInterface>('deviceSyncState').findOne({ _id: `dev-tz::${userId}` });
         expect(state?.timezone).toBe('Asia/Jerusalem');
         // A real instant, not merely "some string" — '' would satisfy a typeof check.
         expect(dayjs(String(state?.timezoneReportedTs)).isValid()).toBe(true);
@@ -1825,7 +1849,7 @@ describe('Timezone reporting', () => {
         const res = await pull(cookie, { deviceId: 'dev-tz', timezone: 'America/New_York' });
         expect(res.status).toBe(200);
 
-        const state = await db.collection('deviceSyncState').findOne({ _id: `dev-tz::${userId}` });
+        const state = await db.collection<DeviceSyncStateInterface>('deviceSyncState').findOne({ _id: `dev-tz::${userId}` });
         expect(state?.timezone).toBe('America/New_York');
     });
 
@@ -1838,7 +1862,7 @@ describe('Timezone reporting', () => {
         const bad = await pull(cookie, { deviceId: 'dev-tz', timezone: 'Not/AZone' });
         expect(bad.status).toBe(200);
 
-        const state = await db.collection('deviceSyncState').findOne({ _id: `dev-tz::${userId}` });
+        const state = await db.collection<DeviceSyncStateInterface>('deviceSyncState').findOne({ _id: `dev-tz::${userId}` });
         expect(state?.timezone).toBe('Asia/Jerusalem');
     });
 
@@ -1850,7 +1874,7 @@ describe('Timezone reporting', () => {
         await pull(cookie, { deviceId: 'dev-tz', timezone: 'Asia/Jerusalem' });
         await pull(cookie, { deviceId: 'dev-tz' });
 
-        const state = await db.collection('deviceSyncState').findOne({ _id: `dev-tz::${userId}` });
+        const state = await db.collection<DeviceSyncStateInterface>('deviceSyncState').findOne({ _id: `dev-tz::${userId}` });
         expect(state?.timezone).toBe('Asia/Jerusalem');
     });
 });
@@ -1867,7 +1891,7 @@ describe('App version reporting', () => {
         const res = await authenticatedRequest(app, { method: 'GET', path: '/sync/bootstrap?deviceId=dev-ver&appVersion=8b77e17', sessionCookie: cookie });
         expect(res.status).toBe(200);
 
-        const state = await db.collection('deviceSyncState').findOne({ _id: `dev-ver::${userId}` });
+        const state = await db.collection<DeviceSyncStateInterface>('deviceSyncState').findOne({ _id: `dev-ver::${userId}` });
         expect(state?.appVersion).toBe('8b77e17');
     });
 
@@ -1880,7 +1904,7 @@ describe('App version reporting', () => {
         const res = await pull(cookie, { deviceId: 'dev-ver', appVersion: '245e5c6' });
         expect(res.status).toBe(200);
 
-        const state = await db.collection('deviceSyncState').findOne({ _id: `dev-ver::${userId}` });
+        const state = await db.collection<DeviceSyncStateInterface>('deviceSyncState').findOne({ _id: `dev-ver::${userId}` });
         expect(state?.appVersion).toBe('245e5c6');
     });
 
@@ -1896,7 +1920,7 @@ describe('App version reporting', () => {
             expect(res.status).toBe(200);
         }
 
-        const state = await db.collection('deviceSyncState').findOne({ _id: `dev-ver::${userId}` });
+        const state = await db.collection<DeviceSyncStateInterface>('deviceSyncState').findOne({ _id: `dev-ver::${userId}` });
         expect(state?.appVersion).toBe('8b77e17');
     });
 
@@ -1908,7 +1932,7 @@ describe('App version reporting', () => {
         await pull(cookie, { deviceId: 'dev-ver', appVersion: '8b77e17' });
         await pull(cookie, { deviceId: 'dev-ver' });
 
-        const state = await db.collection('deviceSyncState').findOne({ _id: `dev-ver::${userId}` });
+        const state = await db.collection<DeviceSyncStateInterface>('deviceSyncState').findOne({ _id: `dev-ver::${userId}` });
         expect(state?.appVersion).toBe('8b77e17');
     });
 });

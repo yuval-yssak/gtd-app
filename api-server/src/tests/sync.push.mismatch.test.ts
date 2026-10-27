@@ -4,7 +4,7 @@ import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { syncRoutes } from '../routes/sync.js';
-import type { EntityType, OpType } from '../types/entities.js';
+import type { EntityType, ItemInterface, OpType, RoutineInterface } from '../types/entities.js';
 import { authenticatedRequest, oauthLogin, SESSION_COOKIE } from './helpers.js';
 
 // /sync/push enforces "ops in this batch belong to the active session" via a 400 mismatch guard.
@@ -86,7 +86,7 @@ describe('POST /sync/push — userId mismatch guard', () => {
         const body = (await res.json()) as { error: string };
         expect(body.error).toMatch(/userId mismatch/);
         // Forged op was rejected outright — nothing landed in the DB.
-        expect(await db.collection('items').countDocuments({ _id: entityId })).toBe(0);
+        expect(await db.collection<ItemInterface>('items').countDocuments({ _id: entityId })).toBe(0);
         expect(await db.collection('operations').countDocuments({ entityId })).toBe(0);
     });
 
@@ -132,7 +132,7 @@ describe('POST /sync/push — userId mismatch guard', () => {
         ]);
         expect(res.status).toBe(400);
         // Whole batch is rejected — the "ok" op must NOT have been applied.
-        expect(await db.collection('items').countDocuments({ _id: okId })).toBe(0);
+        expect(await db.collection<ItemInterface>('items').countDocuments({ _id: okId })).toBe(0);
     });
 
     it('200 when an op has snapshot=null (delete op) — guard short-circuits on the optional chain', async () => {
@@ -141,7 +141,7 @@ describe('POST /sync/push — userId mismatch guard', () => {
         const entityId = crypto.randomUUID();
 
         // Seed the item so the delete op has something to remove.
-        await db.collection('items').insertOne({
+        await db.collection<ItemInterface>('items').insertOne({
             _id: entityId,
             user: userId,
             status: 'inbox',
@@ -152,7 +152,7 @@ describe('POST /sync/push — userId mismatch guard', () => {
 
         const res = await push(sessionCookie!, 'dev-1', [makeClientOp('item', entityId, 'delete', null)]);
         expect(res.status).toBe(200);
-        expect(await db.collection('items').countDocuments({ _id: entityId })).toBe(0);
+        expect(await db.collection<ItemInterface>('items').countDocuments({ _id: entityId })).toBe(0);
     });
 
     it('400 on a forged routine op — guard is type-agnostic across entity types', async () => {
@@ -173,6 +173,6 @@ describe('POST /sync/push — userId mismatch guard', () => {
             }),
         ]);
         expect(res.status).toBe(400);
-        expect(await db.collection('routines').countDocuments({ _id: routineId })).toBe(0);
+        expect(await db.collection<RoutineInterface>('routines').countDocuments({ _id: routineId })).toBe(0);
     });
 });

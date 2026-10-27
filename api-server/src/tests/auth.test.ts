@@ -115,7 +115,7 @@ describe('Account linking', () => {
         expect(u1.id).toBe(u2.id);
 
         expect(await db.collection('user').countDocuments()).toBe(1);
-        const accounts = await db.collection('account').find({}).toArray();
+        const accounts = await db.collection<{ providerId: string }>('account').find({}).toArray();
         expect(accounts.map((a) => a.providerId)).toContain('google');
         expect(accounts.map((a) => a.providerId)).toContain('github');
     });

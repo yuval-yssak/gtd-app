@@ -7,7 +7,8 @@
  *
  * `util.inspect` does not render the own properties gaxios adds to the native `Response`, so the
  * nested `response.config` is asserted on directly — a structured logger would serialise it. */
-import { type AddressInfo, createServer, type Server } from 'node:http';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { inspect } from 'node:util';
 import dayjs from 'dayjs';
 import { GaxiosError } from 'gaxios';

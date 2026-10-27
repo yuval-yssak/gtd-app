@@ -1,6 +1,7 @@
 /** biome-ignore-all lint/style/noNonNullAssertion: test code asserts status before using ! */
 import dayjs from 'dayjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { GCalEvent } from '../calendarProviders/CalendarProvider.js';
 import { GoogleCalendarProvider } from '../calendarProviders/GoogleCalendarProvider.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
@@ -2095,13 +2096,13 @@ describe('POST /calendar/integrations/:id/sync — Phase 1c field-level merge', 
             }),
         );
 
-        const masterEvent = {
+        const masterEvent: GCalEvent = {
             id: 'gcal-master-owned-delta',
             title: 'Standup',
             timeStart: masterTimeStart,
             timeEnd: masterTimeEnd,
             updated: olderEventUpdated,
-            status: 'confirmed' as const,
+            status: 'confirmed',
             recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
             attendees: [{ email: 'fresh@example.com', responseStatus: 'accepted' }],
         };

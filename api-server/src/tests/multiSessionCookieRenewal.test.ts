@@ -38,13 +38,23 @@ interface SeededSession {
     signedToken: string;
 }
 
+/** The Better Auth `session` row fields this file seeds and reads back. */
+interface StoredSession {
+    _id: string;
+    userId: string;
+    token: string;
+    expiresAt: Date;
+    createdAt: Date;
+    updatedAt: Date;
+}
+
 /** Inserts a user plus a session expiring `expiresInDays` from now. */
 async function seedSession(email: string, expiresInDays: number): Promise<SeededSession> {
     const userId = generateId(32);
     const rawToken = generateId(32);
     const now = dayjs();
     await db.collection('user').insertOne({ _id: userId, email, name: email, emailVerified: false, createdAt: now.toDate(), updatedAt: now.toDate() } as never);
-    await db.collection('session').insertOne({
+    await db.collection<StoredSession>('session').insertOne({
         _id: generateId(32),
         userId,
         token: rawToken,
@@ -52,7 +62,7 @@ async function seedSession(email: string, expiresInDays: number): Promise<Seeded
         expiresAt: now.add(expiresInDays * DAY_SECONDS, 'second').toDate(),
         createdAt: now.toDate(),
         updatedAt: now.toDate(),
-    } as never);
+    });
     return { rawToken, signedToken: signSessionToken(rawToken) };
 }
 
@@ -119,7 +129,7 @@ describe('multi-session cookie renewal (Better Auth after-hook)', () => {
         const res = await request('/auth/get-session', cookieHeader(alice, [alice]));
 
         expect(res.status).toBe(200);
-        const stored = await db.collection('session').findOne({ token: alice.rawToken });
+        const stored = await db.collection<StoredSession>('session').findOne({ token: alice.rawToken });
         expect(dayjs(stored?.expiresAt).diff(dayjs(), 'second')).toBeGreaterThan(7 * DAY_SECONDS - 60);
         expect(onlySetCookieMaxAge(res, multiCookieName(alice))).toBeGreaterThan(7 * DAY_SECONDS - 60);
     });

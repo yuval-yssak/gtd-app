@@ -6,7 +6,7 @@ COPY api-server/package*.json ./
 # causing npm ci to fail when the lock file was generated on macOS.
 RUN npm install
 COPY api-server/src/ ./src/
-COPY api-server/tsconfig.json ./
+COPY api-server/tsconfig.json api-server/tsconfig.build.json ./
 RUN npm run build
 
 FROM node:22-alpine
