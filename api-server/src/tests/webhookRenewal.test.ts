@@ -202,6 +202,43 @@ describe('webhook renewal — invalid_grant escalation', () => {
     });
 });
 
+describe('webhook renewal — summary', () => {
+    function stubWatch() {
+        return vi.spyOn(GoogleCalendarProvider.prototype, 'watchEvents').mockResolvedValue({
+            resourceId: 'res-fresh',
+            expiration: dayjs().add(7, 'day').toISOString(),
+        });
+    }
+
+    it('counts a renewed channel', async () => {
+        await calendarIntegrationsDAO.insertEncrypted(makeIntegration({ status: 'active' }));
+        await calendarSyncConfigsDAO.insertOne(makeConfig({ webhookExpiry: dayjs().add(2, 'hour').toISOString() }));
+        stubWatch();
+
+        expect(await renewAllExpiring()).toEqual({ renewed: 1, failed: 0 });
+    });
+
+    it('counts a skipped suspended integration as neither renewed nor failed', async () => {
+        await calendarIntegrationsDAO.insertEncrypted(makeIntegration({ status: 'suspended', suspendedAt: dayjs().toISOString() }));
+        await calendarSyncConfigsDAO.insertOne(makeConfig());
+        stubWatch();
+
+        expect(await renewAllExpiring()).toEqual({ renewed: 0, failed: 0 });
+    });
+
+    it('counts and error-logs a failure without blocking the next config', async () => {
+        await calendarIntegrationsDAO.insertEncrypted(makeIntegration({ status: 'active' }));
+        await calendarSyncConfigsDAO.insertOne(makeConfig({ _id: 'cfg-broken', webhookExpiry: dayjs().add(2, 'hour').toISOString() }));
+        await calendarSyncConfigsDAO.insertOne(makeConfig({ _id: 'cfg-ok', calendarId: 'work', webhookExpiry: dayjs().add(2, 'hour').toISOString() }));
+        stubWatch().mockRejectedValueOnce(new Error('500 Internal Server Error'));
+        const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+        expect(await renewAllExpiring()).toEqual({ renewed: 1, failed: 1 });
+        expect(errorSpy).toHaveBeenCalledTimes(1);
+        expect(errorSpy).toHaveBeenCalledWith('[webhook-renewal] renewal failed', expect.objectContaining({ integrationId: 'int-1' }));
+    });
+});
+
 describe('webhook renewal — catch-up sync after a lapsed channel', () => {
     /** Stubs the provider calls the renewal + catch-up path makes, returning the incremental spy for assertions. */
     function stubProviderForCatchUp(incremental: { events: object[]; nextSyncToken: string }) {

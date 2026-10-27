@@ -55,6 +55,7 @@ import { type ChainProvider, type ChainTerminal, type RoutineChainResolver, reso
 import { notifyUserViaSse } from '../lib/sseConnections.js';
 import { stableStringify } from '../lib/stableStringify.js';
 import { hasAtLeastOne, type NonEmptyArray } from '../lib/typeUtils.js';
+import { renewAllExpiring } from '../lib/webhookRenewal.js';
 import { notifyViaWebPush } from '../lib/webPush.js';
 import { auth } from '../loaders/mainLoader.js';
 import type { AuthVariables } from '../types/authTypes.js';
@@ -6167,27 +6168,6 @@ async function notifyDevicesOfSyncOps(userId: string, ops: OperationInterface[],
 // ── Webhook renewal ──────────────────────────────────────────────────────────
 
 // Secured by the shared cron secret so only the Cloud Scheduler job can trigger renewal.
-calendarRoutes.post('/webhooks/renew', requireCronSecret(), async (c) => {
-    const horizon = dayjs().add(1, 'day').toISOString();
-    const expiring = await calendarSyncConfigsDAO.findNeedingWebhook(horizon);
-
-    const results = await Promise.allSettled(
-        expiring.map(async (config) => {
-            const integration = await calendarIntegrationsDAO.findByOwnerAndIdDecrypted(config.integrationId, config.user);
-            if (!integration) {
-                return;
-            }
-            // Skip suspended/revoked integrations — the auth-escalation flow owns their lifecycle.
-            if (integrationStatus(integration) !== 'active') {
-                return;
-            }
-            const provider = buildProvider(integration, config.user);
-            await renewWebhookAndCatchUp(config, integration, provider);
-        }),
-    );
-
-    const failed = results.filter((r) => r.status === 'rejected').length;
-    return c.json({ renewed: results.length - failed, failed });
-});
+calendarRoutes.post('/webhooks/renew', requireCronSecret(), async (c) => c.json(await renewAllExpiring()));
 
 export { calendarRoutes };

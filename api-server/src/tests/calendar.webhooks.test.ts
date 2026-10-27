@@ -264,6 +264,32 @@ describe('POST /calendar/webhooks/renew', () => {
             delete process.env.CALENDAR_WEBHOOK_URL;
         }
     });
+
+    it('error-logs a failed renewal with its config id and reports it as failed', async () => {
+        // The Scheduler sees a 200 either way — the error line is the only operator-visible trace
+        // of a channel that is about to lapse.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await calendarSyncConfigsDAO.upsertWebhookFields('sync-config-1', 'ch-old', 'res-old', dayjs().add(6, 'hour').toISOString());
+        vi.spyOn(GoogleCalendarProvider.prototype, 'stopWatch').mockResolvedValue(undefined);
+        vi.spyOn(GoogleCalendarProvider.prototype, 'watchEvents').mockRejectedValue(new Error('500 Internal Server Error'));
+        const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+        const secret = 'test-cron-secret';
+        process.env.CRON_SECRET = secret;
+        process.env.CALENDAR_WEBHOOK_URL = 'https://example.com/webhooks/google';
+
+        try {
+            const res = await app.fetch(new Request('http://localhost:4000/calendar/webhooks/renew', { method: 'POST', headers: { 'x-cron-secret': secret } }));
+
+            expect(res.status).toBe(200);
+            expect(await res.json()).toEqual({ renewed: 0, failed: 1 });
+            expect(errorSpy).toHaveBeenCalledWith('[webhook-renewal] renewal failed', expect.objectContaining({ configId: 'sync-config-1' }));
+        } finally {
+            delete process.env.CRON_SECRET;
+            delete process.env.CALENDAR_WEBHOOK_URL;
+        }
+    });
 });
 
 // ─── Watch setup/teardown on sync config CRUD ──────────────────────────────
