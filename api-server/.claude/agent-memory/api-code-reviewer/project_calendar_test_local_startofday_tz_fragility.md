@@ -45,3 +45,9 @@ and touches the outbound backfill, it will hang — advance timers or don't fake
 a routine-generated item is edited` fails at extreme east offsets (`TZ=Pacific/Kiritimati`, UTC+14) with
 `expected '2026-05-05' to be '2026-05-04'` — same local-midnight family, fails identically on the
 pre-change file. Out of scope for the fix above; don't re-diagnose it as caused by a cutoff change.
+
+**Same family, second shape (2026-10-27):** offset-less GCal fixture times (`'YYYY-MM-DDT09:00:00'`)
+are parsed in the PROCESS zone, so against the Jerusalem config `extractLocalTime` reads a different
+hour on UTC CI → master looks like a schedule change → `regenerateFutureRoutineItems` trashes seeded
+items. Tests expecting `trash` for another reason (UNTIL cap) then pass vacuously. Demand offset-qualified
+fixture times (`dayjs.tz(local, 'Asia/Jerusalem').format()`), as `liveMaster` in calendarTestKit now does.

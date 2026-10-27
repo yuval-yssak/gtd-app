@@ -2,6 +2,8 @@
 // Shared fixtures, helpers and lifecycle for the calendar.*.test.ts files, which were split out of
 // one 16.8k-line calendar.test.ts so the suite can spread its slowest file across workers.
 import dayjs from 'dayjs';
+import timezone from 'dayjs/plugin/timezone.js';
+import utc from 'dayjs/plugin/utc.js';
 import { google } from 'googleapis';
 import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, expect, vi } from 'vitest';
@@ -15,6 +17,9 @@ import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader
 import { calendarRoutes } from '../routes/calendar.js';
 import type { CalendarIntegrationInterface, CalendarSyncConfigInterface, ItemInterface, OperationInterface, RoutineInterface } from '../types/entities.js';
 import { oauthLogin, SESSION_COOKIE } from './helpers.js';
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
 
 export const app = new Hono().on(['GET', 'POST'], '/auth/*', (c) => auth.handler(c.req.raw)).route('/calendar', calendarRoutes);
 
@@ -182,12 +187,14 @@ export function cancelledMaster(id: string): GCalEvent {
 
 /** A live master — the tail that keeps a series alive. `rrule` defaults to open-ended. */
 export function liveMaster(id: string, rrule = 'FREQ=WEEKLY;BYDAY=MO'): GCalEvent {
-    const start = dayjs().add(1, 'day');
+    // Offset-qualified in the sync config's zone, as Google sends it: a bare local time is parsed in the
+    // PROCESS zone, so under CI's UTC the template read 11:00, not 09:00, and regeneration trashed items.
+    const date = dayjs().add(1, 'day').format('YYYY-MM-DD');
     return {
         id,
         title: CANCELLED_MASTER_TITLE,
-        timeStart: start.format('YYYY-MM-DDT09:00:00'),
-        timeEnd: start.format('YYYY-MM-DDT09:30:00'),
+        timeStart: dayjs.tz(`${date}T09:00:00`, 'Asia/Jerusalem').format(),
+        timeEnd: dayjs.tz(`${date}T09:30:00`, 'Asia/Jerusalem').format(),
         updated: dayjs().toISOString(),
         status: 'confirmed',
         recurrence: [`RRULE:${rrule}`],
