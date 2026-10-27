@@ -1,12 +1,18 @@
 {
     "compilerOptions": {
         "target": "ES2022",
-        "module": "commonjs",
-        "moduleResolution": "node",
+        // Playwright transpiles the specs itself; this config only typechecks them. TS 7 removed
+        // `moduleResolution: node`, and `preserve` + `bundler` matches how Playwright resolves imports.
+        "module": "preserve",
+        "moduleResolution": "bundler",
+        "types": ["node"],
+        "noEmit": true,
         "strict": true,
         "esModuleInterop": true,
         "skipLibCheck": true,
         "lib": ["ES2022", "DOM"]
     },
-    "include": ["./**/*.ts", "../client/src/types/**/*.ts"]
+    // Specs import client modules that read `import.meta.env`; vite-env.d.ts declares it (its
+    // `vite/client` reference resolves through client/node_modules).
+    "include": ["./**/*.ts", "../client/src/types/**/*.ts", "../client/src/vite-env.d.ts"]
 }

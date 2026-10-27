@@ -9,8 +9,8 @@
     },
     "main": "./dist/index.js",
     "scripts": {
-        "build": "tsc",
-        "typecheck": "tsc --noEmit",
+        "build": "tsrs",
+        "typecheck": "tsrs --noEmit",
         "start": "node dist/index.js"
     },
     "dependencies": {
@@ -18,7 +18,8 @@
         "zod": "^4.6.7"
     },
     "devDependencies": {
-        "typescript": "^7.0.2",
-        "@types/node": "^26.6.5"
+        "@types/node": "^26.6.5",
+        "tsrs": "0.20.0-ts7.1.0-beta",
+        "typescript": "^7.0.2"
     }
 }

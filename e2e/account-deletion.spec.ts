@@ -6,6 +6,7 @@ import utc from 'dayjs/plugin/utc';
 import { resetServerForEmails, withOneLoggedInDevice, withTwoAccountsOnOneDevice } from './helpers/context';
 import { API_URL, CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 dayjs.extend(utc);
 
@@ -14,9 +15,8 @@ dayjs.extend(utc);
 // only learns about it from the unauthenticated tombstone probe (`GET /auth/user-status`) on
 // its next reconnect. Other accounts signed in on the same device must be untouched.
 
-/** Timestamp alone collides when two workers start the same case in the same millisecond (`--repeat-each`); the random tail keeps the accounts apart. */
 function uniqueEmail(prefix: string): string {
-    return `${prefix}-${dayjs().valueOf()}-${Math.random().toString(36).slice(2, 8)}@example.com`;
+    return `${prefix}-${uniqueStamp()}@example.com`;
 }
 
 interface UserIdbFootprint {

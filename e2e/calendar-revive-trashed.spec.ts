@@ -4,6 +4,7 @@ import { closeContextQuietly, resetServerForEmails } from './helpers/context';
 import { API_URL, CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
 import { loginAs } from './helpers/login';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Regression for the "GCal sync conflict-anchor decoupled from local trash stamps" plan.
 // A user disconnects a calendar (which trashes its items and bumps `updatedTs` to now), then
@@ -66,7 +67,7 @@ async function pullAndCount(page: Page, calendarEventId: string): Promise<{ stat
 
 test.describe('calendar — revive trashed item on inbound GCal payload', () => {
     test('confirmed → cancelled → confirmed (with stale event.updated) round-trips status correctly', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const email = `revive-${stamp}@example.com`;
         const cfgId = `cfg-revive-${stamp}`;
         const eventId = `evt-revive-${stamp}`;

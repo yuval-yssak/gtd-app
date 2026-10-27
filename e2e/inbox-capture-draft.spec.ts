@@ -1,5 +1,5 @@
 import { expect, type Page, test } from '@playwright/test';
-import type { StoredDraft } from '../client/src/types/MyDB';
+import type { StoredDraft, StoredInboxCaptureDraft } from '../client/src/types/MyDB';
 import { withOneLoggedInDevice } from './helpers/context';
 import { CLIENT_URL } from './helpers/env';
 import { uniqueStamp } from './helpers/uniqueStamp';
@@ -8,8 +8,11 @@ const NOTES_EDITOR_NAME = 'Notes (Markdown)';
 
 // Reads the drafts store through the dev-tools harness so the specs can wait for the debounced
 // IDB write deterministically instead of sleeping past the debounce interval.
-function readDrafts(page: Page): Promise<StoredDraft[]> {
-    return page.evaluate(() => (window as unknown as { __gtd: { db: { getAll(store: 'drafts'): Promise<StoredDraft[]> } } }).__gtd.db.getAll('drafts'));
+async function readInboxDrafts(page: Page) {
+    const drafts = await page.evaluate(() =>
+        (window as unknown as { __gtd: { db: { getAll(store: 'drafts'): Promise<StoredDraft[]> } } }).__gtd.db.getAll('drafts'),
+    );
+    return drafts.filter((draft): draft is StoredInboxCaptureDraft => draft.kind === 'inboxCapture');
 }
 
 test.describe('inbox capture draft persistence', () => {
@@ -27,7 +30,7 @@ test.describe('inbox capture draft persistence', () => {
             // Wait for BOTH fields to reach IDB — polling on the title alone races the notes'
             // debounce tick against the reload, and a draft without notes doesn't reopen the panel.
             await expect
-                .poll(async () => (await readDrafts(page)).map((d) => ({ title: d.title, notes: d.notes })))
+                .poll(async () => (await readInboxDrafts(page)).map((d) => ({ title: d.title, notes: d.notes })))
                 .toEqual([{ title: 'Half-typed thought', notes: 'with a **markdown** note' }]);
 
             await page.reload();
@@ -58,11 +61,11 @@ test.describe('inbox capture draft persistence', () => {
             await page.goto(`${CLIENT_URL}/inbox`);
             const capture = page.getByPlaceholder("What's on your mind?");
             await capture.fill('Commit me');
-            await expect.poll(async () => (await readDrafts(page)).length).toBe(1);
+            await expect.poll(async () => (await readInboxDrafts(page)).length).toBe(1);
 
             await capture.press('Enter');
             await expect(page.getByText('Commit me')).toBeVisible();
-            await expect.poll(async () => (await readDrafts(page)).length).toBe(0);
+            await expect.poll(async () => (await readInboxDrafts(page)).length).toBe(0);
 
             await page.reload();
             await expect(page.getByPlaceholder("What's on your mind?")).toHaveValue('');

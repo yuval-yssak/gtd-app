@@ -89,7 +89,7 @@ test.describe('calendar — moved instance landing on a cancelled occurrence dat
             const userId = (await gtd.getActiveAccountId(page)) as string;
             const seeded = await seedIntegration(userId);
 
-            const masterEventId = `gcal-master-allhands-${dayjs().valueOf()}`;
+            const masterEventId = `gcal-master-allhands-${uniqueStamp()}`;
             const routine = await gtd.createRoutine(page, {
                 title: 'ALL HANDS',
                 routineType: 'calendar',

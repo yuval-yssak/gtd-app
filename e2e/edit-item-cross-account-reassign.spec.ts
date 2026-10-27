@@ -3,6 +3,7 @@ import dayjs from 'dayjs';
 import { resetServerForEmails, withTwoAccountsOnOneDevice } from './helpers/context';
 import { API_URL, CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // E2e coverage for the atomic cross-account "edit + move" path. Pre-fix, the item editor wrote a
 // source-user copy first via updateItem→/sync/push and THEN called /sync/reassign — but the
@@ -87,7 +88,7 @@ test.describe('Item editor cross-account reassign — atomic edit + move', () =>
     // Each test scopes its /dev/reset to its unique stamped emails so concurrent specs in
     // other workers keep their session/user data.
     test('calendar item with edits: title + time changes ride along on the move; new GCal event lives on target calendar', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const emailA = `cal-edit-a-${stamp}@example.com`;
         const emailB = `cal-edit-b-${stamp}@example.com`;
         // configIds carry the stamp so parallel workers don't collide on _id (the configs collection
@@ -146,7 +147,7 @@ test.describe('Item editor cross-account reassign — atomic edit + move', () =>
     test('nextAction item with edits: workContextIds, peopleIds, energy, time, urgent all ride along on the move (and the rank survives)', async ({
         browser,
     }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const emailA = `na-edit-a-${stamp}@example.com`;
         const emailB = `na-edit-b-${stamp}@example.com`;
         await resetServerForEmails([emailA, emailB]);
@@ -195,7 +196,7 @@ test.describe('Item editor cross-account reassign — atomic edit + move', () =>
     });
 
     test('reassign-only (no edits): item moves cleanly with all original fields preserved', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const emailA = `reassign-only-a-${stamp}@example.com`;
         const emailB = `reassign-only-b-${stamp}@example.com`;
         await resetServerForEmails([emailA, emailB]);
@@ -231,7 +232,7 @@ test.describe('Item editor cross-account reassign — atomic edit + move', () =>
     });
 
     test('editPatch clears: notes="" and energy="" drop those fields on the moved item', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const emailA = `clear-a-${stamp}@example.com`;
         const emailB = `clear-b-${stamp}@example.com`;
         await resetServerForEmails([emailA, emailB]);

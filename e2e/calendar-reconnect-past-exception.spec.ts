@@ -1,5 +1,4 @@
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { API_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
@@ -56,9 +55,8 @@ test.describe('calendar — reconnect does not materialize past exceptions', () 
             const userId = (await gtd.getActiveAccountId(page)) as string;
             const seeded = await seedIntegration(userId);
 
-            const masterEventId = `gcal-master-yearly-birthday-${dayjs().valueOf()}`;
+            const masterEventId = `gcal-master-yearly-birthday-${uniqueStamp()}`;
             const routine = await gtd.createRoutine(page, {
-                userId,
                 title: 'Yael’s Birthday',
                 routineType: 'calendar',
                 rrule: 'FREQ=YEARLY',

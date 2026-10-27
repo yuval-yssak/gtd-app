@@ -25,7 +25,7 @@ npm start            # node build/index.js (production)
 npm test             # run Vitest tests
 npm run lint         # Biome lint check
 npm run lint:fix     # auto-fix lint + format
-npm run typecheck    # tsc --noEmit
+npm run typecheck    # tsrs --noEmit
 ```
 
 ## Architecture

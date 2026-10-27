@@ -5,13 +5,13 @@
     "private": true,
     "description": "Local stdio MCP server that exposes the GTD /v1 public API as MCP tools",
     "scripts": {
-        "build": "tsc",
-        "prepare": "tsc",
+        "build": "tsrs -p tsconfig.build.json",
+        "prepare": "tsrs -p tsconfig.build.json",
         "start": "node dist/index.js",
         "dev": "tsx watch src/index.ts",
         "lint": "biome check",
         "lint:fix": "biome check . --write",
-        "typecheck": "tsc --noEmit",
+        "typecheck": "tsrs --noEmit",
         "test": "vitest run",
         "test:watch": "vitest"
     },
@@ -26,6 +26,7 @@
     "devDependencies": {
         "@biomejs/biome": "2.6.2",
         "@types/node": "^26.6.5",
+        "tsrs": "0.20.0-ts7.1.0-beta",
         "tsx": "latest",
         "typescript": "latest",
         "vitest": "latest"

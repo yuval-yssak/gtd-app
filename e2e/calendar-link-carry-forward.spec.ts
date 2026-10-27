@@ -5,6 +5,7 @@ import { closeContextQuietly, resetServerForEmails } from './helpers/context';
 import { API_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
 import { loginAs } from './helpers/login';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Regression for the 2026-09-27 production incident: a calendar item completed (or edited) before
 // the client pulled the Google link the server stamped after `events.insert` lost the link on the
@@ -78,7 +79,7 @@ async function serverRow(page: Page, itemId: string) {
 
 test.describe('calendar link carry-forward (edit before the Google link round-trips)', () => {
     test('marking done while the link is still in flight keeps the link on the server and delivers it to the device', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const email = `link-cf-done-${stamp}@example.com`;
         const eventId = `gtd-evt-done-${stamp}`;
         await resetServerForEmails([email]);
@@ -125,7 +126,7 @@ test.describe('calendar link carry-forward (edit before the Google link round-tr
     });
 
     test('editing while the link is still in flight keeps the link (no second event minted)', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const email = `link-cf-edit-${stamp}@example.com`;
         const eventId = `gtd-evt-edit-${stamp}`;
         await resetServerForEmails([email]);
@@ -160,7 +161,7 @@ test.describe('calendar link carry-forward (edit before the Google link round-tr
     });
 
     test('the repair sweep re-links an already-orphaned done item by its deterministic event id and pushes the ✓ marker', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const email = `link-cf-repair-${stamp}@example.com`;
         const integrationId = `int-repair-${stamp}`;
         const configId = `cfg-repair-${stamp}`;

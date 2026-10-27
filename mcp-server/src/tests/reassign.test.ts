@@ -29,6 +29,10 @@ function makeStubApi(meResponse: { userId: string; label: string }): { api: ApiC
             }
             return { ok: true } as never;
         }),
+        listAccounts: () => ['default', 'work'],
+        environment: () => 'local',
+        apiBase: () => 'http://localhost:4000',
+        webBase: () => null,
     };
     return { api, calls };
 }

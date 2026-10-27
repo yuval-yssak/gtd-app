@@ -82,10 +82,8 @@ test.describe('tab title', () => {
 
     test('person and routine pages are titled after their entity', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `page-titles-entity-${uniqueStamp()}@example.com`, async (page) => {
-            const userId = (await gtd.getActiveAccountId(page)) as string;
             const person = await gtd.createPerson(page, { name: 'Carmel' });
             const routine = await gtd.createRoutine(page, {
-                userId,
                 title: 'Water the plants',
                 routineType: 'nextAction',
                 rrule: 'FREQ=WEEKLY;BYDAY=MO',

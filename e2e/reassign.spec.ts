@@ -3,6 +3,7 @@ import dayjs from 'dayjs';
 import { resetServerForEmails, withTwoAccountsOnOneDevice } from './helpers/context';
 import { API_URL, CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // E2E coverage strategy: assertions read MongoDB through dev endpoints (server-side state) instead
 // of waiting for the client's per-user pull to mirror moved-across-account ops back into IDB.
@@ -78,17 +79,22 @@ async function flushDevice(page: Page): Promise<void> {
  * need a session pivot to re-fetch items now owned by a non-active user — too much harness
  * machinery for a coverage check. The IDB-sync path is exercised in unit tests + multiUserSync.test.ts.
  */
-async function fetchServerEntity(
-    collection: 'items' | 'people',
-    entityId: string,
-): Promise<{ _id: string; user: string; peopleIds?: string[]; calendarEventId?: string; calendarIntegrationId?: string; htmlLink?: string } | null> {
+interface ServerEntityDoc {
+    _id: string;
+    user: string;
+    peopleIds?: string[];
+    calendarEventId?: string;
+    calendarIntegrationId?: string;
+    calendarSyncConfigId?: string;
+    htmlLink?: string;
+}
+
+async function fetchServerEntity(collection: 'items' | 'people', entityId: string): Promise<ServerEntityDoc | null> {
     const res = await fetch(`${API_URL}/dev/reassign/find-entity?collection=${collection}&entityId=${entityId}`);
     if (!res.ok) {
         return null;
     }
-    const body = (await res.json()) as {
-        doc: { _id: string; user: string; peopleIds?: string[]; calendarEventId?: string; calendarIntegrationId?: string; htmlLink?: string } | null;
-    };
+    const body = (await res.json()) as { doc: ServerEntityDoc | null };
     return body.doc;
 }
 
@@ -108,7 +114,7 @@ test.describe('reassign — Step 5', () => {
     // other workers keep their session/user data. Pre-fix, an unconditional global reset in
     // beforeEach wiped session+user data for tests running in parallel workers.
     test('plain item: reassign a→b moves the item server-side', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const emailA = `reassign-a-${stamp}@example.com`;
         const emailB = `reassign-b-${stamp}@example.com`;
         await resetServerForEmails([emailA, emailB]);
@@ -126,7 +132,7 @@ test.describe('reassign — Step 5', () => {
     });
 
     test('person reassign is rejected — person stays under fromUserId, referencing item is untouched', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const emailA = `reassign-p-a-${stamp}@example.com`;
         const emailB = `reassign-p-b-${stamp}@example.com`;
         await resetServerForEmails([emailA, emailB]);
@@ -152,7 +158,7 @@ test.describe('reassign — Step 5', () => {
     });
 
     test('item reassign with peopleIds: auto-relinks ref into secondary by creating a mirror person', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const emailA = `relink-a-${stamp}@example.com`;
         const emailB = `relink-b-${stamp}@example.com`;
         await resetServerForEmails([emailA, emailB]);
@@ -183,7 +189,7 @@ test.describe('reassign — Step 5', () => {
     });
 
     test('calendar-linked item: simulate-event-move stubs Google and moves the GCal link to the target account', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const emailA = `cal-reassign-a-${stamp}@example.com`;
         const emailB = `cal-reassign-b-${stamp}@example.com`;
         // configIds carry the stamp so parallel workers don't collide on _id (the configs collection
@@ -239,7 +245,7 @@ test.describe('reassign — Step 5', () => {
     });
 
     test('routine-generated item reassign attempt: server returns 400, item stays put', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const emailA = `routine-gen-a-${stamp}@example.com`;
         const emailB = `routine-gen-b-${stamp}@example.com`;
         await resetServerForEmails([emailA, emailB]);

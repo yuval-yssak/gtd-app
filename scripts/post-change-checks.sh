@@ -57,6 +57,8 @@ run_client() {
         npm run lint:fix || { echo "❌ lint:fix failed"; rc=1; }
         npm run lint:css || { echo "❌ lint:css (stylelint token gate) failed"; rc=1; }
         npm run typecheck || { echo "❌ typecheck failed"; rc=1; }
+        # The e2e specs import client modules and types, so a client-only change can break them.
+        (cd "$REPO_ROOT/e2e" && npm run typecheck) || { echo "❌ e2e typecheck failed"; rc=1; }
         npm run test || { echo "❌ test failed"; rc=1; }
         [ $rc -eq 0 ] && echo "✅ Client checks passed — invoke the client-code-reviewer agent next"
         return $rc
@@ -84,6 +86,7 @@ run_e2e() {
         cd "$REPO_ROOT/e2e" || return 1
         local rc=0
         npm run lint:fix || { echo "❌ lint:fix failed"; rc=1; }
+        npm run typecheck || { echo "❌ typecheck failed"; rc=1; }
         # Specs edited THIS turn plus any spec that has not passed since it last ran — not every
         # spec in the uncommitted diff, which on a long branch would rerun the same specs every turn
         # and blow the budget. Deleted specs are dropped: Playwright exits non-zero

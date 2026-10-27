@@ -34,7 +34,7 @@ npm start            # Run compiled server
 npm run test         # Run Vitest tests
 npm run lint         # Biome lint check
 npm run lint:fix     # Auto-fix lint + format (Biome)
-npm run typecheck    # tsc --noEmit
+npm run typecheck    # tsrs --noEmit
 npx vitest run src/tests/auth.test.ts   # single test file
 ```
 
@@ -43,13 +43,13 @@ API tests need a local Mongo. Use a throwaway container: `docker run -d --rm --n
 ### Client (`cd client`)
 ```bash
 npm run dev                          # Watch build + preview server (port 4173)
-npm run build                        # generate-typed-css-modules + vite build + tsc -b
+npm run build                        # generate-typed-css-modules + vite build + tsrs -b
 npm run generate-typed-css-modules   # Regenerate .css.d.ts for CSS Modules
 npm run test                         # Run Vitest tests
 npx vitest run src/tests/allDayDate.test.ts   # Single test file
 npm run lint                         # Biome lint check
 npm run lint:fix                     # Auto-fix lint + format (Biome)
-npm run typecheck                    # tsc -b --noEmit
+npm run typecheck                    # tsrs -b --noEmit
 npm run preview                      # Preview production build
 npm run storybook                    # Storybook on port 6006
 ```
@@ -59,10 +59,11 @@ npm run storybook                    # Storybook on port 6006
 npm run test                    # Full Playwright suite (slow)
 npx playwright test <spec>      # Single spec — the inner loop
 npm run lint:fix                # Biome format + lint
+npm run typecheck               # tsrs --noEmit (specs + the client modules they import)
 npm run cleanup-e2e-seeds       # Drop calendar integrations leaked by /dev/calendar/seed-integration (mongosh, reads api-server/.env)
 ```
 
-The e2e stack runs on **its own ports** — API `4100`, client `4273` (`e2e/helpers/env.ts`; override with `GTD_E2E_API_PORT` / `GTD_E2E_CLIENT_PORT` to run two worktrees side by side) — and Playwright always starts both itself (`reuseExistingServer: false`), so your dev servers on 4000/4173 are never touched or reused. The API runs with `TZ=UTC BRIEF_FAKE_MODEL=1`; the client is a `vite build` into `client/dist-e2e` against the e2e API, then `vite preview`. A port already taken fails the run loudly. Specs reach the stack through `API_URL` / `CLIENT_URL` from `helpers/env.ts` — never a hardcoded port; code inside `page.evaluate` runs in the browser and takes the URL as an argument. `global-setup.ts` builds `tools/mcp-gtd` and `mcp-server` once before workers spawn. `retries: 0` — a test that only passes on a retry is flaky and must be fixed. Prove a fix with `--repeat-each=N --workers=4`; test emails take `uniqueStamp()` (`helpers/uniqueStamp.ts`), because a bare `dayjs().valueOf()` collides when repeats start in the same millisecond and two runs then share one user's data.
+The e2e stack runs on **its own ports** — API `4100`, client `4273` (`e2e/helpers/env.ts`; override with `GTD_E2E_API_PORT` / `GTD_E2E_CLIENT_PORT` to run two worktrees side by side) — and Playwright always starts both itself (`reuseExistingServer: false`), so your dev servers on 4000/4173 are never touched or reused. The API runs with `TZ=UTC BRIEF_FAKE_MODEL=1`; the client is a `vite build` into `client/dist-e2e` against the e2e API, then `vite preview`. A port already taken fails the run loudly. Specs reach the stack through `API_URL` / `CLIENT_URL` from `helpers/env.ts` — never a hardcoded port; code inside `page.evaluate` runs in the browser and takes the URL as an argument. `global-setup.ts` builds `tools/mcp-gtd` and `mcp-server` once before workers spawn. `retries: 0` — a test that only passes on a retry is flaky and must be fixed. Prove a fix with `--repeat-each=N --workers=4`; test emails and timestamp-derived seeded ids take `uniqueStamp()` (`helpers/uniqueStamp.ts`), because a bare `dayjs().valueOf()` collides when repeats start in the same millisecond and two runs then share one user's data (or one id).
 
 Manual Google Calendar smoke-test plans (one Claude session per case, driven through Chrome) live under `e2e/gcal-sync-smoke/`; `CONTINUE_HERE.md` at the root is their index.
 
@@ -72,10 +73,10 @@ If e2e cannot start because 4100 or 4273 is taken, an earlier run left a server 
 
 ### MCP server (`cd mcp-server`)
 ```bash
-npm run build        # tsc → dist/index.js (also runs on `npm install` via prepare)
+npm run build        # tsrs -p tsconfig.build.json → dist/index.js, tests left out (also runs on `npm install` via prepare)
 npm run dev          # tsx watch; reads GTD_API_BASE / GTD_API_TOKEN from the shell
 npm run test         # Vitest — fetch is mocked, no server needed
-npm run typecheck && npm run lint:fix
+npm run typecheck && npm run lint:fix   # typecheck covers src/tests too
 ```
 
 An MCP client (Claude CLI / Desktop) holds the `dist/` process for its whole session — after editing source, rebuild **and** restart the client or it keeps running the old code.
@@ -185,6 +186,7 @@ Design detail: [`docs/plans/item-brief.md`](docs/plans/item-brief.md); schema: [
 ## Code Style
 - Biome: 160-char line width, 4-space indent, single quotes. One config for the whole repo (`biome.jsonc` at the root); each package runs its own `biome check`, so lint from inside the package you changed.
 - TypeScript strict mode enabled
+- The compiler is [tsrs](https://github.com/oxc-project/tsrs) (Rust port of TypeScript 7) for every `build` / `typecheck` script. It is a beta, so it is **pinned to an exact version** in each package — bump all packages together and diff the diagnostics against `tsc` before landing a bump. `typescript` stays installed for editors and as the reference compiler; it may be a minor version behind tsrs, so an editor can occasionally disagree with `npm run typecheck` — the script is authoritative.
 - Biome handles all formatting and linting automatically (`npm run lint:fix`). Do not manually fix formatting, import order, or other issues that Biome enforces — just run `lint:fix`.
 
 ## Coding Standards
@@ -317,7 +319,7 @@ After any code change — bug fix, feature, or refactor — run the following cy
 1. `cd client && npm run generate-typed-css-modules` — regenerates `.d.ts` files for CSS Modules
 2. `npm run lint:fix` — Biome format + lint (may auto-correct files; subsequent steps run on the corrected state)
 3. `npm run lint:css` — stylelint token gate on CSS Modules (`client/stylelint.config.js`); has no autofix
-4. `npm run typecheck`
+4. `npm run typecheck`, then `cd ../e2e && npm run typecheck` — the specs import client modules and types
 5. `npm run test`
 6. Invoke the `client-code-reviewer` subagent (canonical source: `client/.claude/agents/code-reviewer.md`)
 
@@ -329,7 +331,8 @@ After any code change — bug fix, feature, or refactor — run the following cy
 
 **E2E changes (any file under `e2e/`):**
 1. `cd e2e && npm run lint:fix`
-2. `npx playwright test <changed specs>` — only specs that actually changed; full suite is too slow for the inner loop
+2. `npm run typecheck`
+3. `npx playwright test <changed specs>` — only specs that actually changed; full suite is too slow for the inner loop
 
 A stop hook (`scripts/post-change-checks.sh`) runs the client / api-server / e2e blocks **in parallel** after each Claude response. It exits 2 (blocking) on any failure so Claude is automatically re-invoked until everything is green. It skips entirely unless a PostToolUse hook wrote the `.claude/.edited-this-turn` sentinel (one edited path per line) — a manual rerun after the sentinel is consumed is a silent no-op.
 

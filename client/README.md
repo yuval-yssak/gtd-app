@@ -15,13 +15,13 @@ The API server must be running on port 4000 (Vite proxies `/auth`, `/sync`, `/pu
 
 ```bash
 npm run dev                        # Vite dev server with HMR
-npm run build                      # tsc + vite build (production)
+npm run build                      # generate-typed-css-modules + vite build + tsrs -b (production)
 npm run preview                    # preview production build locally
 npm run test                       # run Vitest tests
 npm run test:coverage              # tests with v8 coverage report
 npm run lint                       # Biome lint check
 npm run lint:fix                   # auto-fix lint + format
-npm run typecheck                  # tsc -b --noEmit
+npm run typecheck                  # tsrs -b --noEmit
 npm run generate-typed-css-modules # regenerate .d.ts files for CSS Modules
 npm run storybook                  # Storybook on http://localhost:6006
 npm run build-storybook            # static Storybook build

@@ -1,5 +1,4 @@
 import { type APIRequestContext, type Browser, type BrowserContext, expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { resetServerForEmails, withOneLoggedInDevice } from './helpers/context';
 import { API_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
@@ -87,7 +86,7 @@ test.describe('public /v1/operations/batch', () => {
 
             await withBearerOnlyContext(browser, async (apiContext) => {
                 const auth = { headers: { Authorization: `Bearer ${plaintext}`, 'Content-Type': 'application/json' } };
-                const id = `it-batch-rank-${dayjs().valueOf()}`;
+                const id = `it-batch-rank-${uniqueStamp()}`;
                 const ops = [
                     {
                         entityType: 'item',
@@ -124,8 +123,8 @@ test.describe('public /v1/operations/batch', () => {
 
             await withBearerOnlyContext(browser, async (apiContext) => {
                 const auth = { headers: { Authorization: `Bearer ${plaintext}`, 'Content-Type': 'application/json' } };
-                const wcId = `wc-403-${dayjs().valueOf()}`;
-                const personId = `p-403-${dayjs().valueOf()}`;
+                const wcId = `wc-403-${uniqueStamp()}`;
+                const personId = `p-403-${uniqueStamp()}`;
                 const ops = [
                     {
                         entityType: 'workContext',
@@ -167,8 +166,8 @@ test.describe('public /v1/operations/batch', () => {
 
             await withBearerOnlyContext(browser, async (apiContext) => {
                 const auth = { headers: { Authorization: `Bearer ${plaintext}`, 'Content-Type': 'application/json' } };
-                const validId = `valid-${dayjs().valueOf()}`;
-                const invalidId = `invalid-${dayjs().valueOf()}`;
+                const validId = `valid-${uniqueStamp()}`;
+                const invalidId = `invalid-${uniqueStamp()}`;
                 const ops = [
                     {
                         entityType: 'item',

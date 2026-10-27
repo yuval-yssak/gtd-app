@@ -190,7 +190,9 @@ describe('item tools', () => {
     it('gtd_update_item keeps the notes Markdown-link guidance at the property level of the JSON Schema', () => {
         // `.describe()` must be applied after `.nullable().optional()` — otherwise zod emits the
         // description inside `anyOf[0]` and most MCP clients never show it.
-        const schema = z.toJSONSchema(z.object(t.updateItem.inputSchema), { io: 'input' }) as { properties: Record<string, { description?: string }> };
+        const schema = z.toJSONSchema(z.object(t.updateItem.inputSchema), { io: 'input' }) as {
+            properties: Partial<Record<'notes' | 'waitingForPersonId', { description?: string }>>;
+        };
         expect(schema.properties.notes?.description).toContain('Markdown');
         expect(schema.properties.waitingForPersonId?.description).toContain('null clears');
     });
@@ -504,7 +506,7 @@ describe('registerOne URL decoration (end-to-end)', () => {
                 captured = callback;
             },
         };
-        const { api } = makeFakeApi({}, { webBase: webBase ?? undefined });
+        const { api } = makeFakeApi({}, { webBase });
         const tool = defineTool({ name: toolName, description: 'test', inputSchema: {}, handler: async () => handlerResult });
         // biome-ignore lint/suspicious/noExplicitAny: the stub matches registerOne's structural McpServer use.
         registerOne(server as any, tool, api);

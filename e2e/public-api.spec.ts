@@ -1,5 +1,4 @@
 import { type APIRequestContext, type Browser, type BrowserContext, expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { resetServerForEmails, withOneLoggedInDevice } from './helpers/context';
 import { API_URL } from './helpers/env';
 import { uniqueStamp } from './helpers/uniqueStamp';
@@ -281,7 +280,7 @@ test.describe('public /v1 API', () => {
 
         await withOneLoggedInDevice(browser, email, async (page) => {
             const { plaintext } = await mintTokenViaSession(page.context().request, 'cal-link');
-            const eventId = `ev-e2e-${dayjs().valueOf()}`;
+            const eventId = `ev-e2e-${uniqueStamp()}`;
             const calendarBody = { status: 'calendar', timeStart: '2099-09-29T15:30:00', timeEnd: '2099-09-29T16:15:00', calendarEventId: eventId };
 
             await withBearerOnlyContext(browser, async (apiContext) => {

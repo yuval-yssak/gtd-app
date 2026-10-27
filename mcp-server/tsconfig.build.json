@@ -1,0 +1,5 @@
+{
+    "extends": "./tsconfig.json",
+    // Emit only the server — emitting the specs would let Vitest discover both .ts and .js versions of every one.
+    "exclude": ["node_modules", "dist", "src/tests"]
+}

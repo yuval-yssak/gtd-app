@@ -1,5 +1,4 @@
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withOneLoggedInDevice, withTwoAccountsOnOneDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
 import { uniqueStamp } from './helpers/uniqueStamp';
@@ -83,7 +82,7 @@ test.describe('unsaved-changes guard — item editor', () => {
     });
 
     test('an owner change alone triggers the guard; Discard leaves ownership untouched', async ({ browser }) => {
-        const ts = dayjs().valueOf();
+        const ts = uniqueStamp();
         const emailA = `guard-owner-a-${ts}@example.com`;
         const emailB = `guard-owner-b-${ts}@example.com`;
         await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page, { active }) => {

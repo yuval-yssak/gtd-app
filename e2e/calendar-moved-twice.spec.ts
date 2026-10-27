@@ -1,5 +1,4 @@
 import { expect, type Page, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { API_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
@@ -64,9 +63,8 @@ test.describe('calendar — recurring instance moved twice', () => {
 
             // Create a calendar routine linked to a GCal master event id. The routine's
             // calendarItemTemplate.timeOfDay is the wall-clock time used to compute instance ids.
-            const masterEventId = `gcal-master-moved-twice-${dayjs().valueOf()}`;
+            const masterEventId = `gcal-master-moved-twice-${uniqueStamp()}`;
             const routine = await gtd.createRoutine(page, {
-                userId,
                 title: 'Yuval <> Gilad',
                 routineType: 'calendar',
                 rrule: 'FREQ=WEEKLY;BYDAY=TU',

@@ -1,6 +1,5 @@
 import type { Page } from '@playwright/test';
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withOneLoggedInDevice, withTwoAccountsOnOneDevice } from './helpers/context';
 import { CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
@@ -97,7 +96,7 @@ test.describe('account action backdrop', () => {
     // endpoint is completely unreachable (the cookie is reconciled after the reload by
     // reconcileActiveSessionCookie, which swallows the failure and defers to the next online pass).
     test('switching account succeeds even when the auth set-active endpoint is unreachable (local-first contract)', async ({ browser }) => {
-        const ts = dayjs().valueOf();
+        const ts = uniqueStamp();
         const emailA = `switch-backdrop-a-${ts}@example.com`;
         const emailB = `switch-backdrop-b-${ts}@example.com`;
 

@@ -264,7 +264,7 @@ The block is advisory — the write has already succeeded — and is omitted ent
 
 ```bash
 npm run dev        # tsx watch — picks up GTD_API_TOKEN from your shell env
-npm run typecheck  # tsc --noEmit
+npm run typecheck  # tsrs --noEmit — source and tests
 npm run test       # vitest run
 npm run lint:fix   # biome
 ```

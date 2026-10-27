@@ -4,13 +4,17 @@
     "scripts": {
         "test": "playwright test --retries=0",
         "lint": "biome check",
+        "typecheck": "tsrs --noEmit",
         "lint:fix": "biome check . --write",
         "lint:fix:unsafe": "biome check --write --unsafe",
         "cleanup-e2e-seeds": "set -a && . ../api-server/.env && set +a && mongosh \"$MONGO_DB_URL/$MONGO_DB_NAME\" --quiet --file scripts/cleanupE2ECalendarSeeds.js"
     },
     "devDependencies": {
         "@biomejs/biome": "2.6.2",
-        "@playwright/test": "^1.64.1"
+        "@playwright/test": "^1.64.1",
+        "@types/node": "^26.6.5",
+        "tsrs": "0.20.0-ts7.1.0-beta",
+        "typescript": "~7.0.2"
     },
     "dependencies": {
         "dayjs": "^1.11.23"

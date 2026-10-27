@@ -87,3 +87,4 @@
 - [Native fieldset disabled misses Base UI spans](feedback_native_fieldset_disabled_misses_base_ui_spans.md) — DS Radio/Checkbox/Switch are spans; `<fieldset disabled>` locks leave them live. Pass `disabled` explicitly.
 - [MUI implicit defaults + h6 mapping slips](feedback_mui_default_and_h6_mapping_slips.md) — bare CircularProgress=40px (Spinner 24); Typography h6 is `titleSm` not `subtitle`; un-dropped module rules after emotion leaves.
 - [Suspense boundary moves strand comments](feedback_suspense_boundary_move_strands_comments.md) — sibling boundary comments keep claiming the old catch; React 19.3 also hides portals under a re-suspend.
+- [Cross-package typecheck gated on own dir](feedback_cross_package_typecheck_gated_on_own_dir.md) — e2e typecheck imports client/src but the hook runs it only on e2e/ diffs; client type edits drift silently.

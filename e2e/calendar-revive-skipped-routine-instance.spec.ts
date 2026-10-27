@@ -83,7 +83,7 @@ test.describe('calendar — un-deleted (revived) routine instance from GCal', ()
             const userId = (await gtd.getActiveAccountId(page)) as string;
             const seeded = await seedIntegration(userId);
 
-            const masterEventId = `gcal-master-revive-${dayjs().valueOf()}`;
+            const masterEventId = `gcal-master-revive-${uniqueStamp()}`;
             const routine = await gtd.createRoutine(page, {
                 title: 'Standup',
                 routineType: 'calendar',

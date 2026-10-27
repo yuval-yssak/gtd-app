@@ -72,7 +72,6 @@ test.describe('calendar disconnect — keepLinkedEntities', () => {
             // Create a calendar routine linked to the same integration. routineMutations doesn't
             // make a real GCal call — it just stores the linkage in IDB.
             const routine = await gtd.createRoutine(page, {
-                userId,
                 title: 'Linked routine',
                 routineType: 'calendar',
                 rrule: 'FREQ=WEEKLY;BYDAY=MO',
@@ -227,7 +226,6 @@ test.describe('calendar disconnect — removeLinkedEntities', () => {
             // the skipGCalDelete short-circuit — a real call would hit /calendar/v3 with bogus
             // tokens and 401, surfacing the regression.
             const routine = await gtd.createRoutine(page, {
-                userId,
                 title: 'Daily standup',
                 routineType: 'calendar',
                 rrule: 'FREQ=DAILY',

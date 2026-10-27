@@ -5,12 +5,12 @@
     "private": true,
     "scripts": {
         "dev": "tsx watch src/index.ts",
-        "build": "tsc",
+        "build": "tsrs",
         "start": "node build/index.js",
         "lint": "biome check",
         "lint:fix": "biome check . --write",
         "lint:fix:unsafe": "biome check --write --unsafe",
-        "typecheck": "tsc --noEmit",
+        "typecheck": "tsrs --noEmit",
         "test": "vitest run",
         "test:watch": "vitest",
         "test:sync-audit:setup": "tsx --env-file=.env src/tests-sync-audit/setupOAuth.ts",
@@ -40,6 +40,7 @@
         "@types/node": "^26.6.5",
         "@types/turndown": "^5.0.6",
         "@types/web-push": "^3.6.4",
+        "tsrs": "0.20.0-ts7.1.0-beta",
         "tsx": "latest",
         "typescript": "latest",
         "vitest": "latest"

@@ -3,6 +3,7 @@ import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { resetServerForEmails, withTwoAccountsOnOneDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // E2e regression for the per-(device, user) sync-cursor fix. Pre-fix, two Better Auth sessions on
 // one device shared a single `lastSyncedTs` cursor. Combined with the server's strict-`$gt` pull
@@ -38,7 +39,7 @@ test.describe('cross-account sync cursor (per-user)', () => {
     // unconditional global reset in beforeEach wiped session+user data for tests running
     // concurrently in other workers, surfacing as 401s and timeouts.
     test('per-user cursors are independent: each Better Auth session on the device gets its own syncCursors row', async ({ browser }) => {
-        const ts = dayjs().valueOf();
+        const ts = uniqueStamp();
         const emailA = `cursor-a-${ts}@example.com`;
         const emailB = `cursor-b-${ts}@example.com`;
         await resetServerForEmails([emailA, emailB]);
@@ -77,7 +78,7 @@ test.describe('cross-account sync cursor (per-user)', () => {
         // The schema-level invariant: after the boot sync, each user has its own `syncCursors`
         // row keyed by userId. Pre-fix, the singleton `deviceSyncState['local']` row held one
         // shared cursor — there was no way to express per-user cursors at the IDB level.
-        const ts = dayjs().valueOf();
+        const ts = uniqueStamp();
         const emailA = `cursor-adv-a-${ts}@example.com`;
         const emailB = `cursor-adv-b-${ts}@example.com`;
         await resetServerForEmails([emailA, emailB]);

@@ -22,8 +22,8 @@
         "lib": ["ES2023"],
         "types": ["node"]
     },
+    // Covers the tests too, so `npm run typecheck` checks them — Vitest strips their types without
+    // checking. `build` emits through tsconfig.build.json, which leaves them out.
     "include": ["src/**/*.ts"],
-    // Tests are typechecked via `npm run typecheck` (`tsc --noEmit`) but not emitted to dist —
-    // shipping compiled tests would let Vitest discover both .ts and .js versions of every spec.
-    "exclude": ["node_modules", "dist", "src/tests"]
+    "exclude": ["node_modules", "dist"]
 }

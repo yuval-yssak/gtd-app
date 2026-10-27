@@ -3,6 +3,7 @@ import dayjs from 'dayjs';
 import { resetServerForEmails, withTwoAccountsOnOneDevice } from './helpers/context';
 import { API_URL, CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Regression for the "item disappears after cross-account move" bug. The reassign endpoint emits
 // two ops with the same entityId (delete under source, create under target). The orchestrator
@@ -21,7 +22,7 @@ test.describe('cross-account reassign — item survives delete-op clobber', () =
     // Each test scopes its /dev/reset to its unique stamped emails so concurrent specs in
     // other workers keep their session/user data.
     test('plain (non-calendar) item: row stays in IDB under target after reassign', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const emailA = `clobber-na-a-${stamp}@example.com`;
         const emailB = `clobber-na-b-${stamp}@example.com`;
         await resetServerForEmails([emailA, emailB]);
@@ -56,7 +57,7 @@ test.describe('cross-account reassign — item survives delete-op clobber', () =
     });
 
     test('calendar item: row stays in IDB after a cross-account move with new GCal event', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const emailA = `clobber-cal-a-${stamp}@example.com`;
         const emailB = `clobber-cal-b-${stamp}@example.com`;
         // configIds carry the stamp so parallel workers don't collide on _id.

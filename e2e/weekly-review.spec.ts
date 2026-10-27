@@ -680,7 +680,7 @@ test.describe('weekly review', () => {
     });
 
     test('a mid-reassign item gets a working escape hatch: the pinned bar drops it past a single-item queue', async ({ browser }) => {
-        const ts = dayjs().valueOf();
+        const ts = uniqueStamp();
         const emailA = `wr-blocked-a-${ts}@example.com`;
         const emailB = `wr-blocked-b-${ts}@example.com`;
         // Unlike withOneLoggedInDevice, the two-account helper leaves the server reset to the

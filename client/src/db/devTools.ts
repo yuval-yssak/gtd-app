@@ -6,6 +6,7 @@ import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import { getAllSyncConfigs } from '../api/calendarApi';
 import { getPushStatus } from '../api/pushApi';
+import { API_SERVER } from '../constants/globals';
 import { announceAccountReauthResolved } from '../contexts/accountReauthEvents';
 import { setItemsReadDelayForTesting } from '../data/appResource';
 import { briefSourceHash } from '../lib/briefSource';
@@ -250,7 +251,7 @@ export function mountDevTools(db: IDBPDatabase<MyDB>): void {
             toUserId: string;
             targetCalendar: { integrationId: string; syncConfigId: string };
         }) => {
-            const res = await fetch('http://localhost:4000/dev/calendar/simulate-event-move', {
+            const res = await fetch(`${API_SERVER}/dev/calendar/simulate-event-move`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body),

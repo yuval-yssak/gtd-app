@@ -1,5 +1,4 @@
 import { type APIRequestContext, type Browser, type BrowserContext, expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { resetServerForEmails, withOneLoggedInDevice } from './helpers/context';
 import { API_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
@@ -47,7 +46,7 @@ test.describe('public /v1 full-surface lifecycle', () => {
 
             await withBearerOnlyContext(browser, async (apiContext) => {
                 const auth = { headers: { Authorization: `Bearer ${plaintext}` } };
-                const ts = dayjs().valueOf();
+                const ts = uniqueStamp();
 
                 // 1. Capture an inbox item.
                 const capture = await apiContext.request.post(`${API_URL}/v1/items`, {
