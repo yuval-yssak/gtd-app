@@ -140,20 +140,20 @@ test.describe('Marking a future calendar item done asks first', () => {
         });
     });
 
-    test('weekly review routine card: Mark done on a later-day occurrence asks; Cancel keeps it, confirming completes it', async ({ browser }) => {
+    test('weekly review routine card: Done on a later-day occurrence asks; Cancel keeps it, confirming completes it', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `future-done-routine-card-${uniqueStamp()}@example.com`, async (page) => {
             const { first } = await seedRoutineStartingTomorrow(page, 'Daily standup');
             await page.goto('/weekly-review?stage=calendar');
             await page.getByTestId('startReviewButton').click();
             await expect(page.getByTestId('routineReviewCard')).toBeVisible();
 
-            await page.getByTestId('routineCardMarkOccurrenceDone').click();
+            await page.getByTestId('routineCardDone').click();
             await expect(confirmDialog(page)).toContainText('Daily standup');
             await confirmDialog(page).getByRole('button', { name: 'Cancel' }).click();
             await expect(confirmDialog(page)).toHaveCount(0);
             expect(await statusOf(page, first._id)).toBe('calendar');
 
-            await page.getByTestId('routineCardMarkOccurrenceDone').click();
+            await page.getByTestId('routineCardDone').click();
             await page.getByTestId('futureDoneConfirmButton').click();
             await expect(page.getByTestId('stageEmptyCard')).toBeVisible();
             await expect.poll(() => statusOf(page, first._id)).toBe('done');

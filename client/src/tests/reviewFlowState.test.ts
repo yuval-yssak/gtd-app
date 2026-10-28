@@ -19,6 +19,7 @@ import {
     removeDecision,
     requeueAtCursor,
     requeueReadiness,
+    retireReviewedOccurrence,
     reviewStats,
     routineEntryId,
     routineIdOfEntry,
@@ -433,6 +434,40 @@ describe('stage queue', () => {
         const afterNextDecision = completeCurrentItem(midUndo); // 'b' decided during the gap
         expect(afterNextDecision.droppedIds).toEqual(['a']);
         expect(reconcileQueue(afterNextDecision, ['a', 'c'])).toBe(afterNextDecision);
+    });
+
+    it('a routine card retires the occurrence it reviewed: an exception born from that edit never re-offers it mid-stage', () => {
+        const routineEntry = routineEntryId('r1');
+        // Retired at decision time — before the save makes the edited occurrence an exception.
+        const retired = retireReviewedOccurrence(buildStageQueue([routineEntry, 'next']), 'occ');
+        expect(reconcileQueue(retired, [routineEntry, 'next', 'occ'])).toBe(retired);
+    });
+
+    it('a routine card retires an exception the reconcile already appended (a text autosave made it one mid-card)', () => {
+        const routineEntry = routineEntryId('r1');
+        const appended = reconcileQueue(buildStageQueue([routineEntry, 'next']), [routineEntry, 'next', 'occ']);
+        expect(appended.pending).toEqual([routineEntry, 'next', 'occ']);
+        const retired = retireReviewedOccurrence(appended, 'occ');
+        expect(retired.pending).toEqual([routineEntry, 'next']);
+        expect(currentQueueItemId(retired)).toBe(routineEntry);
+        expect(decidedItemIds(retired)).toEqual([]);
+    });
+
+    it('retiring the id AT the cursor lands the walk on its successor', () => {
+        const queue = { pending: ['a', 'occ', 'b'], cursor: 1, decisions: [] };
+        expect(currentQueueItemId(retireReviewedOccurrence(queue, 'occ'))).toBe('b');
+    });
+
+    it('retiring an id that is not queued only excludes it from the live append', () => {
+        const queue = buildStageQueue(['a']);
+        const retired = retireReviewedOccurrence(queue, 'occ');
+        expect(retired.pending).toEqual(['a']);
+        expect(retired.droppedIds).toEqual(['occ']);
+    });
+
+    it('retiring keeps the cursor on the same entry when the retired id sat before it', () => {
+        const queue = { pending: ['occ', 'current'], cursor: 1, decisions: [] };
+        expect(currentQueueItemId(retireReviewedOccurrence(queue, 'occ'))).toBe('current');
     });
 
     it('entry refresh returns the same reference for an unchanged queue that carries an empty droppedIds array', () => {

@@ -1,106 +1,114 @@
 import type { IDBPDatabase } from 'idb';
-import { CircleCheck, ExternalLink } from 'lucide-react';
-import { type ComponentProps, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { usePendingReassign } from '../../contexts/PendingReassignProvider';
 import { clarifyToDone, FROM_GMAIL_READONLY_MESSAGE } from '../../db/itemMutations';
 import { pauseRoutine } from '../../db/routineMutations';
-import { Button, Card, Chip, IconButton, Text, Tooltip } from '../../designSystem';
-import { useCalendarOptions } from '../../hooks/useCalendarOptions';
-import { useNewTabAwareNavigate } from '../../lib/newTabNavigation';
-import { isOverdueCalendarItem } from '../../lib/routineNextItem';
+import { Button, Card, Text } from '../../designSystem';
 import type { MyDB, StoredItem, StoredRoutine } from '../../types/MyDB';
 import { FutureDoneConfirmDialog, useFutureDoneConfirm } from '../FutureDoneConfirmDialog';
-import { CalendarEventLinks } from '../itemEditor/CalendarEventLinks';
-import { MeetingDetails } from '../itemEditor/MeetingDetails';
-import { MarkdownPreview } from '../markdown/MarkdownPreview';
+import { type ItemEditorActionsApi, ItemEditorBody } from '../itemEditor/ItemEditorBody';
 import { RoutineEditorBody } from '../routineEditor/RoutineEditorBody';
 import { PauseRoutineConfirmDialog } from '../routines/PauseRoutineConfirmDialog';
 import { RoutineReviewBanner } from './RoutineReviewBanner';
-import styles from './RoutineReviewCard.module.css';
 import { routineEntryId, type StageDecisionUndo } from './reviewFlowState';
-import {
-    actionableOccurrence,
-    collapsedOccurrences,
-    formatOccurrenceRelative,
-    formatOccurrenceWhen,
-    occurrenceSummary,
-    representativeEventItem,
-    sortAnchorOccurrence,
-} from './routineReviewCardLogic';
+import { collapsedOccurrences, remainingOccurrencesLabel, reviewedOccurrence } from './routineReviewCardLogic';
 import { StageActionBar, type StageTravel } from './StageActionBar';
 import { StageCardScroller } from './StageCardScroller';
 import { StageNavButtons } from './StageNavButtons';
 import stageStyles from './stageLayout.module.css';
+import type { useStageDecisionNavigation } from './useStageDecisionNavigation';
 import { StageToast, useStageToast } from './useStageToast';
 
-/** The slice of the stage's decision-navigation API a routine entry uses (no editor handshake). */
-interface RoutineEntryDecisionNav {
-    recordDecision: (entryId: string, undo?: StageDecisionUndo) => void;
-    liveNavProps: (isSaving: boolean) => ComponentProps<typeof StageNavButtons>;
-}
+/** The slice of the stage's decision-navigation API a routine entry uses — the same editor handshake a one-off card runs. */
+type RoutineEntryDecisionNav = Pick<
+    ReturnType<typeof useStageDecisionNavigation>,
+    'recordDecision' | 'liveNavProps' | 'blockedNavProps' | 'armExplicitSave' | 'markSaveCommitted' | 'closeAsDecisionOrSkip'
+>;
 
 interface RoutineReviewCardProps {
     routine: StoredRoutine;
     db: IDBPDatabase<MyDB>;
     nav: RoutineEntryDecisionNav;
     travel: StageTravel;
+    /** The card is deciding its entry over this occurrence — keep it from re-joining the walk as an exception card. */
+    onOccurrenceReviewed: (occurrenceId: string) => void;
 }
 
 /**
- * The calendar stage's collapsed routine entry. It reads like the one-off calendar entries around
- * it — the SAME date/time headline the stage sorted it by, then the same GCal event links and
- * meeting-details panel — with the routine distinction carried by the banner and the schedule line
- * rather than by a wholly different layout. The series still reviews as ONE card, so the actions
- * are routine-level (pause, edit, open page) instead of an item editor, and the meeting panel is
- * read-only: attendee edits on a series master belong in the routine editor, not a review glance.
+ * The calendar stage's collapsed routine entry. It IS a one-off calendar card — the same embedded
+ * review editor, opened on the series' first undone occurrence (overdue included), where a time or
+ * text edit makes that occurrence an exception exactly as it would from the calendar page. The
+ * routine distinction is the banner (schedule + series tail) and the series-level actions in the
+ * bar: Pause, and Edit series, which swaps the card body for the routine editor.
+ *
+ * Hosts MUST key this by routine id: the shown occurrence is pinned in state at mount.
  */
-export function RoutineReviewCard({ routine, db, nav, travel }: RoutineReviewCardProps) {
+export function RoutineReviewCard({ routine, db, nav, travel, onOccurrenceReviewed }: RoutineReviewCardProps) {
     const { allItems, people, workContexts, refreshRoutines, refreshItems, syncAndRefresh } = useAppData();
     const { isPending } = usePendingReassign();
-    const { options: calendarOptions } = useCalendarOptions();
-    const navigateOrNewTab = useNewTabAwareNavigate();
     const [isPauseConfirmOpen, setIsPauseConfirmOpen] = useState(false);
-    const [isEditorOpen, setIsEditorOpen] = useState(false);
+    const [isSeriesEditorOpen, setIsSeriesEditorOpen] = useState(false);
     const editButtonRef = useRef<HTMLButtonElement>(null);
     // useState (not useTransition): the pause flow carries an error message alongside the pending
     // flag — the richer-than-one-boolean exception to the useTransition default.
     const [isPausing, setIsPausing] = useState(false);
     // Same richer-than-a-boolean reason as the pause flow: completing surfaces its own error text.
     const [isCompleting, setIsCompleting] = useState(false);
+    // Portal target for the editor's action row — state (not a ref) so ItemEditorBody re-renders
+    // and portals the buttons in once the pinned bar element mounts.
+    const [actionsBarEl, setActionsBarEl] = useState<HTMLElement | null>(null);
+    const [isOccurrenceEditorLocked, setIsOccurrenceEditorLocked] = useState(false);
+    // Pinned at mount: a time or text edit turns the shown occurrence into a modified exception,
+    // which drops it from the collapse — without the pin the editor would jump to the next one.
+    const [pinnedOccurrenceId] = useState(() => reviewedOccurrence(routine, allItems, undefined)?._id);
     const stageToast = useStageToast();
     const futureDone = useFutureDoneConfirm(allItems);
     // A mid-flight cross-account reassign would misroute the pause's item-trashing writes — same
     // guard the routine editor applies to edits.
     const reassignInFlight = isPending('routine', routine._id);
+    const isWriting = isPausing || isCompleting;
     // Same rule as FocusStage / RevisitDecisionCard: a stage jump is a state change the
-    // router-based unsaved-changes guard can never see, so lock travel while the routine editor
-    // is open or a pause write is in flight.
-    const isBusy = isPausing || isCompleting || isEditorOpen;
+    // router-based unsaved-changes guard can never see, so lock travel while either editor holds
+    // edits or a write is in flight.
+    const isBusy = isWriting || isSeriesEditorOpen || isOccurrenceEditorLocked;
     const lockedTravel = isBusy ? { ...travel, prevDisabled: true, nextDisabled: true } : travel;
     // Every decision names this card's entry: pausing (or completing the last occurrence) makes
     // it ineligible, and the reconcile can drop it before the decision lands — deciding "current"
     // then would decide the NEXT card unseen.
     const entryId = routineEntryId(routine._id);
+    const occurrence = reviewedOccurrence(routine, allItems, pinnedOccurrenceId);
+    const seriesTail = remainingOccurrencesLabel(collapsedOccurrences(routine, allItems), occurrence);
+    // The embedded editor carries the AccountPicker: while the occurrence's own reassign is in
+    // flight it renders its inline notice and portals no actions — the bar keeps the escape hatch.
+    const occurrenceReassignInFlight = occurrence !== undefined && isPending('item', occurrence._id);
 
-    const occurrences = collapsedOccurrences(routine, allItems);
-    // The occurrence the calendar stage ranked this entry by — leading with any other date would
-    // contradict the position the card holds in the walk.
-    const anchor = sortAnchorOccurrence(occurrences);
-    const whenLabel = formatOccurrenceWhen(anchor);
-    const relativeLabel = formatOccurrenceRelative(anchor);
-    // GCal meeting metadata lives on the series master; location / meeting link mirror onto the
-    // occurrence. Project both onto one item so the shared calendar components can render it.
-    const eventItem = representativeEventItem(routine, anchor);
-    // A past-but-still-open occurrence is overdue, not absent — flagged so the card says why the
-    // date it leads with has already gone by.
-    const isAnchorOverdue = Boolean(anchor && isOverdueCalendarItem(anchor));
-    // What "Mark done" completes — the same occurrence the routine page offers, which for an
-    // all-past series is the MOST RECENT one, not the earliest (which only sets card position).
-    const actionable = actionableOccurrence(routine, occurrences);
-    const isActionableOverdue = Boolean(actionable && isOverdueCalendarItem(actionable));
-    const notes = routine.template.notes;
+    /**
+     * Records this card's decision, retiring the shown occurrence first so its exception never
+     * re-joins the walk. `undo` is `{}` only for the no-write "Looks good" (undone by a bare
+     * requeue); every write here advances or rewrites the series, which no snapshot reverses.
+     */
+    function decideEntry(undo?: StageDecisionUndo) {
+        retireShownOccurrence();
+        nav.recordDecision(entryId, undo);
+    }
+
+    /**
+     * Retired as the user acts, before any write: the write is what turns the occurrence into an
+     * exception. A save that then fails only keeps a later remote exception for it out of this visit.
+     */
+    function retireShownOccurrence() {
+        if (occurrence) {
+            onOccurrenceReviewed(occurrence._id);
+        }
+    }
+
+    /** Save & next: retire the occurrence, then hand off to the editor's save, whose post-save close decides the entry. */
+    function saveAndDecide(api: ItemEditorActionsApi) {
+        retireShownOccurrence();
+        nav.armExplicitSave(undefined, api.triggerSave);
+    }
 
     async function onPauseConfirmed() {
         setIsPauseConfirmOpen(false);
@@ -120,21 +128,20 @@ export function RoutineReviewCard({ routine, db, nav, travel }: RoutineReviewCar
         }
         // Only after the pause landed: irreversible from the review's point of view (items
         // trashed + GCal cap) — no undo.
-        nav.recordDecision(entryId, undefined);
+        decideEntry();
         // Fire-and-forget: push the pause + pull the GCal-cap echo without holding up the walk.
         void syncAndRefresh();
     }
 
     /**
-     * Complete the occurrence the card leads with. `clarifyToDone` advances the series
+     * Complete the shown occurrence. `clarifyToDone` advances the series
      * (`maybeCreateNextRoutineItem`), so like every routine-generated disposal in the review this
-     * arms NO undo — a snapshot restore would double-book the series. The entry itself stays
-     * decided either way; only the occurrence is written.
+     * arms NO undo — a snapshot restore would double-book the series.
      */
-    async function onMarkOccurrenceDone(occurrence: StoredItem) {
+    async function onMarkOccurrenceDone(target: StoredItem) {
         setIsCompleting(true);
         try {
-            await clarifyToDone(db, occurrence, { onReadOnlyGCal: () => stageToast.showNotice(FROM_GMAIL_READONLY_MESSAGE) });
+            await clarifyToDone(db, target, { onReadOnlyGCal: () => stageToast.showNotice(FROM_GMAIL_READONLY_MESSAGE) });
             await refreshItems();
         } catch (err) {
             console.error('[weekly-review] mark routine occurrence done failed:', err);
@@ -143,14 +150,14 @@ export function RoutineReviewCard({ routine, db, nav, travel }: RoutineReviewCar
         } finally {
             setIsCompleting(false);
         }
-        nav.recordDecision(entryId, undefined);
+        decideEntry();
         void syncAndRefresh();
     }
 
-    // Edit is disabled while the editor is open (isBusy), so closing would drop focus on <body>. Commit
-    // the close synchronously so the button is enabled again, then hand focus back to it.
-    function closeEditor() {
-        flushSync(() => setIsEditorOpen(false));
+    // Edit series is disabled while its editor is open, so closing would drop focus on <body>.
+    // Commit the close synchronously so the button is back, then hand focus to it.
+    function closeSeriesEditor() {
+        flushSync(() => setIsSeriesEditorOpen(false));
         editButtonRef.current?.focus();
     }
 
@@ -159,16 +166,51 @@ export function RoutineReviewCard({ routine, db, nav, travel }: RoutineReviewCar
         await refreshItems();
     };
 
-    // Never called: the panel is mounted read-only, which short-circuits both callbacks.
-    const noopAsync = async () => {};
+    // Pause / Edit series are disabled over unsaved occurrence edits: both replace or rewrite the
+    // occurrence under the editor, silently dropping what the user typed.
+    const renderActions = (api: ItemEditorActionsApi) => {
+        const isSeriesActionBlocked = api.isSaving || api.isDirty || isWriting || reassignInFlight;
+        return (
+            <>
+                <StageNavButtons {...nav.liveNavProps(api.isSaving || isWriting)} />
+                {routine.active && (
+                    <Button disabled={isSeriesActionBlocked} onClick={() => setIsPauseConfirmOpen(true)} data-testid="routineCardPause">
+                        Pause
+                    </Button>
+                )}
+                <Button ref={editButtonRef} disabled={isSeriesActionBlocked} onClick={() => setIsSeriesEditorOpen(true)} data-testid="routineCardEdit">
+                    Edit series
+                </Button>
+                {occurrence && (
+                    <Button
+                        disabled={api.isSaving || isWriting || reassignInFlight}
+                        onClick={() => futureDone.confirmDone(occurrence, (latest) => void onMarkOccurrenceDone(latest))}
+                        data-testid="routineCardDone"
+                    >
+                        Done
+                    </Button>
+                )}
+                {/* Dirty-aware primary, as on a one-off card: untouched → decide without a write
+                    (a bare-requeue undo); edited → the body's save path commits, then its
+                    post-save onClose decides with no undo — an occurrence edit is a routine
+                    exception no snapshot reverses. */}
+                <Button
+                    variant="solid"
+                    disabled={api.isDirty ? api.saveDisabled || isWriting : api.isSaving || isWriting}
+                    onClick={api.isDirty ? () => saveAndDecide(api) : () => decideEntry({})}
+                    data-testid="routineCardLooksGood"
+                >
+                    {api.isDirty || api.hasTextEdits ? 'Save & next' : 'Looks good'}
+                </Button>
+            </>
+        );
+    };
 
     return (
         <div className={stageStyles.stageRoot} data-testid="routineReviewCard">
             <StageCardScroller>
                 <Card padding="none" className={stageStyles.editorCard}>
-                    {/* Edit opens the routine editor inside the card, like the item cards' inline editing — the
-                        review never leaves the walk. Owning the open flag is what lets isBusy lock stage travel. */}
-                    {isEditorOpen ? (
+                    {isSeriesEditorOpen ? (
                         <RoutineEditorBody
                             key={routine._id}
                             db={db}
@@ -176,87 +218,51 @@ export function RoutineReviewCard({ routine, db, nav, travel }: RoutineReviewCar
                             workContexts={workContexts}
                             people={people}
                             routine={routine}
-                            onClose={closeEditor}
+                            onClose={closeSeriesEditor}
                             onSaved={onRoutineSaved}
-                            // The user just pressed Edit: put them in the form, as the dialog this replaced did.
+                            // The user just pressed Edit series: put them in the form.
                             autoFocusTitle
                         />
                     ) : (
                         <>
-                            <RoutineReviewBanner routine={routine} isException={false} routineId={routine._id} />
-                            {whenLabel && (
-                                <div className={styles.whenRow}>
-                                    <Text variant="titleSm" as="p" data-testid="routineCardWhen">
-                                        {whenLabel}
-                                    </Text>
-                                    {relativeLabel && (
-                                        <Text variant="bodySm" tone="secondary" data-testid="routineCardWhenRelative">
-                                            {relativeLabel}
-                                        </Text>
-                                    )}
-                                    {isAnchorOverdue && <Chip label="Overdue" tone="warning" size="sm" data-testid="routineCardOverdueChip" />}
-                                </div>
-                            )}
-                            {/* No repeat icon here: the banner above already carries it — a second one made the
-                                title read as a different KIND of entry than the one-offs around it. */}
-                            <div className={styles.titleRow}>
-                                <Text variant="title" data-testid="routineCardTitle">
-                                    {routine.title}
-                                </Text>
-                                <Tooltip title="Open routine page">
-                                    <IconButton
-                                        size="sm"
-                                        aria-label="Open routine page"
-                                        onClick={(e) => navigateOrNewTab(e, { to: '/routine/$routineId', params: { routineId: routine._id } })}
-                                        data-testid="routineCardOpenPage"
-                                    >
-                                        <ExternalLink />
-                                    </IconButton>
-                                </Tooltip>
-                            </div>
-                            <Text variant="bodySm" tone="secondary" className={styles.occurrences} data-testid="routineCardOccurrences">
-                                {occurrenceSummary(occurrences, anchor)}
-                            </Text>
-                            {notes && (
-                                <div className={styles.notes} data-testid="routineCardNotes">
-                                    <MarkdownPreview markdown={notes} />
-                                </div>
-                            )}
-                            {eventItem && (
-                                <div className={styles.eventDetails}>
-                                    <CalendarEventLinks item={eventItem} calendarOptions={calendarOptions} />
-                                    <MeetingDetails item={eventItem} db={db} readOnly onRsvp={noopAsync} onAttendeesChange={noopAsync} />
-                                </div>
+                            <RoutineReviewBanner routine={routine} isException={false} routineId={routine._id} detail={seriesTail} />
+                            {occurrence ? (
+                                <ItemEditorBody
+                                    key={occurrence._id}
+                                    item={occurrence}
+                                    db={db}
+                                    people={people}
+                                    workContexts={workContexts}
+                                    onClose={() => nav.closeAsDecisionOrSkip(entryId)}
+                                    // Routines too: a time/text edit records a `modified` exception on the routine row.
+                                    onSaved={onRoutineSaved}
+                                    onSaveCommitted={nav.markSaveCommitted}
+                                    onDirtyLockChange={setIsOccurrenceEditorLocked}
+                                    onFromGmailReadOnly={() => stageToast.showNotice(FROM_GMAIL_READONLY_MESSAGE)}
+                                    presentation="review"
+                                    // Text edits wait for Save & next too: an autosave would record the routine
+                                    // exception mid-card, and the reconcile would swap the card out from under the user.
+                                    isTextAutosaveAllowed={false}
+                                    renderActions={renderActions}
+                                    actionsContainer={actionsBarEl}
+                                />
+                            ) : (
+                                <Text tone="secondary">This routine has no open occurrence on the calendar.</Text>
                             )}
                         </>
                     )}
                 </Card>
             </StageCardScroller>
-            <StageActionBar travel={lockedTravel}>
-                <StageNavButtons {...nav.liveNavProps(isBusy)} />
-                {routine.active && (
-                    <Button disabled={isBusy || reassignInFlight} onClick={() => setIsPauseConfirmOpen(true)} data-testid="routineCardPause">
-                        Pause
+            <StageActionBar onBarMounted={setActionsBarEl} travel={lockedTravel}>
+                {/* The occurrence editor portals the full action row; without it (series editor open,
+                    nothing to show) the bar keeps the walk's own arrows. */}
+                {(isSeriesEditorOpen || !occurrence) && <StageNavButtons {...nav.liveNavProps(isSeriesEditorOpen)} />}
+                {!isSeriesEditorOpen && occurrenceReassignInFlight && <StageNavButtons {...nav.blockedNavProps('focusBlockedSkip')} />}
+                {!isSeriesEditorOpen && !occurrence && (
+                    <Button variant="solid" onClick={() => decideEntry({})} data-testid="routineCardLooksGood">
+                        Looks good
                     </Button>
                 )}
-                <Button ref={editButtonRef} disabled={isBusy || reassignInFlight} onClick={() => setIsEditorOpen(true)} data-testid="routineCardEdit">
-                    Edit
-                </Button>
-                {/* Done sits directly left of "Looks good" — the same slot the plain calendar item's
-                    Done occupies — so it holds still as the calendar stage alternates card kinds. */}
-                {actionable && (
-                    <Button
-                        startIcon={<CircleCheck />}
-                        disabled={isBusy || reassignInFlight}
-                        onClick={() => futureDone.confirmDone(actionable, (latest) => void onMarkOccurrenceDone(latest))}
-                        data-testid="routineCardMarkOccurrenceDone"
-                    >
-                        {isActionableOverdue ? 'Mark overdue done' : 'Mark done'}
-                    </Button>
-                )}
-                <Button variant="solid" disabled={isBusy} onClick={() => nav.recordDecision(entryId, {})} data-testid="routineCardLooksGood">
-                    Looks good
-                </Button>
             </StageActionBar>
             <PauseRoutineConfirmDialog
                 routine={isPauseConfirmOpen ? routine : null}

@@ -14,6 +14,7 @@ import {
     currentQueueItemId,
     isModifiedExceptionItem,
     type ReviewStageDefinition,
+    retireReviewedOccurrence,
     routineIdOfEntry,
     type StageDecisionUndo,
     type StageQueue,
@@ -89,7 +90,17 @@ export function FocusStage({ stage, queue, db, onQueueChange, onStageFinished, t
                 </div>
             );
         }
-        return <RoutineReviewCard routine={entryRoutine} db={db} nav={nav} travel={travel} />;
+        return (
+            <RoutineReviewCard
+                // Keyed: the card pins the occurrence it shows at mount, and two routine entries in a row must not share it.
+                key={entryRoutine._id}
+                routine={entryRoutine}
+                db={db}
+                nav={nav}
+                travel={travel}
+                onOccurrenceReviewed={(occurrenceId) => onQueueChange((liveQueue) => retireReviewedOccurrence(liveQueue, occurrenceId))}
+            />
+        );
     }
     const currentItem = currentId ? (allItems.find((item) => item._id === currentId) ?? null) : null;
 

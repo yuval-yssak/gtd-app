@@ -324,6 +324,22 @@ export function excludeFromLiveAppend(queue: StageQueue, itemId: string): StageQ
     return droppedIds.includes(itemId) ? queue : { ...queue, droppedIds: [...droppedIds, itemId] };
 }
 
+/**
+ * A routine card decided its entry while showing one occurrence in the editor. An edit there (a
+ * moved time, an autosaved note) turns that occurrence into a modified exception — its OWN
+ * calendar entry — which the reconcile would otherwise re-offer at the end of the walk although
+ * the user just reviewed it. Pulls it out of `pending` (if already appended) and keeps it out for
+ * the rest of the visit; no decision is recorded, so the walk counter stays one per card.
+ */
+export function retireReviewedOccurrence(queue: StageQueue, occurrenceId: string): StageQueue {
+    const index = queue.pending.indexOf(occurrenceId);
+    const withoutEntry =
+        index === -1
+            ? queue
+            : { ...queue, pending: queue.pending.filter((id) => id !== occurrenceId), cursor: index < queue.cursor ? queue.cursor - 1 : queue.cursor };
+    return excludeFromLiveAppend(withoutEntry, occurrenceId);
+}
+
 /** Lifts an id off the live-append exclusion list; same reference when it was not on it. */
 function withoutLiveAppendExclusion(queue: StageQueue, itemId: string): StageQueue {
     const droppedIds = (queue.droppedIds ?? []).filter((id) => id !== itemId);

@@ -225,6 +225,12 @@ export interface ItemEditorBodyProps {
      * itself always renders.
      */
     hasHostCopyIdButton?: boolean;
+    /**
+     * `false` keeps title/notes edits on the explicit Save path, as for meetings with attendees.
+     * The review's collapsed routine card needs it: an autosaved edit records a routine exception,
+     * which re-shapes the review queue under the card while the user is still typing.
+     */
+    isTextAutosaveAllowed?: boolean;
 }
 
 // Re-exported for callers/tests that historically imported it from here; the implementation moved
@@ -267,6 +273,7 @@ export function ItemEditorBody({
     renderActions,
     actionsContainer,
     hasHostCopyIdButton,
+    isTextAutosaveAllowed = true,
 }: ItemEditorBodyProps) {
     const { options: calendarOptions } = useCalendarOptions();
     // all* (unfiltered) sets: the live-row lookup and routine-link resolution must keep working
@@ -365,8 +372,9 @@ export function ItemEditorBody({
     // Title/notes autosave (debounced, with Undo); everything else (status, schedule, contexts,
     // owner, …) still commits via the explicit Save button. Meetings with attendees are the
     // exception: their title/notes edits stay on explicit Save so the SendUpdatesDialog
-    // ("email attendees?") gate keeps intercepting notification-worthy changes.
-    const textAutosaveEnabled = (liveItem.attendees?.length ?? 0) === 0;
+    // ("email attendees?") gate keeps intercepting notification-worthy changes. A host that opts
+    // out (`isTextAutosaveAllowed={false}`) keeps text edits on explicit Save too.
+    const textAutosaveEnabled = isTextAutosaveAllowed && (liveItem.attendees?.length ?? 0) === 0;
 
     // The item values the form state was last seeded/merged from. A form field differing from its
     // seed is "dirty" (user is editing it); the live-merge effect below uses this to decide which

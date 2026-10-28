@@ -12,6 +12,8 @@ interface RoutineReviewBannerProps {
     isException: boolean;
     /** Falls back to this when the routine itself is unknown — still navigates to its page. */
     routineId: string;
+    /** Trailing context after the schedule — the collapsed routine card's series tail ("41 more after this one"). */
+    detail?: string;
 }
 
 /**
@@ -19,10 +21,11 @@ interface RoutineReviewBannerProps {
  * repetition ("Routine · Every Mon") — or the deviation ("Exception to routine · …") — and clicks
  * through to the routine page.
  */
-export function RoutineReviewBanner({ routine, isException, routineId }: RoutineReviewBannerProps) {
+export function RoutineReviewBanner({ routine, isException, routineId, detail }: RoutineReviewBannerProps) {
     const navigateOrNewTab = useNewTabAwareNavigate();
     const schedule = routine ? formatRoutineSchedule(routine) : null;
     const label = isException ? 'Exception to routine' : 'Routine';
+    const text = schedule ? [`${label} · ${schedule}`, detail].filter(Boolean).join(' · ') : 'Part of a routine';
 
     return (
         <button
@@ -35,7 +38,7 @@ export function RoutineReviewBanner({ routine, isException, routineId }: Routine
         >
             <Repeat size={18} />
             <Text as="span" variant="bodySm" tone="inherit">
-                {schedule ? `${label} · ${schedule}` : 'Part of a routine'}
+                {text}
             </Text>
         </button>
     );

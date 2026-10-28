@@ -28,7 +28,7 @@ async function openRoutineCardInReview(page: Page) {
     await page.getByTestId('stageTravelNext').click();
     await expect(page.getByTestId('reviewStageTitle')).toHaveText('Calendar');
     const card = page.getByTestId('routineReviewCard');
-    await expect(card.getByTestId('routineCardTitle')).toHaveText('Morning gym');
+    await expect(card.getByRole('textbox', { name: 'Title' })).toHaveValue('Morning gym');
     return { routine, card };
 }
 
@@ -42,14 +42,14 @@ test.describe('Weekly review — inline routine editing', () => {
             const title = card.getByRole('textbox', { name: 'Title' });
             // Pressing Edit puts the user in the form.
             await expect(title).toBeFocused();
-            // Travel and the decision buttons are locked while the editor is open.
-            await expect(page.getByTestId('routineCardLooksGood')).toBeDisabled();
+            // The decision buttons leave the bar while the series editor is open.
+            await expect(page.getByTestId('routineCardLooksGood')).toHaveCount(0);
 
             await title.fill('Morning gym (early)');
             await card.getByTestId('routineEditorSaveButton').click();
 
             await expect(card.getByTestId('routineEditorSaveButton')).toHaveCount(0);
-            await expect(card.getByTestId('routineCardTitle')).toHaveText('Morning gym (early)');
+            await expect(card.getByTestId('reviewRoutineBanner')).toHaveAccessibleName('Routine: Morning gym (early)');
             // Saving is an edit, not a review decision: same entry, unlocked, focus back on Edit.
             await expect(page.getByTestId('reviewStageCounter')).toContainText('0 of 1');
             await expect(page.getByTestId('routineCardLooksGood')).toBeEnabled();

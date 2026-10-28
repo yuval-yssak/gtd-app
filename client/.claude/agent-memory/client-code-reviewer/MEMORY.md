@@ -66,3 +66,4 @@
 - [DS whole-slice recurring gaps](feedback_design_system_slice_recurring_gaps.md) — braceless guards in "small" components, tests in sibling files, kitchen-sink stories, dead barrel exports, doc-contract drift
 - [Storybook global fetch stub on docs pages](feedback_storybook_global_fetch_stub_docs_page.md) — per-story window.fetch stubs chain on autodocs pages; last story's config wins, cleanup leaks.
 - [Confirm gate writes a stale snapshot](feedback_confirm_gate_stale_snapshot.md) — confirm dialog in front of clarifyToDone closes over the click-time item; confirm must re-resolve by _id + bail.
+- [Collapsed-entry edit drops entry](project_collapsed_entry_edit_drops_entry.md) — autosave on a routine: entry's occurrence can make the entry ineligible mid-edit; reconcile unmounts the card.

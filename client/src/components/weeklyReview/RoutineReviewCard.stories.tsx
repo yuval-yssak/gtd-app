@@ -26,18 +26,27 @@ const occurrence = (id: string, daysFromToday: number): StoredItem => ({
 const upcomingOccurrences = [occurrence('occ-1', 1), occurrence('occ-2', 2), occurrence('occ-3', 3)];
 const overdueOccurrences = [occurrence('occ-past', -2), ...upcomingOccurrences];
 
-const routineWithNotes = {
-    ...sampleCalendarRoutine,
-    template: { notes: 'Agenda:\n\n1. **Blockers** first\n2. Yesterday / today\n3. Parking lot' },
-};
+// Generated occurrences carry the routine template's notes — the card's editor shows the occurrence's.
+const agendaNotes = 'Agenda:\n\n1. **Blockers** first\n2. Yesterday / today\n3. Parking lot';
+const occurrencesWithNotes = upcomingOccurrences.map((item) => ({ ...item, notes: agendaNotes }));
 
 const nav = {
     recordDecision: fn(),
     liveNavProps: (isSaving: boolean) => ({
         onBack: fn(),
         backDisabled: true,
+        backLabel: 'Revisit previous decision',
         forward: { onForward: fn(), disabled: isSaving, label: 'Skip for now' },
     }),
+    blockedNavProps: (testId: string) => ({
+        onBack: fn(),
+        backDisabled: true,
+        backLabel: 'Revisit previous decision',
+        forward: { onForward: fn(), label: 'Skip blocked item', testId },
+    }),
+    armExplicitSave: fn(),
+    markSaveCommitted: fn(),
+    closeAsDecisionOrSkip: fn(),
 };
 
 const withOccurrences = (allItems: StoredItem[]) =>
@@ -60,23 +69,24 @@ const meta = {
         db: mockDb,
         nav,
         travel: { onPrevStage: fn(), onNextStage: fn(), prevDisabled: false, nextDisabled: false },
+        onOccurrenceReviewed: fn(),
     },
 } satisfies Meta<typeof RoutineReviewCard>;
 
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** A live series collapsed to one card — led by its next occurrence, with Pause / Edit / Mark done / Looks good. */
+/** A live series collapsed to one card — the review editor on its first open occurrence, with Pause / Edit series / Done / Looks good. */
 export const Upcoming: Story = {};
 
-/** The earliest open occurrence already passed — flagged Overdue, and Done reads "Mark overdue done". */
+/** The first open occurrence already passed — the editor opens on IT (not the next upcoming one), and Done completes it. */
 export const Overdue: Story = {
     decorators: [withOccurrences(overdueOccurrences)],
 };
 
-/** The routine template carries Markdown notes — rendered under the occurrence summary. */
+/** The occurrence carries Markdown notes — shown in the editor's notes preview, as on a one-off. */
 export const WithNotes: Story = {
-    args: { routine: routineWithNotes },
+    decorators: [withOccurrences(occurrencesWithNotes)],
 };
 
 /** A paused routine — no Pause button. */
@@ -84,11 +94,26 @@ export const Paused: Story = {
     args: { routine: { ...sampleCalendarRoutine, active: false } },
 };
 
-/** Edit pressed — the routine editor opens inside the card and stage travel locks. */
+/** The occurrence edited in place — the primary reads "Save & next", and the series actions lock over the unsaved edit. */
+export const OccurrenceEdited: Story = {
+    play: async ({ canvasElement }) => {
+        const canvas = within(canvasElement);
+        await userEvent.type(await canvas.findByRole('textbox', { name: 'Title' }), ' (moved)');
+        await waitFor(() => expect(canvas.getByTestId('routineCardLooksGood')).toHaveTextContent('Save & next'));
+        await waitFor(() => expect(canvas.getByTestId('routineCardEdit')).toBeDisabled());
+    },
+};
+
+/** No open occurrence left on this device — the banner, a note, and the walk's own controls. */
+export const NoOpenOccurrence: Story = {
+    decorators: [withOccurrences([])],
+};
+
+/** Edit series pressed — the routine editor replaces the occurrence editor inside the card and stage travel locks. */
 export const EditorOpen: Story = {
     play: async ({ canvasElement }) => {
         await userEvent.click(await within(canvasElement).findByTestId('routineCardEdit'));
-        await waitFor(() => expect(within(canvasElement).queryByTestId('routineCardTitle')).not.toBeInTheDocument());
+        await within(canvasElement).findByTestId('routineEditorSaveButton');
     },
 };
 
