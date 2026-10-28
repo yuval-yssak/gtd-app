@@ -109,11 +109,11 @@ describe('DELETE /v1/routines/:id cascades to generated nextAction items', () =>
         const res = await deleteRoutine('r-delete-cascade', token);
         expect(res.status).toBe(200);
 
-        await waitFor(async () => (await itemsDAO.findByOwnerAndId(item._id, userId))?.status === 'trash');
+        // The fire-and-forget cascade flips the row with updateMany and only THEN records the ops,
+        // so wait for the op itself — waiting on the status alone races the op insert.
+        await waitFor(async () => (await operationsDAO.findArray({ entityId: item._id, opType: 'update' })).length > 0);
         const stored = await itemsDAO.findByOwnerAndId(item._id, userId);
         expect(stored?.status).toBe('trash');
-        const ops = await operationsDAO.findArray({ entityId: item._id, opType: 'update' });
-        expect(ops.length).toBeGreaterThanOrEqual(1);
     });
 
     it('trashes a past-due open item too — unlike pause, delete has no forward-looking date filter', async () => {
