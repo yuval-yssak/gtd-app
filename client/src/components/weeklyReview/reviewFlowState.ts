@@ -1,4 +1,5 @@
 import { compareByRank, compareNextActions } from '../../lib/compareNextActions';
+import type { MoveDirection } from '../../lib/nextActionPosition';
 import { isTicklerHidden, participatesInTickler } from '../../lib/ticklerVisibility';
 import { compareWaitingForByExpectedBy } from '../../lib/waitingForGroups';
 import type { StoredItem, StoredRoutine } from '../../types/MyDB';
@@ -252,6 +253,12 @@ export interface StageQueue {
      * them again. Optional: absent on queues persisted before the field existed.
      */
     droppedIds?: string[];
+    /**
+     * The entry on screen whose rank the user just changed from its card. The next reconcile lays
+     * it out by list order instead of pinning it on screen — a card pushed down hands the walk to
+     * the next entry and is re-offered at its new place — and consumes the mark. Absent otherwise.
+     */
+    yieldedEntryId?: string;
 }
 
 export function buildStageQueue(itemIds: ReadonlyArray<string>): StageQueue {
@@ -488,40 +495,110 @@ export function stageEndTitle(labels: StageEndLabels, queue: StageQueue): string
     return queue.decisions.length > 0 ? labels.allReviewed : labels.empty;
 }
 
-/**
- * Shared filter+append core of the reconcile pair: keeps still-eligible pending ids in order,
- * appends eligible ids that are neither queued, decided, nor in `excludedNewcomers`, and keeps
- * the cursor on the same item. The clamp runs BEFORE appending, so an end-card cursor lands
- * exactly on the first appended arrival. Same reference when nothing changed.
- */
-function mergeQueueWithEligible(queue: StageQueue, eligibleIds: ReadonlyArray<string>, excludedNewcomers: ReadonlySet<string>): StageQueue {
-    const eligible = new Set(eligibleIds);
-    const keptPending = queue.pending.filter((id) => eligible.has(id));
+const sameIds = (a: ReadonlyArray<string>, b: ReadonlyArray<string>) => a.length === b.length && a.every((id, index) => id === b[index]);
+
+/** Eligible ids this visit has neither queued nor decided, minus `excluded` — in list order. */
+function newcomerIds(queue: StageQueue, eligibleIds: ReadonlyArray<string>, excluded: ReadonlySet<string>): string[] {
     const alreadyQueued = new Set([...queue.pending, ...decidedItemIds(queue)]);
-    const newcomers = eligibleIds.filter((id) => !alreadyQueued.has(id) && !excludedNewcomers.has(id));
-    if (keptPending.length === queue.pending.length && newcomers.length === 0) {
+    return eligibleIds.filter((id) => !alreadyQueued.has(id) && !excluded.has(id));
+}
+
+/** The ids of `candidates` in list order. */
+function inListOrder(candidates: ReadonlySet<string>, eligibleIds: ReadonlyArray<string>): string[] {
+    return eligibleIds.filter((id) => candidates.has(id));
+}
+
+/** The walk still ahead of the user: the entries that followed the current one, plus this reconcile's arrivals. */
+interface WalkAhead {
+    /** Pending entries that sat after the cursor. */
+    leftovers: ReadonlySet<string>;
+    /** Eligible entries joining the walk now. */
+    newcomers: ReadonlySet<string>;
+}
+
+/** The entry on screen, and whether it holds its slot through this reconcile. */
+interface CurrentEntry {
+    id: string;
+    isPinned: boolean;
+}
+
+/**
+ * The part of the walk still ahead of the user, in LIST order — the review follows the page's
+ * manual order live, so raising or lowering an item's rank (from the card's Position row, or on
+ * another device) moves it in the walk too. The card on screen is the exception: it stays PINNED
+ * at the head while entries rank past it — a newcomer ranked above it (a fresh capture is minted
+ * at the top of the inbox) waits its turn instead of swapping the card mid-edit, and the
+ * reconcile cannot tell "this card was pushed down" from "something now ranks above it". Only a
+ * card the user re-ranked from its own Position row (`yieldCurrentSlot`) is unpinned, once: the
+ * whole tail then follows the list order, so a card pushed down leaves the slot and a card pulled
+ * up keeps it.
+ */
+function layOutTail(current: CurrentEntry | undefined, ahead: WalkAhead, eligibleIds: ReadonlyArray<string>): string[] {
+    const followers = new Set([...ahead.leftovers, ...ahead.newcomers]);
+    if (current === undefined) {
+        return inListOrder(followers, eligibleIds);
+    }
+    if (!current.isPinned) {
+        return inListOrder(new Set([current.id, ...followers]), eligibleIds);
+    }
+    return [current.id, ...inListOrder(followers, eligibleIds)];
+}
+
+/** The queue without its one-shot yield mark; same reference when there is none. */
+function withoutYield(queue: StageQueue): StageQueue {
+    if (queue.yieldedEntryId === undefined) {
         return queue;
     }
-    // Keep the cursor on the same item (or its successor): shift it left by however many removed
-    // ids preceded it.
-    const removedBeforeCursor = queue.pending.slice(0, queue.cursor).filter((id) => !eligible.has(id)).length;
-    const cursor = Math.min(queue.cursor - removedBeforeCursor, keptPending.length);
-    return { ...queue, pending: [...keptPending, ...newcomers], cursor };
+    const { yieldedEntryId: _consumed, ...rest } = queue;
+    return rest;
+}
+
+/**
+ * Marks the entry on screen as re-ranked from its card: the next reconcile (which runs on the
+ * refreshed items) lays it out by list order instead of pinning it. No-op on the stage-end card.
+ */
+export function yieldCurrentSlot(queue: StageQueue): StageQueue {
+    const current = currentQueueItemId(queue);
+    return current === null ? queue : { ...queue, yieldedEntryId: current };
+}
+
+/**
+ * The stages' reaction to a Position-row move on the card: only a DOWNWARD move yields the slot.
+ * Pulled up, the item is still the one to review next, and unpinning it would let an entry that
+ * already ranks above it (a fresh capture, a remote reorder) take the screen.
+ */
+export function yieldSlotOnDownMove(onQueueChange: (updateQueue: (queue: StageQueue) => StageQueue) => void) {
+    return (direction: MoveDirection): void => {
+        if (direction === 'down') {
+            onQueueChange(yieldCurrentSlot);
+        }
+    };
 }
 
 /**
  * Mid-stage reconcile: drops queue entries that no longer qualify — the item was completed on
- * another device, or resumed state references ids that have since changed status — and APPENDS
- * newly-eligible arrivals at the end of the walk (per design: items added while a stage is being
- * reviewed join it live; the "12 of 34" total grows). Ids the user removed from this visit's walk
- * without deciding (`droppedIds`) are never re-offered mid-stage. A user parked on the stage-end
- * card is handed the first appended newcomer as the new current item.
+ * another device, or resumed state references ids that have since changed status — and merges
+ * newly-eligible arrivals into the walk ahead (per design: items added while a stage is being
+ * reviewed join it live; the "12 of 34" total grows). The walked prefix (▶-skipped entries) keeps
+ * its order; the current entry stays on screen and everything after it follows the list order
+ * (`layOutTail`); a one-shot `yieldCurrentSlot` mark is consumed here.
+ * Ids the user removed from this visit's walk without deciding (`droppedIds`) are never
+ * re-offered mid-stage. A user parked on the stage-end card is handed the first arrival as the
+ * new current item. Same reference when nothing changed, so the wizard's effect settles.
  */
 export function reconcileQueue(queue: StageQueue, eligibleIds: ReadonlyArray<string>): StageQueue {
-    return mergeQueueWithEligible(queue, eligibleIds, new Set(queue.droppedIds ?? []));
+    const eligible = new Set(eligibleIds);
+    const walkedPrefix = queue.pending.slice(0, queue.cursor).filter((id) => eligible.has(id));
+    const current = queue.pending[queue.cursor];
+    const ahead: WalkAhead = {
+        leftovers: new Set(queue.pending.slice(queue.cursor + 1).filter((id) => eligible.has(id))),
+        newcomers: new Set(newcomerIds(queue, eligibleIds, new Set(queue.droppedIds ?? []))),
+    };
+    const currentEntry = current !== undefined && eligible.has(current) ? { id: current, isPinned: queue.yieldedEntryId !== current } : undefined;
+    const pending = [...walkedPrefix, ...layOutTail(currentEntry, ahead, eligibleIds)];
+    const settled = withoutYield(queue);
+    return sameIds(pending, queue.pending) ? settled : { ...settled, pending, cursor: walkedPrefix.length };
 }
-
-const sameIds = (a: ReadonlyArray<string>, b: ReadonlyArray<string>) => a.length === b.length && a.every((id, index) => id === b[index]);
 
 /**
  * Folds decisions onto canonical entry ids — the first decision per entry survives. A folded raw
@@ -614,22 +691,27 @@ function isQueueCanonical(queue: StageQueue, pending: ReadonlyArray<string>, dec
 }
 
 /**
- * Stage (re-)entry queue: still-eligible pending ids keep their order, then anything eligible
- * that has neither been decided nor queued yet is appended — so revisiting a stage offers exactly
- * the undecided leftovers plus new arrivals (e.g. captures made since the stage was first entered),
- * never items already decided this review. Entry clears the per-visit `droppedIds` (dropped items
- * are consciously re-offered) and always restarts the walk at the first undecided item (cursor 0).
- * Returns the same reference when nothing changed.
+ * Stage (re-)entry queue: everything eligible that has not been decided this review, laid out in
+ * the list's current order — so revisiting a stage offers exactly the undecided leftovers plus
+ * new arrivals (e.g. captures made since the stage was first entered), never items already
+ * decided this review, and a rank change made since is honoured. No card is on screen at entry,
+ * so unlike the mid-stage reconcile there is no slot to protect. Entry clears the per-visit
+ * `droppedIds` (dropped items are consciously re-offered) and always restarts the walk at the
+ * first undecided item (cursor 0), and drops a pending yield. Returns the same reference when
+ * nothing changed.
  */
 export function refreshQueueOnEntry(queue: StageQueue | undefined, eligibleIds: ReadonlyArray<string>): StageQueue {
     if (!queue) {
         return buildStageQueue(eligibleIds);
     }
-    const merged = mergeQueueWithEligible(queue, eligibleIds, new Set());
-    if (merged === queue && queue.cursor === 0 && (queue.droppedIds?.length ?? 0) === 0) {
+    const decided = new Set(decidedItemIds(queue));
+    const pending = eligibleIds.filter((id) => !decided.has(id));
+    if (sameIds(pending, queue.pending) && queue.cursor === 0 && (queue.droppedIds?.length ?? 0) === 0 && queue.yieldedEntryId === undefined) {
         return queue;
     }
-    return { ...merged, cursor: 0, droppedIds: [] };
+    // A yield is one-shot per visit like `droppedIds`: a draft persisted between the yield commit
+    // and its reconcile must not resume unpinned.
+    return { ...withoutYield(queue), pending, cursor: 0, droppedIds: [] };
 }
 
 // ── Whole-flow state ─────────────────────────────────────────────────────────

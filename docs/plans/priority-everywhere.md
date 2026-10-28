@@ -24,6 +24,17 @@ so ordering more ITEM lists is client work:
   the status chip (i inbox, n next action, c calendar, w waiting for, s someday, d done, t trash) and Alt+Shift+↑/↓ /
   Alt+↑/↓ move the item (the Position row) — the same keys as the list. Every chip and button names its key in its tooltip.
 - **Legend everywhere**: the keyboard icon moves from the Next Actions header to the sidebar brand row on every desktop screen (none on phones, per the user: touch has no shortcuts).
+- **Weekly Review** (2026-10-28): the review card carries the editor's Position row — compact: icon-only Top/Up/Down/
+  Bottom on the card's meta line, hidden for a one-item section, no "Move to…" — on the ranked stages (Clarify, Final
+  sweep, Next Actions, Waiting For, Someday / Maybe; not the Tickler, which walks by wake-up date). The stage walk
+  follows the list order live: the walk ahead of the card re-sorts on every rank change and ▶-skipped entries behind
+  the cursor stay put. The card on screen stays pinned (a reconcile cannot tell "pushed down" from "something now ranks
+  above me" — a remote reorder or a fresh capture must never swap the card mid-edit); only a move made from the card's
+  own row yields the slot, once (`yieldCurrentSlot`, raised by the row after the live item carries the new rank), so a
+  card pushed down hands the walk to the next item and is re-offered at its new place while a card pulled up stays. The
+  row is locked while structural edits are unsaved — a card swap would drop them. Stage entry lays the undecided
+  leftovers out in the current list order. `reviewFlowState.ts`, `NextActionPositionRow.tsx`,
+  `e2e/weekly-review-position.spec.ts`.
 - **Backfill**: `backfillItemRanks.ts` gained a pass that ranks the open lists' pre-rollout (unranked) rows after their
   status's ranked ones, in their old order — without it an old capture would sort above today's (unranked sorts first).
 - Implementation: the Next Actions wiring was extracted into `hooks/useRankedList.ts` + `components/rankedList/`, which every

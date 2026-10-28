@@ -19,6 +19,7 @@ import {
     type StageDecisionUndo,
     type StageQueue,
     stageEndTitle,
+    yieldSlotOnDownMove,
 } from './reviewFlowState';
 import { StageActionBar, type StageTravel } from './StageActionBar';
 import { StageCardScroller } from './StageCardScroller';
@@ -202,6 +203,10 @@ export function FocusStage({ stage, queue, db, onQueueChange, onStageFinished, t
                         presentation="review"
                         renderActions={renderActions}
                         actionsContainer={actionsBarEl}
+                        // The tickler walks by wake-up date, not rank — a Position row there would
+                        // move the item in a list the user is not looking at.
+                        hasPositionRow={stage.id !== 'tickler'}
+                        onPositionMoved={yieldSlotOnDownMove(onQueueChange)}
                     />
                 </Card>
             </StageCardScroller>

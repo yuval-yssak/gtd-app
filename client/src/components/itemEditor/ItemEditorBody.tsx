@@ -38,6 +38,7 @@ import { briefState } from '../../lib/briefSource';
 import { statusKeyOf } from '../../lib/editorShortcuts';
 import { omitArchived } from '../../lib/entityUsage';
 import { startsOnFutureDay } from '../../lib/futureDoneConfirm';
+import type { MoveDirection } from '../../lib/nextActionPosition';
 import { isBrowserOffline } from '../../lib/onlineStatus';
 import { scopeOptionsToOwner } from '../../lib/ownerScopedPickerOptions';
 import { chordLabel, isApplePlatform } from '../../lib/platformKeys';
@@ -233,6 +234,16 @@ export interface ItemEditorBodyProps {
      * which re-shapes the review queue under the card while the user is still typing.
      */
     isTextAutosaveAllowed?: boolean;
+    /**
+     * Whether the Position row (Top / Up / Down / Bottom / Move to… within the item's list
+     * section) renders. Defaults to on for the plain editor and off for a host that supplies its
+     * own actions (`renderActions`) — reordering is a list concern, not a step of the Process
+     * Inbox wizard's walk. The weekly-review stages whose walk follows the list order opt back
+     * in: raising or lowering an item there moves it in the walk too.
+     */
+    hasPositionRow?: boolean;
+    /** Runs after a Position-row move landed and the live item carries its new rank, with the move's direction. */
+    onPositionMoved?: (direction: MoveDirection) => void;
 }
 
 // Re-exported for callers/tests that historically imported it from here; the implementation moved
@@ -276,6 +287,8 @@ export function ItemEditorBody({
     actionsContainer,
     hasHostCopyIdButton,
     isTextAutosaveAllowed = true,
+    hasPositionRow = renderActions === undefined,
+    onPositionMoved,
 }: ItemEditorBodyProps) {
     const { options: calendarOptions } = useCalendarOptions();
     // all* (unfiltered) sets: the live-row lookup and routine-link resolution must keep working
@@ -1082,6 +1095,18 @@ export function ItemEditorBody({
     );
 
     const bodyProps = bodyPropsFor(presentation);
+    const isPositionRowInMetaRow = presentation === 'review';
+    const positionRow = hasPositionRow && status === liveItem.status && rankSectionKeyOf(liveItem) !== null && (
+        <NextActionPositionRow
+            db={db}
+            item={liveItem}
+            onBeforeMove={() => flushItemTextLocallyRef.current()}
+            onMoved={onPositionMoved}
+            // A host that reacts to moves may swap the card out: hold the row while a remount would lose staged edits.
+            isLocked={onPositionMoved !== undefined && (isDirty || isSaving)}
+            density={isPositionRowInMetaRow ? 'compact' : 'default'}
+        />
+    );
     return (
         // tabIndex -1: a click on the editor's empty space focuses the editor itself (not the page body), so its
         // letter and Alt+arrow shortcuts keep working; it is never a Tab stop.
@@ -1303,15 +1328,14 @@ export function ItemEditorBody({
 
             {/* The item's place in its list's manual order — only while the chosen status is the SAVED one
                 (an item being moved to another list lands at that list's top on save) and the list has a
-                manual order (not the calendar). The weekly-review cards and the Process Inbox wizard (hosts
-                with their own actions) leave it out — reordering is a list concern, not a step of their walk. */}
-            {status === liveItem.status && rankSectionKeyOf(liveItem) !== null && presentation !== 'review' && !renderActions && (
-                <NextActionPositionRow db={db} item={liveItem} onBeforeMove={() => flushItemTextLocallyRef.current()} />
-            )}
+                manual order (not the calendar). The review card has no vertical room for a row of its own,
+                so there the compact controls share the meta row's line. */}
+            {!isPositionRowInMetaRow && positionRow}
 
             <Separator />
 
             <div className={styles.metaRow}>
+                {isPositionRowInMetaRow && positionRow}
                 <Text as="span" variant="caption" tone="secondary" data-testid="itemEditorCreatedAt">
                     Created {dayjs(liveItem.createdTs).format('MMM D, YYYY h:mm A')}
                 </Text>

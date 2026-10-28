@@ -59,3 +59,15 @@ export function positionMoves(sectionItems: readonly StoredItem[], itemId: strin
         bottom: edge('bottom'),
     };
 }
+
+/** Which way a move took the item within its section — what a host walking the list needs to know. */
+export type MoveDirection = 'up' | 'down';
+
+/**
+ * Where the drop lands relative to the item's current slot: below if the row it lands under
+ * currently sits at or after the item (a "Move to…" pick is resolved the same way as Down/Bottom).
+ */
+export function moveDirectionOf(sectionIds: ReadonlyArray<string>, itemId: string, neighbours: NeighbourIds): MoveDirection {
+    const aboveIndex = neighbours.aboveId === undefined ? -1 : sectionIds.indexOf(neighbours.aboveId);
+    return aboveIndex >= sectionIds.indexOf(itemId) ? 'down' : 'up';
+}

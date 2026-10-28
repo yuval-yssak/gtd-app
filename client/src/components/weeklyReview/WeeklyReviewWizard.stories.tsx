@@ -78,6 +78,25 @@ export const SingleItemStage: Story = {
     },
 };
 
+/** The card's compact Position row — the walk follows the list's manual order, so the item can be raised or lowered from here. */
+export const PositionRowOnCard: Story = {
+    play: async ({ canvasElement }) => {
+        const canvas = within(canvasElement);
+        await waitFor(() => expect(canvas.getByTestId('nextActionPositionRow')).toBeVisible());
+        await expect(canvas.getByTestId('nextActionPositionBottom')).toBeEnabled();
+    },
+};
+
+/** The row held while a structural edit is unsaved — a move could swap the card out and drop the edit. */
+export const PositionRowLockedByUnsavedEdit: Story = {
+    play: async ({ canvasElement }) => {
+        const canvas = within(canvasElement);
+        await userEvent.click(await within(await canvas.findByRole('group', { name: 'Energy' })).findByRole('button', { name: 'High' }));
+        await waitFor(() => expect(canvas.getByTestId('nextActionPositionRow')).toHaveAttribute('data-locked', 'true'));
+        await expect(canvas.getByTestId('nextActionPositionBottom')).toBeDisabled();
+    },
+};
+
 /** The stage-end card after the only item — no ordinal (it is not an item), the bar full. */
 export const StageEndCard: Story = {
     args: { initialFlow: singleItemFlow({ ...buildStageQueue([sampleNextActionItem._id]), cursor: 1 }) },

@@ -7,7 +7,7 @@ import { Button, Card } from '../../designSystem';
 import type { MyDB } from '../../types/MyDB';
 import { type ItemEditorActionsApi, ItemEditorBody } from '../itemEditor/ItemEditorBody';
 import { RevisitDecisionCard } from './RevisitDecisionCard';
-import { currentQueueItemId, type StageDecisionUndo, type StageQueue, stageEndTitle } from './reviewFlowState';
+import { currentQueueItemId, type StageDecisionUndo, type StageQueue, stageEndTitle, yieldSlotOnDownMove } from './reviewFlowState';
 import { StageActionBar, type StageTravel } from './StageActionBar';
 import { StageCardScroller } from './StageCardScroller';
 import { StageEmptyCard } from './StageEmptyCard';
@@ -89,6 +89,8 @@ export function ClarifyStage({ queue, db, onQueueChange, onStageFinished, travel
                         onDirtyLockChange={setIsEditorLocked}
                         onFromGmailReadOnly={() => stageToast.showNotice(FROM_GMAIL_READONLY_MESSAGE)}
                         presentation="review"
+                        hasPositionRow
+                        onPositionMoved={yieldSlotOnDownMove(onQueueChange)}
                         renderActions={(api: ItemEditorActionsApi) => (
                             <>
                                 <StageNavButtons {...nav.liveNavProps(api.isSaving)} />

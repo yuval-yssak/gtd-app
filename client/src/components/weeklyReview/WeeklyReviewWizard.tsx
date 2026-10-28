@@ -74,12 +74,12 @@ export function WeeklyReviewWizard({ db, flow, onFlowChange }: WeeklyReviewWizar
         isCurrent: index === flow.stageIndex,
     }));
 
-    // On stage (re-)entry, rebuild the queue: undecided leftovers keep their place and anything
-    // newly eligible is appended — so revisiting a stage via the timeline offers exactly the
-    // not-yet-decided items. WITHIN a stage the reconcile drops ids that stopped qualifying AND
-    // live-appends new arrivals to the end of the walk (per design: the "n of m" total grows,
-    // only entry resets the cursor). Both helpers return the same reference when nothing changed,
-    // so this effect settles.
+    // On stage (re-)entry, rebuild the queue: everything undecided, in the list's current order —
+    // so revisiting a stage via the timeline offers exactly the not-yet-decided items. WITHIN a
+    // stage the reconcile drops ids that stopped qualifying AND merges new arrivals into the walk
+    // ahead (per design: the "n of m" total grows, only entry resets the cursor); a rank change
+    // (the card's Position row) re-sorts the walk ahead the same way. Both helpers return the
+    // same reference when nothing changed, so this effect settles.
     const enteredStageIdRef = useRef<ReviewStageId | null>(null);
     useEffect(() => {
         if (!stage || stage.kind === 'checklist') {

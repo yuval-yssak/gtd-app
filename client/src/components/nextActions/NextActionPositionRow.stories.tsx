@@ -49,6 +49,35 @@ export const AloneInSection: Story = {
     decorators: [editorProvidersDecorator({ items: [secondAction], allItems: [secondAction] })],
 };
 
+/** Locked by the host (unsaved structural edits on a weekly-review card) — every move is disabled; the buttons' tooltip and an sr-only hint say why. */
+export const Locked: Story = {
+    args: { isLocked: true },
+    play: async ({ canvasElement }) => {
+        const canvas = within(canvasElement);
+        await waitFor(() => expect(canvas.getByTestId('nextActionPositionRow')).toHaveAttribute('data-locked', 'true'));
+        await expect(canvas.getByTestId('nextActionPositionDown')).toBeDisabled();
+    },
+};
+
+/** Compact (the weekly-review card's meta line): icon-only moves, no label, no "Move to…", the count read out only. */
+export const Compact: Story = {
+    args: { density: 'compact' },
+    play: async ({ canvasElement }) => {
+        const canvas = within(canvasElement);
+        await waitFor(() => expect(canvas.getByRole('button', { name: 'Top' })).toBeVisible());
+        await expect(canvas.queryByTestId('nextActionPositionMoveTo')).toBeNull();
+    },
+};
+
+/** Compact and alone in its section — the row renders nothing rather than four disabled icons. */
+export const CompactAloneInSection: Story = {
+    args: { density: 'compact' },
+    decorators: [editorProvidersDecorator({ items: [secondAction], allItems: [secondAction] })],
+    play: async ({ canvasElement }) => {
+        await waitFor(() => expect(within(canvasElement).queryByTestId('nextActionPositionRow')).toBeNull());
+    },
+};
+
 /** "Move to…" pressed — the bottom sheet opens over the row. */
 export const MoveToSheetOpen: Story = {
     play: async ({ canvasElement }) => {

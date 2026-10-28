@@ -8,6 +8,12 @@
     display: block;
 }
 
+/* Compact (weekly-review card): icon buttons only, sized to share the editor's meta line. */
+.row[data-compact] {
+    flex-flow: row wrap;
+    align-items: center;
+}
+
 .controls {
     display: flex;
     flex-wrap: wrap;

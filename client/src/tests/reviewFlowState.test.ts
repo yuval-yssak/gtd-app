@@ -23,6 +23,7 @@ import {
     reviewStats,
     routineEntryId,
     routineIdOfEntry,
+    type StageQueue,
     shouldResumeRevisit,
     skipCurrentItem,
     skipStage,
@@ -37,6 +38,8 @@ import {
     unreviewedStageArrivals,
     walkedEntryCount,
     withStageQueue,
+    yieldCurrentSlot,
+    yieldSlotOnDownMove,
 } from '../components/weeklyReview/reviewFlowState';
 import type { StoredItem, StoredRoutine } from '../types/MyDB';
 
@@ -383,9 +386,9 @@ describe('stage queue', () => {
         expect(dropCurrentItem(ended)).toBe(ended);
     });
 
-    it('a dropped id is re-offered on stage re-entry (undecided, no longer queued → newcomer)', () => {
+    it('a dropped id is re-offered on stage re-entry, in the page order (undecided, no longer queued → newcomer)', () => {
         const dropped = dropCurrentItem(buildStageQueue(['blocked', 'next']));
-        expect(refreshQueueOnEntry(dropped, ['blocked', 'next']).pending).toEqual(['next', 'blocked']);
+        expect(refreshQueueOnEntry(dropped, ['blocked', 'next']).pending).toEqual(['blocked', 'next']);
     });
 
     it('stage-end title distinguishes skipped, all-reviewed, and never-had-anything', () => {
@@ -431,7 +434,7 @@ describe('stage queue', () => {
         expect(reconcileQueue(dropped, ['a', 'b'])).toBe(dropped);
         // …but re-entering the stage consciously re-offers it and clears the drop list.
         const reentered = refreshQueueOnEntry(dropped, ['a', 'b']);
-        expect(reentered.pending).toEqual(['b', 'a']);
+        expect(reentered.pending).toEqual(['a', 'b']);
         expect(reconcileQueue(reentered, ['a', 'b'])).toBe(reentered);
     });
 
@@ -578,6 +581,13 @@ describe('stage queue', () => {
         expect(refreshQueueOnEntry(queue, ['a', 'b'])).toBe(queue);
     });
 
+    it('entry refresh lays the leftovers out in the current page order — a rank change made elsewhere is honoured on re-entry', () => {
+        const ended = skipCurrentItem(skipCurrentItem(buildStageQueue(['a', 'b'])));
+        const refreshed = refreshQueueOnEntry(ended, ['b', 'a']);
+        expect(refreshed.pending).toEqual(['b', 'a']);
+        expect(currentQueueItemId(refreshed)).toBe('b');
+    });
+
     it('entry refresh restarts the walk at the first undecided item (cursor 0), keeping order', () => {
         // The walk ended with 'a' and 'b' skipped past — re-entering the stage re-offers them
         // from the top plus the newcomer, instead of resuming past the end.
@@ -585,6 +595,125 @@ describe('stage queue', () => {
         const refreshed = refreshQueueOnEntry(ended, ['a', 'b', 'd']);
         expect(refreshed.pending).toEqual(['a', 'b', 'd']);
         expect(currentQueueItemId(refreshed)).toBe('a');
+    });
+});
+
+describe('stage queue follows rank changes mid-stage', () => {
+    it('the current item, yielded by its card and moved DOWN, leaves the cursor slot: the walk moves on and re-offers it at its new place', () => {
+        const queue = buildStageQueue(['a', 'b', 'c']); // on 'a'
+        const moved = reconcileQueue(yieldCurrentSlot(queue), ['b', 'c', 'a']); // 'a' sent to the bottom
+        expect(moved).toEqual({ pending: ['b', 'c', 'a'], cursor: 0, decisions: [] });
+        expect(walkedEntryCount(moved)).toBe(0);
+    });
+
+    it('the current item, yielded and moved UP, stays current — only the list rank changed, and the yield is consumed', () => {
+        const midWalk = skipCurrentItem(buildStageQueue(['a', 'b', 'c'])); // on 'b', 'a' skipped
+        const moved = reconcileQueue(yieldCurrentSlot(midWalk), ['b', 'a', 'c']); // 'b' moved above the skipped 'a'
+        expect(moved).toEqual(midWalk);
+    });
+
+    it('without a yield the card on screen is pinned: an entry that ranks above it never takes its slot', () => {
+        const queue = buildStageQueue(['a', 'b', 'c']); // on 'a'
+        expect(reconcileQueue(queue, ['b', 'c', 'a'])).toEqual({ pending: ['a', 'b', 'c'], cursor: 0, decisions: [] });
+        expect(reconcileQueue(queue, ['b', 'c', 'a'])).toBe(queue);
+    });
+
+    it('a rank change behind the cursor never reorders the walked prefix', () => {
+        const midWalk = skipCurrentItem(skipCurrentItem(buildStageQueue(['a', 'b', 'c']))); // on 'c'
+        expect(reconcileQueue(midWalk, ['b', 'a', 'c'])).toBe(midWalk);
+    });
+
+    it('the unwalked tail re-sorts to the list order while the current item keeps its slot', () => {
+        const queue = buildStageQueue(['a', 'b', 'c', 'd']); // on 'a'
+        const reordered = reconcileQueue(queue, ['a', 'd', 'c', 'b']);
+        expect(reordered.pending).toEqual(['a', 'd', 'c', 'b']);
+        expect(currentQueueItemId(reordered)).toBe('a');
+    });
+
+    it('a newcomer joins the tail at its list position, never ahead of the item on screen — and stays behind it on later reconciles', () => {
+        const queue = buildStageQueue(['a', 'b', 'c']); // on 'a'
+        // 'n' ranks at the very top of the list (a fresh inbox capture) — the card on screen must not switch.
+        const grown = reconcileQueue(queue, ['n', 'a', 'b', 'c']);
+        expect(grown.pending).toEqual(['a', 'n', 'b', 'c']);
+        expect(currentQueueItemId(grown)).toBe('a');
+        // Once queued, 'n' is a leftover ranked above the card — still no hijack (the live-capture e2e scenario).
+        expect(reconcileQueue(grown, ['n', 'a', 'b', 'c'])).toBe(grown);
+        const midList = reconcileQueue(queue, ['a', 'b', 'n', 'c']);
+        expect(midList.pending).toEqual(['a', 'b', 'n', 'c']);
+    });
+
+    it('a newcomer ranked above the current item takes its turn once the current item is decided', () => {
+        const grown = reconcileQueue(buildStageQueue(['a', 'b']), ['n', 'a', 'b']);
+        const decided = completeCurrentItem(grown);
+        expect(currentQueueItemId(decided)).toBe('n');
+    });
+
+    it('the yielded current item moved down past a newcomer: the whole tail follows the list order', () => {
+        const queue = buildStageQueue(['a', 'b']); // on 'a'
+        const moved = reconcileQueue(yieldCurrentSlot(queue), ['n', 'b', 'a']);
+        expect(moved.pending).toEqual(['n', 'b', 'a']);
+        expect(currentQueueItemId(moved)).toBe('n');
+    });
+
+    it('a yield is consumed by one reconcile: the next one pins the new current item again', () => {
+        const once = reconcileQueue(yieldCurrentSlot(buildStageQueue(['a', 'b', 'c'])), ['b', 'c', 'a']);
+        expect(once.yieldedEntryId).toBeUndefined();
+        expect(reconcileQueue(once, ['c', 'b', 'a'])).toEqual({ ...once, pending: ['b', 'c', 'a'] });
+        expect(reconcileQueue(once, ['b', 'c', 'a'])).toBe(once);
+    });
+
+    it('a yield that changes nothing is still consumed, and one on the stage-end card is a no-op', () => {
+        const queue = buildStageQueue(['a', 'b']);
+        expect(reconcileQueue(yieldCurrentSlot(queue), ['a', 'b'])).toEqual(queue);
+        const atEnd = skipCurrentItem(skipCurrentItem(queue));
+        expect(yieldCurrentSlot(atEnd)).toBe(atEnd);
+    });
+
+    it('on the stage-end card two arrivals land in list order, not arrival order, and the first takes the screen', () => {
+        const atEnd = completeCurrentItem(buildStageQueue(['a']));
+        const grown = reconcileQueue(atEnd, ['y', 'x', 'a']);
+        expect(grown.pending).toEqual(['y', 'x']);
+        expect(currentQueueItemId(grown)).toBe('y');
+    });
+
+    it('a current item that turned ineligible hands over to the first entry in list order — a newcomer ranked above the leftovers included', () => {
+        const queue = buildStageQueue(['a', 'b', 'c']); // on 'a', then 'a' is completed on another device
+        const handedOver = reconcileQueue(queue, ['n', 'b', 'c']);
+        expect(handedOver.pending).toEqual(['n', 'b', 'c']);
+        expect(currentQueueItemId(handedOver)).toBe('n');
+    });
+
+    it('an UP move never yields: with earlier arrivals ranked above it, the card stays on screen and the tail re-sorts behind it', () => {
+        // Two live captures queued behind current 'a' while ranking above it; the user presses Up on 'a'.
+        const grown = reconcileQueue(reconcileQueue(buildStageQueue(['a', 'b']), ['n1', 'a', 'b']), ['n1', 'n2', 'a', 'b']);
+        expect(grown.pending).toEqual(['a', 'n1', 'n2', 'b']);
+        const raised = reconcileQueue(grown, ['n1', 'a', 'n2', 'b']);
+        expect(currentQueueItemId(raised)).toBe('a');
+        expect(raised.pending).toEqual(['a', 'n1', 'n2', 'b']);
+    });
+
+    it('yieldSlotOnDownMove marks the queue on a down move only', () => {
+        const queue = buildStageQueue(['a', 'b']);
+        const applied: StageQueue[] = [];
+        const onMoved = yieldSlotOnDownMove((update) => applied.push(update(queue)));
+        onMoved('up');
+        expect(applied).toEqual([]);
+        onMoved('down');
+        expect(applied).toEqual([{ ...queue, yieldedEntryId: 'a' }]);
+    });
+
+    it('stage entry drops a yield left over from the previous visit', () => {
+        const yielded = yieldCurrentSlot(buildStageQueue(['a', 'b']));
+        const reentered = refreshQueueOnEntry(yielded, ['a', 'b']);
+        expect(reentered.yieldedEntryId).toBeUndefined();
+        expect(reentered).toEqual({ pending: ['a', 'b'], cursor: 0, decisions: [], droppedIds: [] });
+    });
+
+    it('a dropped id stays out of the walk even when the list order around it changes', () => {
+        const dropped = dropCurrentItem(buildStageQueue(['a', 'b', 'c'])); // 'a' dropped, on 'b'
+        const reordered = reconcileQueue(yieldCurrentSlot(dropped), ['c', 'a', 'b']);
+        expect(reordered.pending).toEqual(['c', 'b']);
+        expect(currentQueueItemId(reordered)).toBe('c');
     });
 });
 
