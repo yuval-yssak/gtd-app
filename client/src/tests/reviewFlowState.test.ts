@@ -29,6 +29,7 @@ import {
     stageEligibleEntryIds,
     stageEligibleItems,
     stageEndTitle,
+    stageItemProgress,
     startReviewFlow,
     stepBack,
     toggleInboxTick,
@@ -234,6 +235,30 @@ describe('stage queue', () => {
         expect(walkedEntryCount(stepBack(skipCurrentItem(queue)))).toBe(0);
         // An all-skips walk reaches "3 of 3" at the end card — the original bug pinned this at 0.
         expect(walkedEntryCount(skipCurrentItem(skipCurrentItem(skipCurrentItem(queue))))).toBe(3);
+    });
+
+    describe('stageItemProgress', () => {
+        it('numbers the current item from 1 — a single-item stage reads "1 of 1" on its only card', () => {
+            expect(stageItemProgress(buildStageQueue(['a']))).toEqual({ position: 1, total: 1, percent: 0 });
+        });
+
+        it('gives the stage-end card no ordinal — it is not an item, so "1 of 1" never repeats there', () => {
+            const atEnd = completeCurrentItem(buildStageQueue(['a']));
+            expect(stageItemProgress(atEnd)).toEqual({ position: null, total: 1, percent: 100 });
+        });
+
+        it('advances the position on a skip and a decision alike, and the bar tracks entries walked past', () => {
+            const queue = buildStageQueue(['a', 'b', 'c']);
+            expect(stageItemProgress(queue)).toEqual({ position: 1, total: 3, percent: 0 });
+            expect(stageItemProgress(skipCurrentItem(queue))).toEqual({ position: 2, total: 3, percent: 33 });
+            expect(stageItemProgress(completeCurrentItem(skipCurrentItem(queue)))).toEqual({ position: 3, total: 3, percent: 67 });
+            expect(stageItemProgress(skipCurrentItem(skipCurrentItem(skipCurrentItem(queue))))).toEqual({ position: null, total: 3, percent: 100 });
+        });
+
+        it('is null for a missing or empty queue — nothing to count', () => {
+            expect(stageItemProgress(undefined)).toBeNull();
+            expect(stageItemProgress(buildStageQueue([]))).toBeNull();
+        });
     });
 
     it('stepBack reverses skips one at a time and no-ops at the start', () => {

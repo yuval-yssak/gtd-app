@@ -22,6 +22,10 @@ export const ItemSnapshotSchema = z
         _id: nonEmptyString,
         user: nonEmptyString,
         status: itemStatusSchema,
+        // Not in the status matrix: a matrix violation would 400 the /sync/push batch of a client
+        // reviving a done item it still holds the field on. `stampStatusBeforeDone` drops it from
+        // open snapshots in the apply pipeline instead.
+        statusBeforeDone: itemStatusSchema.exclude(['done', 'trash']).optional(),
         // Title is required and non-empty: empty-title items break list rendering, search, and
         // every audit script that assumes title is meaningful. Enforced at the schema layer so
         // /sync/push, /v1 PATCH, and /v1/operations/batch all reject empty titles uniformly.

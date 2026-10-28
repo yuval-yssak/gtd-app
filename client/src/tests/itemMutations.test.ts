@@ -53,6 +53,17 @@ afterEach(async () => {
 });
 
 /** Polls IndexedDB until the item row carries `status` — lets a test act in the gap between two writes. */
+/** The snapshot of the single op the mutation under test queued — throws (not passes) on an empty queue. */
+async function onlyQueuedSnapshot() {
+    const ops = await db.getAll('syncOperations');
+    expect(ops).toHaveLength(1);
+    const [op] = ops;
+    if (!op) {
+        throw new Error('expected exactly one queued op');
+    }
+    return op.snapshot;
+}
+
 async function waitForStoredStatus(itemId: string, status: StoredItem['status']) {
     for (let poll = 0; poll < 1000; poll++) {
         // Each read yields to the event loop, so the writer makes progress between polls.
@@ -441,6 +452,63 @@ describe('clarifyToDone', () => {
         expect(done.timeStart).toBe('2026-05-09T10:00:00.000Z');
         expect(done.timeEnd).toBe('2026-05-09T11:00:00.000Z');
         expect(done.calendarEventId).toBe('evt-1');
+    });
+
+    it('records the open status the item was completed from — locally and in the queued op', async () => {
+        const item = await collectItem(db, USER_ID, { title: 'Call Dana' });
+        await db.clear('syncOperations');
+
+        const done = await clarifyToDone(db, { ...item, status: 'waitingFor', waitingForPersonId: 'p-1' });
+
+        expect(done.statusBeforeDone).toBe('waitingFor');
+        expect((await db.get('items', done._id))?.statusBeforeDone).toBe('waitingFor');
+        expect(await onlyQueuedSnapshot()).toMatchObject({ statusBeforeDone: 'waitingFor' });
+    });
+
+    it('replaces a stale value left by an earlier completion — the current status is what it was', async () => {
+        const item = await collectItem(db, USER_ID, { title: 'Revived' });
+        const done = await clarifyToDone(db, { ...item, status: 'nextAction', statusBeforeDone: 'calendar' });
+        expect(done.statusBeforeDone).toBe('nextAction');
+    });
+
+    it.each([
+        ['clarifyToInbox', (item: StoredItem) => clarifyToInbox(db, item)],
+        ['clarifyToNextAction', (item: StoredItem) => clarifyToNextAction(db, item)],
+        ['clarifyToCalendar', (item: StoredItem) => clarifyToCalendar(db, item, { timeStart: '2026-05-09T10:00:00', timeEnd: '2026-05-09T11:00:00' })],
+        ['clarifyToWaitingFor', (item: StoredItem) => clarifyToWaitingFor(db, item, {})],
+        ['clarifyToSomedayMaybe', (item: StoredItem) => clarifyToSomedayMaybe(db, item)],
+    ] as const)('%s on a done item drops its completion record — an open row never holds one', async (_name, revive) => {
+        const item = await collectItem(db, USER_ID, { title: 'Revived' });
+        await db.clear('syncOperations');
+        const revived = await revive({ ...item, status: 'done', statusBeforeDone: 'calendar' });
+        expect(revived).not.toHaveProperty('statusBeforeDone');
+        expect(await onlyQueuedSnapshot()).not.toHaveProperty('statusBeforeDone');
+    });
+
+    it('trashing an open item queues no completion record, even one left from an un-pulled revive', async () => {
+        const item = await collectItem(db, USER_ID, { title: 'Dropped' });
+        await db.clear('syncOperations');
+        const trashed = await clarifyToTrash(db, { ...item, status: 'nextAction', statusBeforeDone: 'calendar' });
+        expect(trashed).not.toHaveProperty('statusBeforeDone');
+        expect(await onlyQueuedSnapshot()).not.toHaveProperty('statusBeforeDone');
+    });
+
+    it('trashing a done item keeps its completion record', async () => {
+        const item = await collectItem(db, USER_ID, { title: 'Done then trashed' });
+        const trashed = await clarifyToTrash(db, { ...item, status: 'done', statusBeforeDone: 'waitingFor' });
+        expect(trashed.statusBeforeDone).toBe('waitingFor');
+    });
+
+    it('completing a trashed done item keeps its recorded value', async () => {
+        const item = await collectItem(db, USER_ID, { title: 'Restored' });
+        const done = await clarifyToDone(db, { ...item, status: 'trash', statusBeforeDone: 'waitingFor' });
+        expect(done.statusBeforeDone).toBe('waitingFor');
+    });
+
+    it('keeps the recorded value when an already-done item is completed again', async () => {
+        const item = await collectItem(db, USER_ID, { title: 'Twice' });
+        const done = await clarifyToDone(db, { ...item, status: 'done', statusBeforeDone: 'calendar' });
+        expect(done.statusBeforeDone).toBe('calendar');
     });
 });
 

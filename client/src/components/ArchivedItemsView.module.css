@@ -41,6 +41,13 @@
     }
 }
 
+/* What a done item was — reads between the title and the muted timestamp. */
+.doneContext {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 /* The whole row body is the link; it takes every bit of width the copy button leaves. */
 .rowLink {
     display: flex;

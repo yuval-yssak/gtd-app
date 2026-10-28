@@ -25,6 +25,10 @@ Every item has exactly one status at a time.
 | `done` | Completed |
 | `trash` | Discarded |
 
+### What a done item was (`statusBeforeDone`)
+
+Completing an item flips only its `status`; every other field stays, so a done calendar event keeps its `timeStart`/`timeEnd`, a done waiting-for its `waitingForPersonId`, a done next action its contexts and people. `statusBeforeDone` records which open status it was completed from. The client stamps it when it marks an item done, and the server trusts that value: the client's queue collapses consecutive updates, so inbox → calendar → done can reach the server as one op while the stored row still says `inbox`. A done snapshot that lacks it (`POST /complete`, `/v1` PATCH, a batch op, an older client) is filled in by the apply pipeline (`api-server/src/lib/statusBeforeDone.ts`) from the stored open status — or, on a later edit of the done item from a device that has not pulled the field yet, from the stored value, which a trash edit also carries forward. The pipeline drops the field from any open-status snapshot, so only done rows and trashed done items hold it, and a snapshot rebuilt from a revived row can never echo a stale value. Items completed before the field existed lack it: the app then infers the prior status from the leftover fields — every transition between open statuses strips the fields the target does not use, so a `timeStart` means calendar, a `waitingForPersonId` waiting-for, contexts/energy/time a next action (`client/src/components/doneItemContextLogic.ts`). The Done list and the done item's page show it with its key fields.
+
 ### Tickler pattern (`ignoreBefore`)
 
 A `nextAction`, `waitingFor`, or `somedayMaybe` item can carry an `ignoreBefore` date. The item is hidden from all active lists (`/next-actions`, `/waiting-for`, `/someday`) until that date arrives, then surfaces automatically. This is the GTD "tickler file" — a way to defer something without cluttering today's view. While snoozed, the item stays reachable in exactly one place — the `/tickler` page, which lists all three statuses grouped by date and offers "release now". Global search deliberately still matches snoozed items: looking one up by name is an explicit act, not list clutter.
@@ -210,6 +214,7 @@ interface ItemInterface {
     _id?: string;                    // client-generated UUID (MongoDB _id)
     user: string;                    // Better Auth user ID
     status: 'inbox' | 'nextAction' | 'calendar' | 'waitingFor' | 'somedayMaybe' | 'done' | 'trash';
+    statusBeforeDone?: 'inbox' | 'nextAction' | 'calendar' | 'waitingFor' | 'somedayMaybe'; // open status a done item was completed from (see below)
     title: string;
     createdTs: string;               // ISO datetime
     updatedTs: string;               // ISO datetime — last-write-wins anchor

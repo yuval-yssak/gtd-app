@@ -1937,6 +1937,8 @@ describe('POST /calendar/integrations/:id/sync — Phase 1c field-level merge', 
             calendarEventId: 'evt-revive-clear-flag',
             calendarIntegrationId: 'int-1',
             cancelledByGCal: true,
+            // A trashed DONE item: the revive must not carry its completion record onto the live row.
+            statusBeforeDone: 'calendar',
             createdTs: past,
             updatedTs: past,
             lastSyncedFromGCalTs: past,
@@ -1963,6 +1965,7 @@ describe('POST /calendar/integrations/:id/sync — Phase 1c field-level merge', 
         const item = await itemsDAO.findOne({ _id: 'item-revive-clear-flag' });
         expect(item?.status).toBe('calendar');
         expect(item?.cancelledByGCal).toBeUndefined();
+        expect(item?.statusBeforeDone).toBeUndefined();
     });
 
     it('allDay: true → false transition strips the stale flag from the local item', async () => {

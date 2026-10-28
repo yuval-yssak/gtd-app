@@ -63,6 +63,7 @@ import {
 } from '../clarify/types';
 import { WaitingForFields } from '../clarify/WaitingForFields';
 import { DisabledCapableTooltip } from '../DisabledCapableTooltip';
+import { buildDoneContextLookups, doneItemContext } from '../doneItemContextLogic';
 import { FutureDoneConfirmDialog, useFutureDoneConfirm } from '../FutureDoneConfirmDialog';
 import { NextActionPositionRow } from '../nextActions/NextActionPositionRow';
 import { RoutineIndicator } from '../RoutineIndicator';
@@ -73,6 +74,7 @@ import { BriefSection } from './BriefSection';
 import { decideBriefCommit, type EditorPresentation, isBriefableItemStatus, isBriefFirst } from './briefSectionLogic';
 import { CalendarEventLinks } from './CalendarEventLinks';
 import { CopyIdButton } from './CopyIdButton';
+import { DoneItemContextSection } from './DoneItemContextSection';
 import styles from './ItemEditorBody.module.css';
 import { resolveActionsPlacement } from './itemEditorActionsPlacement';
 import {
@@ -363,6 +365,9 @@ export function ItemEditorBody({
         () => omitArchived(scopeOptionsToOwner(people, { ownerUserId, assignedIds: assignedPeopleIds, allOptions: allPeople }), new Set(assignedPeopleIds)),
         [people, ownerUserId, assignedPeopleIds, allPeople],
     );
+    // By id across accounts, like the pickers' `allOptions`: a done item may reference an archived entity.
+    const doneContextLookups = useMemo(() => buildDoneContextLookups(allPeople, allWorkContexts), [allPeople, allWorkContexts]);
+    const doneContext = useMemo(() => doneItemContext(liveItem, doneContextLookups), [liveItem, doneContextLookups]);
 
     // Bundle the per-status forms so the merge/patch builders take one cohesive argument.
     const forms: EditorForms = { na: naForm, cal: calForm, wf: wfForm, sm: smForm };
@@ -1178,6 +1183,14 @@ export function ItemEditorBody({
                     ))}
                 </div>
             </fieldset>
+
+            {/* Only while Done is both saved and selected — picking another chip shows that status's fields instead. */}
+            {status === 'done' && doneContext && (
+                <>
+                    <Separator />
+                    <DoneItemContextSection context={doneContext} />
+                </>
+            )}
 
             {liveItem.routineId && (
                 <div data-testid="itemEditorRoutineLink">

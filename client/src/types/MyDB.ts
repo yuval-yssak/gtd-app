@@ -48,10 +48,16 @@ export interface StoredAccount {
     addedAt: number; // unix ms — used to preserve order in the switcher
 }
 
+/** The statuses an item is worked in — everything but the archival `done` / `trash`. */
+export type OpenItemStatus = Exclude<StoredItem['status'], 'done' | 'trash'>;
+
 export interface StoredItem {
     _id: string; // client-generated UUID — doubles as the MongoDB _id
     userId: string; // Better Auth user ID — mirrors ItemInterface.user
     status: 'inbox' | 'nextAction' | 'calendar' | 'waitingFor' | 'somedayMaybe' | 'done' | 'trash';
+    // The open status a done item was completed from — mirrors ItemInterface.statusBeforeDone.
+    // Only done (and trashed done) rows hold it; the server drops it from a revived item's row.
+    statusBeforeDone?: OpenItemStatus;
     title: string;
     createdTs: string;
     updatedTs: string; // ISO datetime — last-write-wins conflict resolution anchor

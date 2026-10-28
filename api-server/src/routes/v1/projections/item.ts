@@ -12,6 +12,7 @@ export type PublicItem = Pick<
     | '_id'
     | 'user'
     | 'status'
+    | 'statusBeforeDone'
     | 'title'
     | 'notes'
     | 'createdTs'
@@ -51,6 +52,8 @@ const PUBLIC_FIELDS: ReadonlyArray<Exclude<keyof PublicItem, 'brief'>> = [
     '_id',
     'user',
     'status',
+    // Read-only: the open status a done item was completed from (server-stamped; PATCH rejects it).
+    'statusBeforeDone',
     'title',
     'notes',
     'createdTs',

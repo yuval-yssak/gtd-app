@@ -15,6 +15,7 @@ import { rankAt, topRanks } from '../../lib/itemRank.js';
 import { isDuplicateKeyError } from '../../lib/mongoErrors.js';
 import { advanceRoutineAfterDisposal } from '../../lib/routineItemGeneration.js';
 import { normalizeMasterEventId } from '../../lib/routineItemRegeneration.js';
+import { stampStatusBeforeDone, withoutStatusBeforeDone } from '../../lib/statusBeforeDone.js';
 import { lowestRankForUser, topRankForUser } from '../../lib/topRankForUser.js';
 import { hasAtLeastOne } from '../../lib/typeUtils.js';
 import { STATUS_FIELD_MATRIX, STATUS_SPECIFIC_FIELD_LIST } from '../../schemas/operations/item.js';
@@ -524,7 +525,8 @@ async function completeItem({ userId, tokenId, itemId }: CompleteContext): Promi
     // to the status→field matrix. The shared apply pipeline enforces this in strict-mode after
     // the audit lands; doing it here keeps the existing tests green.
     const now = dayjs().toISOString();
-    const updated: ItemInterface = sanitizeForStatus({ ...existing, status: 'done', updatedTs: now });
+    // Built from the stored row, so there is no device value to trust: stamp from the row's own status.
+    const updated: ItemInterface = stampStatusBeforeDone(existing, withoutStatusBeforeDone(sanitizeForStatus({ ...existing, status: 'done', updatedTs: now })));
     await applyAndPublishOperation(userId, { entityType: 'item', opType: 'update', entityId: itemId, snapshot: updated }, { deviceId: `api:${tokenId}`, now });
     // If the item belonged to an active nextAction routine, advance the series by generating the
     // next occurrence's item. Mirrors the client-side `maybeCreateNextRoutineItem` so completing
@@ -910,7 +912,12 @@ async function patchItem(ctx: PatchContext): Promise<PatchResult> {
     // (a) `PATCH_WRITABLE_FIELDS` having filtered non-ItemInterface keys, and (b) the apply
     // pipeline's strict-mode Zod check rejecting any remaining shape errors.
     const merged = withClearedFieldsRemoved({ ...existing, ...assignments, updatedTs: now } as ItemInterface, clearedFields);
-    const updated = await withRankOnEnteringNextAction(existing, sanitizeStaleFields(merged, assignments));
+    // Stamped here as well as in the apply pipeline so the response carries it. The merge starts from
+    // the stored row (PATCH cannot write the field), so its copy is dropped rather than trusted.
+    const updated = stampStatusBeforeDone(
+        existing,
+        withoutStatusBeforeDone(await withRankOnEnteringNextAction(existing, sanitizeStaleFields(merged, assignments))),
+    );
     const applyError = await applyPatchSnapshot(ctx, updated);
     if (applyError) {
         return { ok: false, error: applyError };

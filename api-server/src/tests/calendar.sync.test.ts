@@ -609,6 +609,8 @@ describe('POST /calendar/integrations/:id/sync', () => {
             timeStart: masterStart,
             timeEnd: masterEnd,
             cancelledByGCal: true,
+            // A trashed DONE occurrence: the revive must not carry its completion record onto the live row.
+            statusBeforeDone: 'calendar',
             createdTs: itemTs,
             updatedTs: itemTs,
         });
@@ -626,6 +628,7 @@ describe('POST /calendar/integrations/:id/sync', () => {
         expect(item?.timeEnd).toBe(masterEnd);
         // cancelledByGCal badge cleared on revive.
         expect(item?.cancelledByGCal).toBeUndefined();
+        expect(item?.statusBeforeDone).toBeUndefined();
         // Instance id re-minted so the row re-occupies the unique partial index.
         expect(item?.calendarInstanceEventId).toBeTruthy();
         // skipped exception dropped from the routine.

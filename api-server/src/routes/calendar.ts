@@ -4628,8 +4628,9 @@ async function reviveTrashedCalendarItem(existing: ItemInterface, event: Calenda
     const notesUpdate = resolveInboundNotes(event.description, existing.lastSyncedNotes, event.updated, '1970-01-01T00:00:00.000Z');
     // Revive overwrites every structural + GCal-owned field from GCal verbatim — the local trashed
     // snapshot is presumed stale, so a prior `cancelledByGCal: true` (set when GCal first cancelled
-    // the event) must be cleared so the revived item doesn't carry a phantom "Cancelled" badge.
-    const { cancelledByGCal: _cleared, ...withoutCancelledFlag } = existing;
+    // the event) must be cleared so the revived item doesn't carry a phantom "Cancelled" badge — and
+    // a trashed DONE item's `statusBeforeDone`, which only done rows may hold.
+    const { cancelledByGCal: _cleared, statusBeforeDone: _completionRecord, ...withoutCancelledFlag } = existing;
     const merged: ItemInterface = {
         ...withoutCancelledFlag,
         status: 'calendar',
@@ -5553,9 +5554,11 @@ async function reviveTrashedRoutineItemInPlace(
         updatedTs: ctx.now,
     };
     // Clear the "Cancelled in Calendar" badge a GCal-driven trash may have stamped, and drop a stale
-    // all-day flag if the revived master time is timed. `$set` alone can't remove keys.
+    // all-day flag if the revived master time is timed, and a trashed done occurrence's completion
+    // record (only done rows may hold `statusBeforeDone`). `$set` alone can't remove keys.
     const unsetFields: Record<string, ''> = {
         ...(item.cancelledByGCal !== undefined ? { cancelledByGCal: '' as const } : {}),
+        ...(item.statusBeforeDone !== undefined ? { statusBeforeDone: '' as const } : {}),
         ...(masterTimes.allDay !== true && item.allDay !== undefined ? { allDay: '' as const } : {}),
     };
     const update = Object.keys(unsetFields).length > 0 ? { $set: setFields, $unset: unsetFields } : { $set: setFields };

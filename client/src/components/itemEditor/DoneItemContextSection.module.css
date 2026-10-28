@@ -1,0 +1,29 @@
+.section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+/* Matches the editor's "STATUS" legend above it. */
+.heading {
+    display: block;
+    text-transform: uppercase;
+    letter-spacing: 0.0313rem;
+}
+
+/* Label column sized to the longest label ("Waiting for", "Expected by"), values wrap beside it. */
+.facts {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: var(--space-1) var(--space-4);
+    margin: 0;
+}
+
+/* `display: contents` keeps each dt/dd pair in one wrapper (valid dl grouping) while the grid lays out its children. */
+.fact {
+    display: contents;
+
+    & dd {
+        margin: 0;
+    }
+}

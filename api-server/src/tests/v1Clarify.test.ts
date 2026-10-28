@@ -110,6 +110,17 @@ describe('PATCH /v1/items/:id', () => {
         expect(res.status).toBe(200);
         const stored = await itemsDAO.findByOwnerAndId(id, userId);
         expect(stored?.status).toBe('done');
+        expect(((await res.json()) as { statusBeforeDone?: string }).statusBeforeDone).toBe('inbox');
+        expect(stored?.statusBeforeDone).toBe('inbox');
+    });
+
+    it('keeps statusBeforeDone server-owned: a PATCH may not write it', async () => {
+        const userId = await login();
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.write']);
+        const id = await createInboxItem(plaintext, 'ext-1');
+        const res = await patch(plaintext, id, { status: 'done', statusBeforeDone: 'calendar' });
+        expect(res.status).toBe(400);
+        expect(((await res.json()) as { code: string }).code).toBe('forbidden_field');
     });
 
     it('rejects forbidden fields (e.g., user, contentHash)', async () => {

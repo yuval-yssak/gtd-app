@@ -1,5 +1,6 @@
 declare const styles: {
     readonly countChip: string;
+    readonly doneContext: string;
     readonly emptyCard: string;
     readonly emptyTitle: string;
     readonly headerRow: string;

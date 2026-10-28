@@ -54,7 +54,7 @@ test.describe('weekly review', () => {
             expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(loose._id);
             // Escape must NOT consume the item as a review decision — it steps PAST it: the walk
             // is linear, so the single item lands on the end card with the skip called out. The
-            // counter tracks POSITION (decided + skipped-past), so the skip reads "1 of 1"; the
+            // end card is not an item, so the counter drops its ordinal there (the bar fills); the
             // no-decision pin is the end card's "1 skipped". ◀ steps back to it. Escape is pressed
             // from INSIDE the title field (which has no testid of its own): the recorded
             // disconnection sentinel is the card container, so focus still lands on the end
@@ -63,11 +63,12 @@ test.describe('weekly review', () => {
             await page.keyboard.press('Escape');
             await expect(page.getByTestId('stageEmptyCard')).toContainText('Inbox — 1 skipped');
             await expect(page.getByTestId('stageContinue')).toBeFocused();
-            await expect(page.getByTestId('reviewStageCounter')).toContainText('1 of 1');
+            await expect(page.getByTestId('reviewStageCounter')).toHaveCount(0);
+            await expect(page.getByTestId('reviewHeaderStrip').getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100');
             await page.getByTestId('stageNavBack').click();
             await expect(clarifyStage.getByRole('textbox', { name: 'Title' })).toHaveValue('Loose thought');
-            // ◀ un-walks the skip: the position counter steps back with the cursor.
-            await expect(page.getByTestId('reviewStageCounter')).toContainText('0 of 1');
+            // ◀ un-walks the skip: the single item is "1 of 1" (1-based), never "0 of 1".
+            await expect(page.getByTestId('reviewStageCounter')).toContainText('1 of 1');
             await clarifyStage.getByRole('button', { name: 'Done', exact: true }).click();
             await page.getByTestId('clarifySaveNext').click();
             // Focus survives the transition: the clicked primary unmounted with the editor, so
@@ -497,9 +498,9 @@ test.describe('weekly review', () => {
             await page.getByTestId('stageTravelNext').click();
             await expect(page.getByTestId('reviewHeaderStrip')).toBeVisible();
             await expect(page.getByTestId('reviewStageTitle')).toHaveText('Next Actions');
-            await expect(page.getByTestId('reviewStageCounter')).toHaveText('0 of 3');
-            // The strip's bar is STAGE-scoped — it agrees with the counter, so the "x of y" can't
-            // read as a legend for the review-wide bar (which lives in the full header only).
+            await expect(page.getByTestId('reviewStageCounter')).toHaveText('1 of 3');
+            // The strip's counter and bar are both STAGE-scoped (the bar is the share walked past), so
+            // the "x of y" can't read as a legend for the review-wide bar (full header only).
             // Review-wide position rides in the mini stage dots instead: one dot per stage.
             await expect(page.getByTestId('reviewHeaderStrip').getByRole('progressbar')).toHaveAttribute('aria-valuenow', '0');
             await expect(page.getByTestId('stripStageDots')).toHaveAttribute('aria-label', 'Stage 5 of 8');
@@ -519,7 +520,7 @@ test.describe('weekly review', () => {
             // The expand is STICKY: deciding an item keeps the full header, with the guidance now
             // folded into the ⓘ tooltip (its full showing is once per stage).
             await page.getByTestId('focusKeep').click();
-            await expect(page.getByTestId('reviewStageCounter')).toContainText('1 of 3');
+            await expect(page.getByTestId('reviewStageCounter')).toContainText('2 of 3');
             await expect(page.getByTestId('reviewStepper')).toBeVisible();
             await expect(page.getByTestId('reviewHeaderStrip')).toHaveCount(0);
             await expect(page.getByTestId('stageGuidanceInfo')).toBeVisible();
@@ -544,14 +545,16 @@ test.describe('weekly review', () => {
             await expect(page.getByTestId('reviewHeaderStrip')).toBeVisible();
             await expect(page.getByTestId('reviewHeaderStrip')).toBeFocused();
             await page.getByTestId('focusKeep').click();
-            await expect(page.getByTestId('reviewStageCounter')).toContainText('2 of 3');
+            await expect(page.getByTestId('reviewStageCounter')).toContainText('3 of 3');
             await expect(page.getByTestId('reviewHeaderStrip')).toBeVisible();
             await expect(page.getByTestId('reviewHeaderStrip').getByRole('progressbar')).toHaveAttribute('aria-valuenow', '67');
-            // The bar shares the counter's numerator: a ▶ skip must move BOTH, not just the text
-            // (every other bar assertion sits at cursor 0, where the old decided-only numerator
-            // coincides). ◀ returns to the last item so the walk finishes with a decision below.
+            // A ▶ skip past the last item must move the bar too, not just the text (every other bar
+            // assertion sits at cursor 0, where the old decided-only numerator coincides). The end
+            // card it lands on takes no ordinal — no "3 of 3" twice. ◀ returns to the last item so
+            // the walk finishes with a decision below.
             await page.getByTestId('stageNavForward').click();
-            await expect(page.getByTestId('reviewStageCounter')).toContainText('3 of 3');
+            await expect(page.getByTestId('stageEmptyCard')).toBeVisible();
+            await expect(page.getByTestId('reviewStageCounter')).toHaveCount(0);
             await expect(page.getByTestId('reviewHeaderStrip').getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100');
             await page.getByTestId('stageNavBack').click();
             await page.getByTestId('focusKeep').click();
@@ -571,7 +574,7 @@ test.describe('weekly review', () => {
             await expect(page.getByTestId('reviewStageTitle')).toHaveText('Clarify');
             const clarifyStage = page.getByTestId('clarifyStage');
             await expect(clarifyStage.getByRole('textbox', { name: 'Title' })).toHaveValue('First thought');
-            await expect(page.getByTestId('reviewStageCounter')).toContainText('0 of 1');
+            await expect(page.getByTestId('reviewStageCounter')).toContainText('1 of 1');
 
             // A capture made WHILE the stage is open joins the walk immediately — the total grows,
             // the current item stays put, and the arrival waits its turn at the end.
@@ -579,7 +582,7 @@ test.describe('weekly review', () => {
             await page.getByTestId('quickCaptureInput').fill('Fresh arrival');
             await page.getByTestId('quickCaptureInput').press('Enter');
             await page.getByTestId('quickCaptureClose').click();
-            await expect(page.getByTestId('reviewStageCounter')).toContainText('0 of 2');
+            await expect(page.getByTestId('reviewStageCounter')).toContainText('1 of 2');
             await expect(clarifyStage.getByRole('textbox', { name: 'Title' })).toHaveValue('First thought');
 
             await clarifyStage.getByRole('button', { name: 'Done', exact: true }).click();
@@ -623,7 +626,7 @@ test.describe('weekly review', () => {
             await expect(page.getByTestId('sweepStageRow')).toHaveText('Waiting For — 1 new item');
             await page.getByTestId('sweepReviewButton').click();
             await expect(page.getByTestId('reviewStageTitle')).toHaveText('Waiting For');
-            await expect(page.getByTestId('reviewStageCounter')).toContainText('0 of 1');
+            await expect(page.getByTestId('reviewStageCounter')).toContainText('1 of 1');
             await expect(page.getByTestId('focusStage').getByRole('textbox', { name: 'Title' })).toHaveValue('Waiting seed');
             await page.getByTestId('focusKeep').click();
             await page.getByTestId('stageContinue').click();
@@ -823,11 +826,10 @@ test.describe('weekly review', () => {
 
             // Escape after the first item's autosave flush must STEP PAST (skip), not register as
             // a decision — the stale flush's onSaved once corrupted the saved marker this way.
-            // The position counter moves to "2 of 2" (1 decided + 1 skipped-past); the end card's
-            // "1 skipped" pins that no decision was recorded.
+            // The end card's "1 skipped" pins that no decision was recorded.
             await page.keyboard.press('Escape');
             await expect(page.getByTestId('stageEmptyCard')).toContainText('Next Actions — 1 skipped');
-            await expect(page.getByTestId('reviewStageCounter')).toContainText('2 of 2');
+            await expect(page.getByTestId('reviewStageCounter')).toHaveCount(0);
             await page.getByTestId('stageNavBack').click();
             await expect(titleField()).toHaveValue('Second action');
 
@@ -854,7 +856,7 @@ test.describe('weekly review', () => {
             // Leaving the revisit view via Undo unmounts the clicked button — the live card's
             // primary takes focus (via the transient end-card Continue while the requeue settles).
             await expect(page.getByTestId('focusKeep')).toBeFocused();
-            await expect(page.getByTestId('reviewStageCounter')).toContainText('1 of 2');
+            await expect(page.getByTestId('reviewStageCounter')).toContainText('2 of 2');
             await expect.poll(async () => (await gtd.listItems(page)).find((i) => i._id === second._id)?.status).toBe('nextAction');
 
             // The remaining (snapshot-less) decision undoes too: the text-edited item was decided
@@ -863,7 +865,7 @@ test.describe('weekly review', () => {
             await expect(page.getByTestId('revisitPositionLabel')).toHaveText('Already reviewed · 1 of 1');
             await page.getByTestId('revisitUndoDecision').click();
             await expect(titleField()).toHaveValue('First action edited');
-            await expect(page.getByTestId('reviewStageCounter')).toContainText('0 of 2');
+            await expect(page.getByTestId('reviewStageCounter')).toContainText('1 of 2');
 
             // Undo + immediate re-decide RESUMES the revisit walk at the same position ("1 of 1")
             // instead of forgetting it and landing on the live queue / stage end.
@@ -895,7 +897,7 @@ test.describe('weekly review', () => {
             await revisitAgain.getByRole('button', { name: 'Next Action' }).click();
             await page.getByTestId('revisitSave').click();
             await expect(titleField()).toHaveValue('Second action');
-            await expect(page.getByTestId('reviewStageCounter')).toContainText('1 of 2');
+            await expect(page.getByTestId('reviewStageCounter')).toContainText('2 of 2');
             await expect.poll(async () => (await gtd.listItems(page)).find((i) => i._id === first._id)?.status).toBe('nextAction');
 
             // ▶ from a revisit walks forward, landing back on the live queue from the newest decision.
@@ -1007,14 +1009,15 @@ test.describe('weekly review', () => {
             await page.getByTestId('quickCaptureInput').press('Enter');
             await page.getByTestId('quickCaptureClose').click();
             await page.getByTestId('reviewStepperStep').nth(1).click();
-            await expect(page.getByTestId('reviewStageCounter')).toContainText('0 of 1');
+            await expect(page.getByTestId('reviewStageCounter')).toContainText('1 of 1');
             await expect(page.getByTestId('clarifyStage').getByRole('textbox', { name: 'Title' })).toHaveValue('Mid-jump thought');
 
             // Back to Next Actions: both items were decided this review — nothing re-offers.
             await page.getByTestId('reviewStepperStep').nth(4).click();
             await expect(page.getByTestId('reviewStageTitle')).toHaveText('Next Actions');
             await expect(page.getByTestId('stageEmptyCard')).toBeVisible();
-            await expect(page.getByTestId('reviewStageCounter')).toContainText('2 of 2');
+            // Expanded header on the end card: the stage position only, no item ordinal.
+            await expect(page.getByTestId('reviewStageCounter')).toHaveText('Stage 5 of 8');
 
             await gtd.flush(page);
             const items = await gtd.listItems(page);
@@ -1071,8 +1074,8 @@ test.describe('weekly review', () => {
             await page.getByTestId('stageTravelNext').click();
             await expect(page.getByTestId('reviewStageTitle')).toHaveText('Calendar');
 
-            // Each series is ONE entry (plus the exception): "0 of 3", not one per occurrence.
-            await expect(page.getByTestId('reviewStageCounter')).toContainText('0 of 3');
+            // Each series is ONE entry (plus the exception): "1 of 3", not one per occurrence.
+            await expect(page.getByTestId('reviewStageCounter')).toContainText('1 of 3');
             const routineCard = page.getByTestId('routineReviewCard');
             // The routine card is the SAME review editor a one-off calendar entry gets, opened on the
             // series' first undone occurrence — the routine distinction lives in the banner.
@@ -1088,7 +1091,7 @@ test.describe('weekly review', () => {
             // Pausing makes the gym entry ineligible, and the reconcile may drop it before the
             // decision lands: the decision must still be the gym's, never the Pool card's.
             await expect(cardTitle).toHaveValue('Pool with Elena');
-            await expect(page.getByTestId('reviewStageCounter')).toContainText('1 of 3');
+            await expect(page.getByTestId('reviewStageCounter')).toContainText('2 of 3');
 
             // The weekly routine's card: its first open occurrence's time, the schedule and the
             // series tail in the banner (the exception counts apart), the occurrence's notes.
@@ -1168,12 +1171,12 @@ test.describe('weekly review', () => {
             await page.getByTestId('stageTravelNext').click();
             await page.getByTestId('stageTravelNext').click();
             await expect(page.getByTestId('reviewStageTitle')).toHaveText('Calendar');
-            await expect(page.getByTestId('reviewStageCounter')).toContainText('0 of 2');
+            await expect(page.getByTestId('reviewStageCounter')).toContainText('1 of 2');
 
             // Walk both entries whatever their order, measuring each card kind's Done button.
             const firstSlot = await measureCalendarDoneSlot(page);
             await page.getByTestId(firstSlot.isRoutineCard ? 'routineCardLooksGood' : 'focusKeep').click();
-            await expect(page.getByTestId('reviewStageCounter')).toContainText('1 of 2');
+            await expect(page.getByTestId('reviewStageCounter')).toContainText('2 of 2');
             const secondSlot = await measureCalendarDoneSlot(page);
             expect(secondSlot.isRoutineCard).not.toBe(firstSlot.isRoutineCard);
 
@@ -1279,7 +1282,7 @@ test.describe('weekly review', () => {
 
             // The series is decided and the now-exception occurrence never comes back as its own card.
             await expect(page.getByTestId('stageEmptyCard')).toContainText('Calendar — all reviewed!');
-            await expect(page.getByTestId('reviewStageCounter')).toContainText('1 of 1');
+            await expect(page.getByTestId('reviewStageCounter')).toHaveCount(0);
             await gtd.flush(page);
             const moved = (await gtd.listItems(page)).find((item) => item._id === endedToday._id);
             if (!moved?.timeStart) throw new Error('expected the moved occurrence with a start');
@@ -1314,14 +1317,14 @@ test.describe('weekly review', () => {
             const routineAfterTyping = (await gtd.listRoutines(page)).find((r) => r._id === routine._id);
             expect(routineAfterTyping?.routineExceptions ?? []).toEqual([]);
             await expect(routineCard).toBeVisible();
-            await expect(page.getByTestId('reviewStageCounter')).toContainText('0 of 1');
+            await expect(page.getByTestId('reviewStageCounter')).toContainText('1 of 1');
             // An unsaved occurrence edit locks the series actions that would rewrite it.
             await expect(page.getByTestId('routineCardEdit')).toBeDisabled();
             await expect(page.getByTestId('routineCardPause')).toBeDisabled();
 
             await page.getByTestId('routineCardLooksGood').click();
             await expect(page.getByTestId('stageEmptyCard')).toContainText('Calendar — all reviewed!');
-            await expect(page.getByTestId('reviewStageCounter')).toContainText('1 of 1');
+            await expect(page.getByTestId('reviewStageCounter')).toHaveCount(0);
             await gtd.flush(page);
             const titles = (await gtd.listItems(page)).filter((item) => item.routineId === routine._id).map((item) => item.title);
             expect(titles).toEqual(['Quarterly planning — bring numbers']);
@@ -1388,7 +1391,9 @@ test.describe('weekly review', () => {
             // Every raw id folded onto ONE routine entry, which the raw decision already covers —
             // the stage resumes complete instead of re-walking dozens of occurrences.
             await expect(page.getByTestId('stageEmptyCard')).toContainText('Calendar — all reviewed!');
-            await expect(page.getByTestId('reviewStageCounter')).toContainText('1 of 1');
+            // The end card takes no item ordinal; the full bar shows the stage walked.
+            await expect(page.getByTestId('reviewStageCounter')).toHaveCount(0);
+            await expect(page.getByTestId('reviewHeaderStrip').getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100');
         });
     });
 });

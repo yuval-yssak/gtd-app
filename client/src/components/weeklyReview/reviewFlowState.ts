@@ -270,12 +270,30 @@ export function currentQueueItemId(queue: StageQueue): string | null {
 
 /**
  * How far into the stage's walk the user is: entries walked past, whether decided OR ▶-skipped.
- * Drives the header's "n of m" counter — a pure decided count would sit at 0 through an
- * all-skips walk even as the user nears the end. Never exceeds the queue total: `cursor` is
+ * Drives the stage counter's position (walked + 1) and the bar's share — a pure decided count
+ * would sit still through an all-skips walk even as the user nears the end. Never exceeds the queue total: `cursor` is
  * clamped to `pending.length` everywhere it moves.
  */
 export function walkedEntryCount(queue: StageQueue): number {
     return queue.decisions.length + queue.cursor;
+}
+
+/**
+ * The header's stage progress: `position` is the 1-based ordinal of the item on screen ("1 of 1"
+ * on a single-item stage), null on the stage-end card — that card is not an item, so it never
+ * takes an ordinal of its own. `percent` is the share walked past, reaching 100 only at the end.
+ */
+export function stageItemProgress(queue: StageQueue | undefined) {
+    if (!queue) {
+        return null;
+    }
+    const total = queue.decisions.length + queue.pending.length;
+    if (total === 0) {
+        return null;
+    }
+    const walked = walkedEntryCount(queue);
+    // Whole percent: the bar announces this as aria-valuenow, and "66.666…" reads as noise.
+    return { position: currentQueueItemId(queue) === null ? null : walked + 1, total, percent: Math.round((walked / total) * 100) };
 }
 
 /**

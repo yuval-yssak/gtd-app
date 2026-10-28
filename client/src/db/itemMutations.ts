@@ -82,6 +82,8 @@ export async function clarifyToNextAction(db: IDBPDatabase<MyDB>, item: StoredIt
         calendarSyncConfigId: _csc,
         waitingForPersonId: _wfp,
         allDay: _ad,
+        // Only a done row holds a completion record (`withCompletionRecord`).
+        statusBeforeDone: _sbd,
         ...rest
     } = item;
     // Clarifying an inbox capture is when the item becomes actionable, so it is minted a FRESH key
@@ -123,6 +125,8 @@ export async function clarifyToCalendar(db: IDBPDatabase<MyDB>, item: StoredItem
         calendarSyncConfigId: _csc,
         calendarIntegrationId: _ci,
         allDay: _ad,
+        // Only a done row holds a completion record (`withCompletionRecord`).
+        statusBeforeDone: _sbd,
         ...rest
     } = item;
     const updated: StoredItem = {
@@ -165,6 +169,8 @@ export async function clarifyToWaitingFor(db: IDBPDatabase<MyDB>, item: StoredIt
         urgent: _u,
         allDay: _ad,
         waitingForPersonId: _wfp,
+        // Only a done row holds a completion record (`withCompletionRecord`).
+        statusBeforeDone: _sbd,
         ...rest
     } = item;
     const updated: StoredItem = { ...rest, status: 'waitingFor', ...meta, updatedTs: nowIso() };
@@ -190,6 +196,8 @@ export async function clarifyToInbox(db: IDBPDatabase<MyDB>, item: StoredItem): 
         calendarSyncConfigId: _csc,
         waitingForPersonId: _wfp,
         allDay: _ad,
+        // Only a done row holds a completion record (`withCompletionRecord`).
+        statusBeforeDone: _sbd,
         ...rest
     } = item;
     const updated: StoredItem = { ...rest, status: 'inbox', updatedTs: nowIso() };
@@ -222,6 +230,8 @@ export async function clarifyToSomedayMaybe(db: IDBPDatabase<MyDB>, item: Stored
         calendarSyncConfigId: _csc,
         waitingForPersonId: _wfp,
         allDay: _ad,
+        // Only a done row holds a completion record (`withCompletionRecord`).
+        statusBeforeDone: _sbd,
         ...rest
     } = item;
     const updated: StoredItem = { ...rest, status: 'somedayMaybe', ...meta, updatedTs: nowIso() };
@@ -260,7 +270,7 @@ export async function clarifyToTrash(db: IDBPDatabase<MyDB>, item: StoredItem): 
  * so a materializer pass can never observe the gap between the two and mint a second open occurrence.
  */
 async function disposeItem(db: IDBPDatabase<MyDB>, item: StoredItem, disposalKind: 'done' | 'trash'): Promise<StoredItem> {
-    const updated: StoredItem = { ...item, status: disposalKind, updatedTs: nowIso() };
+    const updated: StoredItem = { ...withCompletionRecord(item, disposalKind), status: disposalKind, updatedTs: nowIso() };
     recordGhostIfLeavingList(item, updated);
     const writeDisposal = async () => {
         await putItem(db, updated);
@@ -269,6 +279,23 @@ async function disposeItem(db: IDBPDatabase<MyDB>, item: StoredItem, disposalKin
     };
     await (item.routineId ? withCrossContextLock(ROUTINE_ITEMS_LOCK, writeDisposal) : writeDisposal());
     return updated;
+}
+
+/**
+ * The `statusBeforeDone` a disposal writes. Completing an open item records its status; trashing
+ * one records nothing (it was never done) and sheds any stale value; an item already done or trash
+ * keeps whatever it has. The server trusts a done snapshot's value — this queue may collapse several
+ * transitions into one op — and applies the same rule otherwise (`api-server/src/lib/statusBeforeDone.ts`).
+ */
+function withCompletionRecord(item: StoredItem, disposalKind: 'done' | 'trash'): StoredItem {
+    if (item.status === 'done' || item.status === 'trash') {
+        return item;
+    }
+    if (disposalKind === 'done') {
+        return { ...item, statusBeforeDone: item.status };
+    }
+    const { statusBeforeDone: _stale, ...withoutRecord } = item;
+    return withoutRecord;
 }
 
 /**

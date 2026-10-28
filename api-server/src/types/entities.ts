@@ -8,6 +8,8 @@ export const ItemStatus = {
     trash: 'trash',
 } as const;
 export type ItemStatus = (typeof ItemStatus)[keyof typeof ItemStatus];
+/** The statuses an item is worked in — everything but the archival `done` / `trash`. */
+export type OpenItemStatus = Exclude<ItemStatus, 'done' | 'trash'>;
 
 export type EnergyLevel = 'low' | 'medium' | 'high';
 export type EntityType = 'item' | 'routine' | 'person' | 'workContext' | 'reviewInbox' | 'itemBrief';
@@ -52,6 +54,14 @@ export interface ItemInterface {
     _id?: string;
     user: string; // Better Auth user ID (UUID string, not ObjectId)
     status: ItemStatus;
+    /**
+     * The open status the item held when it was completed — what a done item "was". Stamped by the
+     * client at completion and filled in by the apply pipeline when a snapshot lacks it
+     * (`lib/statusBeforeDone.ts`). Held only by `done` rows and trashed done items — the pipeline
+     * drops it when an item returns to an open status. Absent on items completed before the field
+     * existed; the client infers from the leftover fields there.
+     */
+    statusBeforeDone?: OpenItemStatus;
     title: string;
     createdTs: string; // ISO datetime
     updatedTs: string; // ISO datetime — used as the conflict-resolution anchor (last write wins)

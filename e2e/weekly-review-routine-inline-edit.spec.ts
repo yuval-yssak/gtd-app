@@ -36,7 +36,7 @@ test.describe('Weekly review — inline routine editing', () => {
     test('Save in the card updates the routine and returns to the same, still-undecided entry', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `wr-routine-inline-save-${uniqueStamp()}@example.com`, async (page) => {
             const { routine, card } = await openRoutineCardInReview(page);
-            await expect(page.getByTestId('reviewStageCounter')).toContainText('0 of 1');
+            await expect(page.getByTestId('reviewStageCounter')).toContainText('1 of 1');
 
             await page.getByTestId('routineCardEdit').click();
             const title = card.getByRole('textbox', { name: 'Title' });
@@ -51,7 +51,7 @@ test.describe('Weekly review — inline routine editing', () => {
             await expect(card.getByTestId('routineEditorSaveButton')).toHaveCount(0);
             await expect(card.getByTestId('reviewRoutineBanner')).toHaveAccessibleName('Routine: Morning gym (early)');
             // Saving is an edit, not a review decision: same entry, unlocked, focus back on Edit.
-            await expect(page.getByTestId('reviewStageCounter')).toContainText('0 of 1');
+            await expect(page.getByTestId('reviewStageCounter')).toContainText('1 of 1');
             await expect(page.getByTestId('routineCardLooksGood')).toBeEnabled();
             await expect(page.getByTestId('routineCardEdit')).toBeFocused();
             expect((await gtd.listRoutines(page)).find((r) => r._id === routine._id)?.title).toBe('Morning gym (early)');

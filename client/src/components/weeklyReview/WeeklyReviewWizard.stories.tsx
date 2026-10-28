@@ -5,7 +5,7 @@ import { RouterDecorator } from '../../../.storybook/RouterDecorator';
 import { editorProvidersDecorator } from '../../test-utils/storybookAppData';
 import { mockDb, sampleNextActionItem, samplePeople, sampleWorkContexts } from '../../test-utils/storybookMocks';
 import type { StoredItem } from '../../types/MyDB';
-import { buildStageQueue, type ReviewFlowState, stageIndexOf } from './reviewFlowState';
+import { buildStageQueue, type ReviewFlowState, type StageQueue, stageIndexOf } from './reviewFlowState';
 import { WeeklyReviewWizard } from './WeeklyReviewWizard';
 
 const nextActions: StoredItem[] = [
@@ -15,7 +15,7 @@ const nextActions: StoredItem[] = [
 ];
 
 // Mid-walk through Next Actions: one item already decided (marked done, so no longer eligible)
-// and three still pending — the strip reads "1 of 4".
+// and three still pending — the strip reads "2 of 4" (the second entry is on screen).
 const midNextActionsFlow: ReviewFlowState = {
     stageIndex: stageIndexOf('nextActions'),
     tickedInboxIds: [],
@@ -65,5 +65,26 @@ export const ExpandedHeader: Story = {
     play: async ({ canvasElement }) => {
         await userEvent.click(await within(canvasElement).findByTestId('reviewHeaderStrip'));
         await waitFor(() => expect(within(canvasElement).getByTestId('reviewStepper')).toBeVisible());
+    },
+};
+
+const singleItemFlow = (queue: StageQueue): ReviewFlowState => ({ ...midNextActionsFlow, queues: { nextActions: queue } });
+
+/** A one-item stage on its only card — numbered from 1, so the strip reads "1 of 1", never "0 of 1". */
+export const SingleItemStage: Story = {
+    args: { initialFlow: singleItemFlow(buildStageQueue([sampleNextActionItem._id])) },
+    play: async ({ canvasElement }) => {
+        await waitFor(() => expect(within(canvasElement).getByTestId('reviewStageCounter')).toHaveTextContent('1 of 1'));
+    },
+};
+
+/** The stage-end card after the only item — no ordinal (it is not an item), the bar full. */
+export const StageEndCard: Story = {
+    args: { initialFlow: singleItemFlow({ ...buildStageQueue([sampleNextActionItem._id]), cursor: 1 }) },
+    play: async ({ canvasElement }) => {
+        const canvas = within(canvasElement);
+        await waitFor(() => expect(canvas.getByTestId('stageEmptyCard')).toBeVisible());
+        await expect(canvas.queryByTestId('reviewStageCounter')).toBeNull();
+        await expect(canvas.getByRole('progressbar', { name: 'Stage progress' })).toHaveAttribute('aria-valuenow', '100');
     },
 };

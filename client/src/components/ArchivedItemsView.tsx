@@ -14,6 +14,7 @@ import type { StoredItem } from '../types/MyDB';
 import { AccountChip } from './AccountChip';
 import { AccountSyncChip } from './AccountSyncChip';
 import styles from './ArchivedItemsView.module.css';
+import { buildDoneContextLookups, type DoneContextLookups, doneContextSummary, doneItemContext } from './doneItemContextLogic';
 import { CopyIdButton } from './itemEditor/CopyIdButton';
 import { ListRowShell } from './ListRowShell';
 import { ListSearchButton, ListSearchField } from './ListSearch';
@@ -53,6 +54,8 @@ interface ArchivedRowProps {
     item: StoredItem;
     sortKey: ItemSortKey;
     routineTitle: string | undefined;
+    /** Stable across renders, so the memoized row still skips; the summary is derived per MOUNTED row. */
+    doneContextLookups: DoneContextLookups;
     isGhost: boolean;
     onGhostExited: (itemId: string) => void;
     hasDivider: boolean;
@@ -60,7 +63,9 @@ interface ArchivedRowProps {
 
 // memo: done/trash are the largest lists in the app — item identity is stable across re-renders
 // (rows come straight from the IDB snapshot), so sorting/ghost updates only pay for changed rows.
-const ArchivedRow = memo(function ArchivedRow({ item, sortKey, routineTitle, isGhost, onGhostExited, hasDivider }: ArchivedRowProps) {
+const ArchivedRow = memo(function ArchivedRow({ item, sortKey, routineTitle, doneContextLookups, isGhost, onGhostExited, hasDivider }: ArchivedRowProps) {
+    // "Calendar · Tue, Oct 27 · 2:00 pm – 3:00 pm" — what a done item was; null on trash rows or when unknown.
+    const doneContext = useMemo(() => doneRowSummary(item, doneContextLookups), [item, doneContextLookups]);
     const verb = sortKey === 'updatedTs' ? 'Updated' : 'Created';
     return (
         <ListRowShell itemId={item._id} isGhost={isGhost} onGhostExited={onGhostExited}>
@@ -74,6 +79,11 @@ const ArchivedRow = memo(function ArchivedRow({ item, sortKey, routineTitle, isG
                         <AccountChip userId={item.userId} />
                         {item.cancelledByGCal && <Chip label="Cancelled in Calendar" tone="warning" data-testid="cancelledByGCalChip" />}
                     </span>
+                    {doneContext && (
+                        <Text as="span" variant="caption" className={styles.doneContext} data-testid="doneItemContextSummary">
+                            {doneContext}
+                        </Text>
+                    )}
                     <Text as="span" variant="caption" tone="secondary">
                         {`${verb} ${dayjs(item[sortKey]).fromNow()}`}
                     </Text>
@@ -85,7 +95,7 @@ const ArchivedRow = memo(function ArchivedRow({ item, sortKey, routineTitle, isG
 });
 
 export function ArchivedItemsView({ status, title, emptyIcon, emptyMessage, urlQuery, writeUrlQuery }: Props) {
-    const { items, routines, isInitialSyncing } = useAppData();
+    const { items, routines, allPeople, allWorkContexts, isInitialSyncing } = useAppData();
     const [sortKey, setSortKey] = useState<ItemSortKey>('updatedTs');
     const [sortDir, setSortDir] = useState<ItemSortDir>('desc');
     useListScrollRestoration();
@@ -98,6 +108,8 @@ export function ArchivedItemsView({ status, title, emptyIcon, emptyMessage, urlQ
     const filtered = useMemo(() => filterItemsByQuery(archivedItems, deferredQuery), [archivedItems, deferredQuery]);
     const sorted = useMemo(() => sortItems(filtered, sortKey, sortDir), [filtered, sortKey, sortDir]);
     const routineTitleById = useMemo(() => new Map(routines.map((r) => [r._id, r.title])), [routines]);
+    // Cross-account lists: a row's references resolve by id whichever visible account owns it.
+    const doneContextLookups = useMemo(() => buildDoneContextLookups(allPeople, allWorkContexts), [allPeople, allWorkContexts]);
 
     // Ghosts are fading leftovers of items that just left this archive — count live rows only.
     const liveCount = filtered.filter((item) => !isGhost(item)).length;
@@ -180,6 +192,7 @@ export function ArchivedItemsView({ status, title, emptyIcon, emptyMessage, urlQ
                                 item={item}
                                 sortKey={sortKey}
                                 routineTitle={item.routineId ? routineTitleById.get(item.routineId) : undefined}
+                                doneContextLookups={doneContextLookups}
                                 isGhost={isGhost(item)}
                                 onGhostExited={onGhostExited}
                                 hasDivider={idx < sorted.length - 1}
@@ -190,4 +203,9 @@ export function ArchivedItemsView({ status, title, emptyIcon, emptyMessage, urlQ
             )}
         </div>
     );
+}
+
+function doneRowSummary(item: StoredItem, lookups: DoneContextLookups) {
+    const context = doneItemContext(item, lookups);
+    return context ? doneContextSummary(context) : null;
 }

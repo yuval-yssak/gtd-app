@@ -28,6 +28,7 @@ import {
     type StageQueue,
     skipStage,
     stageEligibleEntryIds,
+    stageItemProgress,
     toggleInboxTick,
     walkedEntryCount,
     withStageQueue,
@@ -238,23 +239,9 @@ function isStageDone(flow: ReviewFlowState, stage: ReviewStageDefinition, inboxI
     return queue !== undefined && queue.pending.length === 0;
 }
 
-/**
- * Item progress within the stage — label ("2 of 12") plus the matching percentage for a bar.
- * Counts POSITION in the walk (decided + skipped-past), not decisions alone: ▶-skipping must
- * move the counter too, or an all-skips walk would read "0 of 12" right up to the end card.
- */
-function stageItemProgress(queue: StageQueue | undefined): { label: string; value: number } | null {
-    if (!queue) {
-        return null;
-    }
-    const total = queue.decisions.length + queue.pending.length;
-    if (total === 0) {
-        return null;
-    }
-    const walked = walkedEntryCount(queue);
-    // Whole percent: the bar announces this as aria-valuenow, and "66.666…" reads as noise.
-    return { label: `${walked} of ${total}`, value: Math.round((walked / total) * 100) };
-}
+/** "2 of 12" for the item on screen; null on the stage-end card, which has no ordinal. */
+const stageItemLabel = (progress: ReturnType<typeof stageItemProgress>) =>
+    progress && progress.position !== null ? `${progress.position} of ${progress.total}` : null;
 
 /** Review-wide progress percentage — the full header's bar (the strip's bar is stage-scoped). */
 const reviewProgressValue = (flow: ReviewFlowState) => Math.round((flow.stageIndex / REVIEW_STAGES.length) * 100);
@@ -274,14 +261,15 @@ interface CollapsedHeaderStripProps {
 }
 
 /**
- * The slim one-line header shown once the user is working a stage. The counter and the bar next
- * to it are STAGE-scoped and always agree — so neither reads as a legend for anything
- * review-wide. Review-wide position appears only as the mini stage DOTS at the right end, the
+ * The slim one-line header shown once the user is working a stage. The counter (the item on
+ * screen) and the bar next to it (the share walked past) are both STAGE-scoped — so neither reads
+ * as a legend for anything review-wide. Review-wide position appears only as the mini stage DOTS at the right end, the
  * same visual language as the expanded timeline. Renders instead of — never alongside — the full
  * header, so the shared testids stay unique.
  */
 function CollapsedHeaderStrip({ stage, queue, stageDots, onExpand }: CollapsedHeaderStripProps) {
     const itemProgress = stageItemProgress(queue);
+    const itemLabel = stageItemLabel(itemProgress);
     const stageNumber = stageDots.findIndex((dot) => dot.isCurrent) + 1;
     return (
         <button
@@ -297,10 +285,12 @@ function CollapsedHeaderStrip({ stage, queue, stageDots, onExpand }: CollapsedHe
             </Text>
             {itemProgress && (
                 <>
-                    <Text variant="caption" tone="secondary" className={styles.stripLabel} data-testid="reviewStageCounter">
-                        {itemProgress.label}
-                    </Text>
-                    <ProgressBar as="span" value={itemProgress.value} aria-label="Stage progress" className={styles.stripProgress} />
+                    {itemLabel && (
+                        <Text variant="caption" tone="secondary" className={styles.stripLabel} data-testid="reviewStageCounter">
+                            {itemLabel}
+                        </Text>
+                    )}
+                    <ProgressBar as="span" value={itemProgress.percent} aria-label="Stage progress" className={styles.stripProgress} />
                 </>
             )}
             <span role="img" aria-label={`Stage ${stageNumber} of ${stageDots.length}`} className={styles.stripDots} data-testid="stripStageDots">
@@ -327,7 +317,7 @@ interface WizardHeaderProps {
 
 function WizardHeader({ flow, stage, queue, onSkipStage, hasStageActivity, canCollapse, onCollapse }: WizardHeaderProps) {
     const stageNumber = flow.stageIndex + 1;
-    const itemProgress = stageItemProgress(queue)?.label ?? null;
+    const itemLabel = stageItemLabel(stageItemProgress(queue));
     const isShowBriefsOn = useShowBriefs();
 
     return (
@@ -336,7 +326,7 @@ function WizardHeader({ flow, stage, queue, onSkipStage, hasStageActivity, canCo
                 <div>
                     <Text variant="overline" tone="secondary" data-testid="reviewStageCounter">
                         Stage {stageNumber} of {REVIEW_STAGES.length}
-                        {itemProgress ? ` · ${itemProgress}` : ''}
+                        {itemLabel ? ` · ${itemLabel}` : ''}
                     </Text>
                     <div className={styles.titleRow}>
                         <Text as="h1" variant="title" className={styles.stageTitle} data-testid="reviewStageTitle">

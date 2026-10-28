@@ -637,6 +637,29 @@ describe('POST /v1/items/:id/complete', () => {
         expect(body.status).toBe('done');
     });
 
+    it('records the status the item was completed from, in the response and on the row', async () => {
+        const { plaintext, userId } = await newUserWithToken();
+        const { _id: itemId } = await seedItem({ userId, title: 'call Dana', status: 'waitingFor' });
+        if (!itemId) {
+            throw new Error('expected a seeded item id');
+        }
+        const res = await callApi({ method: 'POST', path: `/v1/items/${itemId}/complete`, token: plaintext });
+        expect(((await res.json()) as ItemInterface).statusBeforeDone).toBe('waitingFor');
+        expect((await itemsDAO.findByOwnerAndId(itemId, userId))?.statusBeforeDone).toBe('waitingFor');
+    });
+
+    it('records the real stored status even if the open row still holds a stale value from an earlier completion', async () => {
+        const { plaintext, userId } = await newUserWithToken();
+        const { _id: itemId } = await seedItem({ userId, title: 'revived', status: 'nextAction' });
+        if (!itemId) {
+            throw new Error('expected a seeded item id');
+        }
+        // Written straight to the row — the shape a writer outside the apply pipeline could leave behind.
+        await itemsDAO.updateOne({ _id: itemId }, { $set: { statusBeforeDone: 'calendar' } });
+        const res = await callApi({ method: 'POST', path: `/v1/items/${itemId}/complete`, token: plaintext });
+        expect(((await res.json()) as ItemInterface).statusBeforeDone).toBe('nextAction');
+    });
+
     it('is idempotent: completing an already-done item returns the unchanged item with X-Idempotent-Replay', async () => {
         const { plaintext, userId } = await newUserWithToken();
         const item = await seedItem({ userId, title: 'already', status: 'done', updatedTs: '2024-01-01T00:00:00.000Z' });

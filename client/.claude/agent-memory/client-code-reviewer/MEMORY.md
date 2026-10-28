@@ -67,3 +67,4 @@
 - [Storybook global fetch stub on docs pages](feedback_storybook_global_fetch_stub_docs_page.md) — per-story window.fetch stubs chain on autodocs pages; last story's config wins, cleanup leaks.
 - [Confirm gate writes a stale snapshot](feedback_confirm_gate_stale_snapshot.md) — confirm dialog in front of clarifyToDone closes over the click-time item; confirm must re-resolve by _id + bail.
 - [Collapsed-entry edit drops entry](project_collapsed_entry_edit_drops_entry.md) — autosave on a routine: entry's occurrence can make the entry ineligible mid-edit; reconcile unmounts the card.
+- [Eager row props above virtualizer](feedback_eager_row_props_above_virtualizer.md) — derived props in parent .map() over WindowVirtualizer run for all N rows per render; move into the memo row.
