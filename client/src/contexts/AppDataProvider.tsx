@@ -23,10 +23,10 @@ import { getOrCreateDeviceId } from '../db/deviceId';
 import { evaporateUserAndRecoverGated } from '../db/evaporateUser';
 import { reconcileActiveSessionCookie, syncAllLoggedInUsers, syncSingleUser, withAccountSession } from '../db/multiUserSync';
 import { registerPushSubscriptionIfPermitted } from '../db/pushSubscription';
-import { materializePendingNextActionRoutines } from '../db/routineItemHelpers';
 import { closeSseConnections, openSseConnections, reopenSseConnections } from '../db/sseClient';
 import { flushSyncQueue, pullFromServer } from '../db/syncHelpers';
 import { recoverFromBootstrapRequired } from '../db/syncRecovery';
+import { syncThenSeedRoutines } from '../db/syncThenSeedRoutines';
 import { prefetchCalendarOptions } from '../hooks/useCalendarOptions';
 import { useOnline } from '../hooks/useOnline';
 import { subscribeToAppResume } from '../lib/appResume';
@@ -311,17 +311,16 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
                 return;
             }
             // Multi-account orchestrator: pivots active session per logged-in user, flushes that
-            // user's queue, pulls (or bootstraps), then runs that user's calendar integrations.
-            const { navigated } = await syncAllLoggedInUsers(db, { onUserSynced: async () => syncCalendarIntegrationsForActiveSession() });
+            // user's queue, pulls (or bootstraps), then runs that user's calendar integrations —
+            // and finally materializes the active account's startDate-due routines so the user sees
+            // today's first occurrence without waiting for the next disposal event (skipped when the
+            // active account's own pass did not sync — a stale view would seed a duplicate).
+            const { navigated } = await syncThenSeedRoutines(db, acct.id, async () => syncCalendarIntegrationsForActiveSession());
             if (navigated) {
                 // An evaporation already set location.href (to / or /login). Anything below — the
                 // missing-account check included — would override that navigation.
                 return;
             }
-
-            // After pulling for the active account, materialize startDate-due routines so the
-            // user sees today's first occurrence without waiting for the next disposal event.
-            await materializePendingNextActionRoutines(db, acct.id);
 
             // Guard after the async work — component may have unmounted while awaiting network.
             if (unmountedRef.current) {

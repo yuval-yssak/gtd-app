@@ -8,7 +8,7 @@ import type { EnergyLevel, MyDB, StoredItem, StoredRoutine } from '../types/MyDB
 import { ROUTINE_ITEMS_LOCK, withCrossContextLock } from './crossContextLock';
 import { deleteItemById, getItemsAcrossUsers, putItem, topRankForUser } from './itemHelpers';
 import { getRoutineById } from './routineHelpers';
-import { createNextRoutineItem, isCalendarRoutineExhausted, RruleExhaustedError } from './routineItemHelpers';
+import { createNextRoutineItem, hasOpenNonCalendarRoutineItem, isCalendarRoutineExhausted, RruleExhaustedError } from './routineItemHelpers';
 import { updateRoutine } from './routineMutations';
 import { queueDeleteThenRemove, queueSyncOp } from './syncHelpers';
 
@@ -316,6 +316,11 @@ async function maybeCreateNextRoutineItem(db: IDBPDatabase<MyDB>, item: StoredIt
 
     try {
         if (routine.routineType === 'nextAction') {
+            // A surviving open occurrence (a duplicate minted by a stale device, or the successor of
+            // an already-done item now being trashed) is already the routine's next item.
+            if (await hasOpenNonCalendarRoutineItem(db, item.userId, routine._id)) {
+                return;
+            }
             await createNextRoutineItem(db, item.userId, routine, dayjs().toDate());
         } else {
             await createNextCalendarRoutineItem(db, item, routine, disposalKind);

@@ -18,8 +18,8 @@ dayjs.extend(utc);
  *
  * Both are idempotent in spirit:
  *   - `ensureFirstRoutineItem` no-ops when an open item already exists for the routine.
- *   - `advanceRoutineAfterDisposal` simply creates the next-occurrence item; the caller is expected
- *     to invoke it once per disposal (the disposal handlers in routes/v1/items.ts do this).
+ *   - `advanceRoutineAfterDisposal` no-ops when another open non-calendar item remains, so a
+ *     duplicate occurrence never mints a further successor.
  *
  * Failure semantics mirror the client (`itemMutations.ts:maybeCreateNextRoutineItem`):
  *   - `RruleExhaustedError` → deactivate the routine (the series is over).
@@ -106,8 +106,8 @@ export async function ensureFirstRoutineItem(
 
 /**
  * Advance a nextAction routine after one of its items was disposed (completed or trashed). No-op
- * when the routine is not a nextAction routine or is inactive — the caller checks both already,
- * but this guard keeps the contract symmetric with `ensureFirstRoutineItem`.
+ * when the routine is not a nextAction routine, is inactive, or still has another open item —
+ * same guards as `ensureFirstRoutineItem` and the client's disposal path.
  *
  * Anchors at the disposal instant's user-local calendar date, `max`-ed with `routine.startDate`,
  * and uses `includeAnchor=false` (strict-after) so a same-day disposal advances to the next
@@ -115,6 +115,13 @@ export async function ensureFirstRoutineItem(
  */
 export async function advanceRoutineAfterDisposal(ctx: RoutineItemGenerationContext, routine: RoutineInterface, disposalDate: Date): Promise<void> {
     if (routine.routineType !== 'nextAction' || !routine.active) {
+        return;
+    }
+    // A surviving open occurrence (a duplicate pushed by a stale device, or the successor of an
+    // already-done item now being trashed) is already the routine's next item. Calendar-status rows
+    // are type-switch history, never the nextAction slot — same exclusion as the switch's seed.
+    // Check-then-insert, not atomic: two concurrent disposals of twins can still both advance.
+    if (await hasOpenItem(ctx.userId, routine._id, true)) {
         return;
     }
     const disposalLocalDate = localDateInTimezone(await resolveUserTimezone(ctx.userId), disposalDate);

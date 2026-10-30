@@ -568,6 +568,66 @@ describe('clarifyToTrash', () => {
     });
 });
 
+describe('routine item disposal with another occurrence still open', () => {
+    /** A daily routine already carrying two open occurrences — the duplicate a stale device can mint. */
+    async function seedRoutineWithTwoOpenItems() {
+        const routine = await createRoutine(db, {
+            userId: USER_ID,
+            title: 'Get flowers',
+            routineType: 'nextAction',
+            rrule: 'FREQ=DAILY;INTERVAL=1',
+            template: {},
+            active: true,
+        });
+        const disposed = await updateItem(db, { ...(await collectItem(db, USER_ID, { title: 'Get flowers' })), status: 'nextAction', routineId: routine._id });
+        const survivor = await updateItem(db, { ...(await collectItem(db, USER_ID, { title: 'Get flowers' })), status: 'nextAction', routineId: routine._id });
+        return { routine, disposed, survivor };
+    }
+
+    async function openItemsOf(routineId: string) {
+        const allItems = await db.getAllFromIndex('items', 'userId', USER_ID);
+        return allItems.filter((i) => i.routineId === routineId && i.status !== 'done' && i.status !== 'trash');
+    }
+
+    it.each(['done', 'trash'] as const)('a %s disposal mints no successor while the routine still has an open item', async (disposal) => {
+        const { routine, disposed, survivor } = await seedRoutineWithTwoOpenItems();
+
+        await (disposal === 'done' ? clarifyToDone(db, disposed) : clarifyToTrash(db, disposed));
+
+        expect((await openItemsOf(routine._id)).map((i) => i._id)).toEqual([survivor._id]);
+    });
+
+    it('trashing an already-done occurrence mints no successor beside the open one', async () => {
+        const { routine, disposed, survivor } = await seedRoutineWithTwoOpenItems();
+        const done = await clarifyToDone(db, disposed);
+
+        await clarifyToTrash(db, done);
+
+        expect((await openItemsOf(routine._id)).map((i) => i._id)).toEqual([survivor._id]);
+    });
+
+    it('a transformed survivor (moved to waitingFor) still holds the open slot', async () => {
+        const { routine, disposed, survivor } = await seedRoutineWithTwoOpenItems();
+        await updateItem(db, { ...survivor, status: 'waitingFor' });
+
+        await clarifyToDone(db, disposed);
+
+        expect((await openItemsOf(routine._id)).map((i) => i._id)).toEqual([survivor._id]);
+    });
+
+    it('past calendar history left by a calendar → nextAction switch does not hold the open slot', async () => {
+        const { routine, disposed, survivor } = await seedRoutineWithTwoOpenItems();
+        const pastDay = dayjs().subtract(3, 'day').format('YYYY-MM-DD');
+        const history = await updateItem(db, { ...survivor, status: 'calendar', timeStart: `${pastDay}T09:00:00`, timeEnd: `${pastDay}T09:30:00` });
+
+        await clarifyToDone(db, disposed);
+
+        const open = await openItemsOf(routine._id);
+        expect(open.filter((i) => i.status === 'nextAction')).toHaveLength(1);
+        expect(open.map((i) => i._id)).toContain(history._id);
+    });
+});
+
 describe('routine item disposal vs the materializer', () => {
     beforeEach(async () => {
         installQueueingLocks();

@@ -615,6 +615,89 @@ describe('POST /v1/items/:id/trash — advance routine', () => {
     });
 });
 
+describe('disposal open-item guard', () => {
+    /** A routine whose first item has a duplicate open twin — the state a stale device can push. */
+    async function seedRoutineWithTwoOpenItems() {
+        const userId = await login();
+        const token = await tokenWith(userId, ['routines.write', 'items.write']);
+        const routine = await createRoutineViaApi(token, { rrule: 'FREQ=DAILY' });
+        const [first] = await getItemsForRoutine(userId, routine._id);
+        if (!first?._id) {
+            throw new Error('expected the bootstrapped first item');
+        }
+        const twinId = randomUUID();
+        await itemsDAO.insertOne({ ...first, _id: twinId });
+        return { userId, token, routineId: routine._id, disposed: { ...first, _id: first._id }, twinId };
+    }
+
+    async function openItemIds(userId: string, routineId: string) {
+        const items = await getItemsForRoutine(userId, routineId);
+        return items.filter((i) => i.status !== 'done' && i.status !== 'trash').map((i) => i._id);
+    }
+
+    it.each(['complete', 'trash'] as const)('POST /v1/items/:id/%s leaves the surviving twin as the only open item', async (endpoint) => {
+        const { userId, token, routineId, disposed, twinId } = await seedRoutineWithTwoOpenItems();
+
+        const res = await postJson(`/v1/items/${disposed._id}/${endpoint}`, token, {});
+
+        expect(res.status).toBe(200);
+        expect(await openItemIds(userId, routineId)).toEqual([twinId]);
+    });
+
+    it('PATCH /v1/items/:id status=done leaves the surviving twin as the only open item', async () => {
+        const { userId, token, routineId, disposed, twinId } = await seedRoutineWithTwoOpenItems();
+
+        const res = await patchJson(`/v1/items/${disposed._id}`, token, { status: 'done' });
+
+        expect(res.status).toBe(200);
+        expect(await openItemIds(userId, routineId)).toEqual([twinId]);
+    });
+
+    it('trashing an already-done occurrence mints no successor beside the open one', async () => {
+        const { userId, token, routineId, disposed, twinId } = await seedRoutineWithTwoOpenItems();
+        await itemsDAO.replaceById(disposed._id, { ...disposed, status: 'done' });
+
+        const res = await postJson(`/v1/items/${disposed._id}/trash`, token, {});
+
+        expect(res.status).toBe(200);
+        expect(await openItemIds(userId, routineId)).toEqual([twinId]);
+    });
+
+    it('past calendar history left by a calendar → nextAction switch does not hold the open slot', async () => {
+        const userId = await login();
+        const token = await tokenWith(userId, ['routines.write', 'items.write']);
+        const routine = await createRoutineViaApi(token, { routineType: 'calendar', calendarItemTemplate: { timeOfDay: '09:00', duration: 30 } });
+        await insertPastCalendarOccurrence(userId, routine._id);
+        expect((await patchJson(`/v1/routines/${routine._id}`, token, { routineType: 'nextAction' })).status).toBe(200);
+        const [seeded] = await itemsDAO.findArray({ user: userId, routineId: routine._id, status: 'nextAction' } as never);
+        if (!seeded) {
+            throw new Error('expected the type switch to seed a nextAction item');
+        }
+
+        expect((await postJson(`/v1/items/${seeded._id}/complete`, token, {})).status).toBe(200);
+
+        const open = await itemsDAO.findArray({ user: userId, routineId: routine._id, status: 'nextAction' } as never);
+        expect(open.map((i) => i._id)).not.toContain(seeded._id);
+        expect(open).toHaveLength(1);
+    });
+
+    async function insertPastCalendarOccurrence(userId: string, routineId: string) {
+        const pastDay = dayjs().subtract(3, 'day').format('YYYY-MM-DD');
+        const now = dayjs().toISOString();
+        await itemsDAO.insertOne({
+            _id: randomUUID(),
+            user: userId,
+            status: 'calendar',
+            title: 'r',
+            routineId,
+            timeStart: `${pastDay}T09:00:00`,
+            timeEnd: `${pastDay}T09:30:00`,
+            createdTs: now,
+            updatedTs: now,
+        });
+    }
+});
+
 // ── Pause + resume ───────────────────────────────────────────────────────────
 
 describe('Pause + resume composite — item generation', () => {

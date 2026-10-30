@@ -176,6 +176,15 @@ export async function hasOpenRoutineItem(db: IDBPDatabase<MyDB>, userId: string,
     return items.some((i) => i.routineId === routineId && i.status !== 'done' && i.status !== 'trash');
 }
 
+/** True when a nextAction routine's single open slot is taken: any open item except `calendar`-status
+ *  rows — every one, including an occurrence the user scheduled. A calendar → nextAction switch leaves
+ *  past occurrences behind as history, and they must not stall the stream forever. Narrower than
+ *  `hasOpenRoutineItem`; used by the type-switch seed and the disposal path. */
+export async function hasOpenNonCalendarRoutineItem(db: IDBPDatabase<MyDB>, userId: string, routineId: string): Promise<boolean> {
+    const items = await db.getAllFromIndex('items', 'userId', userId);
+    return items.some((i) => i.routineId === routineId && i.status !== 'done' && i.status !== 'trash' && i.status !== 'calendar');
+}
+
 /**
  * Persist a title/notes edit onto the routine and propagate it to generated items — the shared
  * body of the editor's autosave commit. Calendar routines refresh future item content in place;
@@ -675,6 +684,8 @@ export async function materializePendingNextActionRoutines(db: IDBPDatabase<MyDB
                 if (routine.routineType !== 'nextAction') {
                     continue;
                 }
+                // Deliberately broader than hasOpenNonCalendarRoutineItem: this pass seeds without any
+                // disposal event, so calendar history conservatively blocks it (the switch seeds directly).
                 const hasOpen = allItems.some((i) => i.routineId === routine._id && i.status !== 'done' && i.status !== 'trash');
                 if (hasOpen) {
                     continue;

@@ -10,6 +10,7 @@ import {
     deleteAndRegenerateFutureItems,
     generateCalendarItemsToHorizon,
     hardDeletePastItems,
+    hasOpenNonCalendarRoutineItem,
     hasOpenRoutineItem,
     isFutureStartDate,
     type OpenItemSyncResult,
@@ -383,20 +384,13 @@ export async function transitionRoutineType(db: IDBPDatabase<MyDB>, previous: St
     if (isFutureStartDate(ctx.formStartDate)) {
         return null;
     }
-    // A transformed (waitingFor/inbox/…) survivor still claims the routine's single open slot.
-    // Deliberately NARROWER than hasOpenRoutineItem: past calendar occurrences stay open-status
-    // as history after the switch and must not block the nextAction stream forever.
-    if (await hasTransformedSurvivor(db, updated.userId, updated._id)) {
+    // A transformed (waitingFor/inbox/…) survivor still claims the routine's single open slot;
+    // past calendar occurrences kept as history do not.
+    if (await hasOpenNonCalendarRoutineItem(db, updated.userId, updated._id)) {
         return null;
     }
     await seedFirstItemDeactivatingOnExhaustion(db, updated);
     return null;
-}
-
-/** True when the routine has an open item the USER re-homed (not done/trash/native-calendar). */
-async function hasTransformedSurvivor(db: IDBPDatabase<MyDB>, userId: string, routineId: string): Promise<boolean> {
-    const items = await db.getAllFromIndex('items', 'userId', userId);
-    return items.some((i) => i.routineId === routineId && i.status !== 'done' && i.status !== 'trash' && i.status !== 'calendar');
 }
 
 /** Calendar analog of `seedFirstItemDeactivatingOnExhaustion`: an exhausted rrule (no occurrence

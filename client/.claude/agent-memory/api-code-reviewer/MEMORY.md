@@ -9,3 +9,4 @@
 - [Batch denylist drifts from PATCH allowlist](feedback_public_batch_vs_per_entity_allowlist_drift.md) — snapshot-endpoint denylists are open-by-default; diff schema vs allowlist vs denylist, don't trust "mirrors X" comments
 - [op.snapshot is not the stored row](feedback_op_snapshot_is_not_the_stored_row.md) — response fields read off op.snapshot are the attempted write; wrong on skipped_* outcomes and hydrated delete/detach snapshots
 - [Log redaction misses error-object dumps](feedback_log_redaction_error_object_dumps.md) — console.error(msg, err) prints GaxiosError config.body (event text, attendee emails); GCal calendarId is an email
+- [Open-item guard blocked by type-switch history](feedback_open_item_guard_vs_type_switch_history.md) — routine "one open item" guards must ignore past calendar-status leftovers from calendar→nextAction switch
