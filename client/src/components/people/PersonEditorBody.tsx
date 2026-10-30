@@ -55,6 +55,19 @@ function applyTextFields(base: StoredPerson, fields: PersonTextFields): StoredPe
 }
 
 /**
+ * Writes the text fields over the stored row, re-read from IDB rather than taken from render: a
+ * sync pull can delete the person underneath the editor — the /person page then unmounts the body
+ * without re-rendering it, and the still-live UNDO snackbar outlives it — so a render-time copy
+ * would resurrect the row. Returns false (writing nothing) when the row is gone.
+ */
+async function saveIfStillPresent(db: IDBPDatabase<MyDB>, personId: string, fields: PersonTextFields) {
+    const current = await db.get('people', personId);
+    if (!current) return false;
+    await updatePerson(db, applyTextFields(current, fields));
+    return true;
+}
+
+/**
  * Person editor fields — fully autosaving (no Save button). Text edits debounce into
  * `updatePerson` writes with a "Saved — UNDO" snackbar. Remote changes from other devices
  * live-merge into fields the user hasn't touched (see lib/liveMerge for the policy).
@@ -74,11 +87,6 @@ export function PersonEditorBody({ db, person, showAccountPicker = false, chrome
     const livePerson = allPeople.find((p) => p._id === person._id) ?? person;
     const livePersonRef = useRef(livePerson);
     livePersonRef.current = livePerson;
-    // The row can disappear underneath the editor (a sync pull applies a remote delete) — the
-    // flush-on-unmount autosave would then resurrect it from the stale livePersonRef, queueing
-    // an update op for an entity the server just deleted. Commit bails when the row is gone.
-    const isPersonLiveRef = useRef(true);
-    isPersonLiveRef.current = allPeople.some((p) => p._id === person._id);
 
     const [ownerError, setOwnerError] = useState<string | null>(null);
     const [isOwnerMoveInFlight, setIsOwnerMoveInFlight] = useState(false);
@@ -102,15 +110,16 @@ export function PersonEditorBody({ db, person, showAccountPicker = false, chrome
             if (!value.name.trim()) {
                 return; // name is required — never persist a blank; the field shows the error state
             }
-            if (!isPersonLiveRef.current) {
-                return; // remotely deleted mid-edit — see the ref's comment; saving would resurrect
+            if (!(await saveIfStillPresent(db, person._id, value))) {
+                return;
             }
-            await updatePerson(db, applyTextFields(livePersonRef.current, value));
             offerUndo({
                 key: `person:${person._id}`,
                 message: 'Person saved',
                 undo: async () => {
-                    await updatePerson(db, applyTextFields(livePersonRef.current, baseline));
+                    if (!(await saveIfStillPresent(db, person._id, baseline))) {
+                        return;
+                    }
                     setForm(baseline);
                     autosave.reset(baseline);
                     await refreshPeople();
