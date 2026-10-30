@@ -25,5 +25,14 @@ interface StageToastProps {
 }
 
 export function StageToast({ notice, onDismissed }: StageToastProps) {
-    return <Toast open={notice !== null} message={notice?.message} tone={notice?.tone} autoHideDuration={3000} onClose={onDismissed} />;
+    return (
+        <Toast
+            open={notice !== null}
+            message={notice?.message}
+            tone={notice?.tone}
+            autoHideDuration={3000}
+            onClose={onDismissed}
+            data-testid="reviewStageToast"
+        />
+    );
 }

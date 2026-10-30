@@ -1,5 +1,6 @@
 import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
+import type { ReviewStageId } from '../client/src/components/weeklyReview/reviewFlowState';
 import { resetServerForEmails, withOneLoggedInDevice, withTwoAccountsOnOneDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
 import { uniqueStamp } from './helpers/uniqueStamp';
@@ -446,15 +447,15 @@ test.describe('weekly review', () => {
             await page.getByTestId('stageTravelNext').click();
             await expect(page.getByTestId('reviewStageTitle')).toHaveText('Clarify');
             await page.getByTestId('reviewHeaderStrip').click();
-            await page.getByTestId('reviewStepperStep').nth(0).click();
+            await reviewStepperStep(page, 'clearInboxes').click();
             await expect(page.getByTestId('reviewStageTitle')).toHaveText('Clear all inboxes');
 
             const steps = page.getByTestId('reviewStepper').getByRole('listitem');
             // The steps here are buttons, so the current marker sits on the focusable button.
-            await expect(page.getByTestId('reviewStepperStep').nth(0)).toHaveAttribute('aria-current', 'step');
-            await expect(steps.nth(0)).not.toHaveAttribute('data-complete');
-            await expect(steps.nth(1)).toHaveAttribute('data-complete');
-            await expect(steps.nth(2)).not.toHaveAttribute('data-complete');
+            await expect(reviewStepperStep(page, 'clearInboxes')).toHaveAttribute('aria-current', 'step');
+            await expect(steps.filter({ has: reviewStepperStep(page, 'clearInboxes') })).not.toHaveAttribute('data-complete');
+            await expect(steps.filter({ has: reviewStepperStep(page, 'clarify') })).toHaveAttribute('data-complete');
+            await expect(steps.filter({ has: reviewStepperStep(page, 'calendar') })).not.toHaveAttribute('data-complete');
         });
     });
 
@@ -975,8 +976,8 @@ test.describe('weekly review', () => {
             await page.goto('/weekly-review');
             await page.getByTestId('startReviewButton').click();
 
-            // Free forward jump straight to Next Actions (stage index 4) — no skip marks, URL follows.
-            await page.getByTestId('reviewStepperStep').nth(4).click();
+            // Free forward jump straight to Next Actions — no skip marks, URL follows.
+            await reviewStepperStep(page, 'nextActions').click();
             await expect(page.getByTestId('reviewStageTitle')).toHaveText('Next Actions');
             await expect(page).toHaveURL(/stage=nextActions/);
 
@@ -1002,18 +1003,18 @@ test.describe('weekly review', () => {
             // the revisit queue holds exactly the new undecided item. Past the review start the
             // timeline lives behind the strip — expand once; the expand is sticky from here on.
             await page.getByTestId('reviewHeaderStrip').click();
-            await page.getByTestId('reviewStepperStep').nth(6).click();
+            await reviewStepperStep(page, 'somedayMaybe').click();
             await expect(page.getByTestId('reviewStageTitle')).toHaveText('Someday / Maybe');
             await page.getByTestId('quickCaptureFab').click();
             await page.getByTestId('quickCaptureInput').fill('Mid-jump thought');
             await page.getByTestId('quickCaptureInput').press('Enter');
             await page.getByTestId('quickCaptureClose').click();
-            await page.getByTestId('reviewStepperStep').nth(1).click();
+            await reviewStepperStep(page, 'clarify').click();
             await expect(page.getByTestId('reviewStageCounter')).toContainText('1 of 1');
             await expect(page.getByTestId('clarifyStage').getByRole('textbox', { name: 'Title' })).toHaveValue('Mid-jump thought');
 
             // Back to Next Actions: both items were decided this review — nothing re-offers.
-            await page.getByTestId('reviewStepperStep').nth(4).click();
+            await reviewStepperStep(page, 'nextActions').click();
             await expect(page.getByTestId('reviewStageTitle')).toHaveText('Next Actions');
             await expect(page.getByTestId('stageEmptyCard')).toBeVisible();
             // Expanded header on the end card: the stage position only, no item ordinal.
@@ -1425,6 +1426,11 @@ async function seedDailyRoutineEndedToday(page: Page, title: string) {
     await gtd.updateItem(page, endedToday);
     await gtd.flush(page); // never navigate mid-flush — see CLAUDE.md § E2E
     return { routine, endedToday, tomorrow };
+}
+
+/** One timeline step, keyed by its stage id — a reorder or a new stage never retargets it. */
+function reviewStepperStep(page: Page, stageId: ReviewStageId) {
+    return page.getByTestId('reviewStepperStep').and(page.locator(`[data-step-key="${stageId}"]`));
 }
 
 async function openCalendarStage(page: Page) {

@@ -136,10 +136,11 @@ export function SearchFilters({
                 value={queryInput}
                 onChange={(e) => onQueryInputChange(e.target.value)}
                 inputRef={queryFieldRef}
+                inputProps={{ 'data-testid': 'searchQueryInput' }}
                 startAdornment={<Search size={20} aria-hidden="true" />}
                 endAdornment={
                     queryInput ? (
-                        <IconButton size="sm" onClick={() => onQueryInputChange('')} aria-label="Clear search">
+                        <IconButton size="sm" onClick={() => onQueryInputChange('')} aria-label="Clear search" data-testid="searchQueryClear">
                             <X />
                         </IconButton>
                     ) : undefined
@@ -152,7 +153,17 @@ export function SearchFilters({
                 <div className={styles.chips}>
                     {ALL_STATUSES.map((status) => {
                         const isOn = activeStatuses.has(status);
-                        return <Chip key={status} label={STATUS_LABELS[status]} variant="outline" selected={isOn} onClick={() => toggleStatus(status)} />;
+                        return (
+                            <Chip
+                                key={status}
+                                label={STATUS_LABELS[status]}
+                                variant="outline"
+                                selected={isOn}
+                                onClick={() => toggleStatus(status)}
+                                data-testid="searchStatusFilterChip"
+                                data-status={status}
+                            />
+                        );
                     })}
                 </div>
             </div>
@@ -182,21 +193,26 @@ export function SearchFilters({
                     value={urlState.dateField}
                     onValueChange={(dateField) => isDateField(dateField) && onUrlStateChange({ dateField })}
                     options={DATE_FIELD_OPTIONS}
+                    data-testid="searchDateFieldSelect"
                     className={styles.dropdown}
                 />
                 <DateField
                     label="From"
                     value={urlState.dateFrom ?? ''}
                     onChange={(dateFrom) => onUrlStateChange({ dateFrom: dateFrom || null })}
+                    inputTestId="searchDateFrom"
                     className={styles.dateField}
                 />
                 <DateField
                     label="To"
                     value={urlState.dateTo ?? ''}
                     onChange={(dateTo) => onUrlStateChange({ dateTo: dateTo || null })}
+                    inputTestId="searchDateTo"
                     className={styles.dateField}
                 />
-                {isFilterActive(urlState) && <Chip label="Reset filters" variant="outline" onClick={onReset} className={styles.resetChip} />}
+                {isFilterActive(urlState) && (
+                    <Chip label="Reset filters" variant="outline" onClick={onReset} className={styles.resetChip} data-testid="searchResetFilters" />
+                )}
             </div>
         </div>
     );

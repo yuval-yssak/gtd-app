@@ -72,7 +72,7 @@ export function LandingPage() {
                     </ul>
                     <Text className={styles.followingParagraph} data-testid="landingLimitedUse">
                         {GOOGLE_LIMITED_USE_STATEMENT} Full details are in the{' '}
-                        <Link to={LEGAL_DOCUMENTS.privacy.path} hash={GOOGLE_DISCLOSURE_ANCHOR}>
+                        <Link to={LEGAL_DOCUMENTS.privacy.path} hash={GOOGLE_DISCLOSURE_ANCHOR} data-testid="landingGoogleDisclosureLink">
                             Google API Services disclosure
                         </Link>{' '}
                         of the privacy policy.
@@ -87,7 +87,9 @@ export function LandingPage() {
                         <Link to={LEGAL_DOCUMENTS.terms.path} data-testid="landingTermsLink">
                             {LEGAL_DOCUMENTS.terms.title}
                         </Link>
-                        <a href={`mailto:${LEGAL_CONTACT_EMAIL}`}>Contact</a>
+                        <a href={`mailto:${LEGAL_CONTACT_EMAIL}`} data-testid="landingContactLink">
+                            Contact
+                        </a>
                     </nav>
                     <Text as="p" variant="caption" tone="secondary" className={styles.trademark} data-testid="landingTrademarkNotice">
                         {LANDING_TRADEMARK_NOTICE}

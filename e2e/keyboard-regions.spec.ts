@@ -21,8 +21,10 @@ async function seedUndated(page: Page, titles: string[]): Promise<StoredItem[]> 
 const focused = (page: Page) =>
     page.evaluate(() => {
         const el = document.activeElement;
+        // Menu links share one role id (`navLink`); their text is what tells them apart.
+        const testId = el?.matches('[data-nav-to]') ? null : el?.getAttribute('data-testid');
         // `||`, not `??`: an input's textContent is an empty string, not null.
-        return el?.getAttribute('data-testid') || el?.textContent?.trim() || el?.tagName || '';
+        return testId || el?.textContent?.trim() || el?.tagName || '';
     });
 const focusedRegion = (page: Page) =>
     page.evaluate(() => document.activeElement?.closest('[data-keyboard-region]')?.getAttribute('data-keyboard-region') ?? '');

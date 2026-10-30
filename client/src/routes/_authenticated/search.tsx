@@ -28,6 +28,7 @@ export const Route = createFileRoute('/_authenticated/search')({
 const viewOption = (value: SearchView, icon: ReactNode, label: string) => ({
     value,
     'aria-label': label,
+    'data-testid': `${value}SearchView`,
     label: (
         <Tooltip title={label}>
             <span className={styles.viewIcon}>{icon}</span>
@@ -136,7 +137,13 @@ function SearchPage() {
                 activeStatuses={activeStatuses}
             />
             <div className={styles.viewRow}>
-                <ToggleGroup value={urlState.view} onValueChange={(view) => updateUrlState({ view })} options={VIEW_OPTIONS} aria-label="Results view" />
+                <ToggleGroup
+                    value={urlState.view}
+                    onValueChange={(view) => updateUrlState({ view })}
+                    options={VIEW_OPTIONS}
+                    aria-label="Results view"
+                    data-testid="searchViewToggle"
+                />
             </div>
             {filtered.length === 0 ? (
                 <ListEmptyMessage>{hasNoInputs ? 'Type to search or use the filters above.' : 'No items match your filters.'}</ListEmptyMessage>

@@ -83,7 +83,8 @@ function NavListItem({ item, onItemClick, itemProps }: NavListItemProps) {
     const Icon = item.icon;
     return (
         <li>
-            <NavLink to={item.to} onClick={onItemClick} className={styles.navLink} {...itemProps}>
+            {/* Rendered by both the desktop sidebar and the mobile drawer — scope a locator to one surface (`mobileNavDrawer`). */}
+            <NavLink to={item.to} onClick={onItemClick} className={styles.navLink} data-testid="navLink" data-nav-to={item.to} {...itemProps}>
                 <span className={styles.navIcon} aria-hidden="true">
                     {item.badgeCount === undefined ? (
                         <Icon size={NAV_ICON_SIZE} />
@@ -170,7 +171,7 @@ export function AppNav({ isMobileDrawerOpen, setIsMobileDrawerOpen, db }: AppNav
             </aside>
 
             {/* Mobile drawer — unmounted while closed, so its menu region is out of the DOM (keyboard regions rely on that). */}
-            <Drawer open={isMobileDrawerOpen} onClose={() => setIsMobileDrawerOpen(false)} aria-label="Navigation">
+            <Drawer open={isMobileDrawerOpen} onClose={() => setIsMobileDrawerOpen(false)} aria-label="Navigation" data-testid="mobileNavDrawer">
                 <DrawerContent onItemClick={() => setIsMobileDrawerOpen(false)} db={db} />
             </Drawer>
 
@@ -192,13 +193,26 @@ function BottomNav({ onMoreClick }: { onMoreClick: () => void }) {
                 return (
                     // A real link, like the sidebar's: cmd/ctrl-click and "Open in new tab" work natively,
                     // and TanStack stamps aria-current="page" on the active one.
-                    <NavLink key={item.to} to={item.to} className={styles.bottomNavAction} data-selected={pathname === item.to || undefined}>
+                    <NavLink
+                        key={item.to}
+                        to={item.to}
+                        className={styles.bottomNavAction}
+                        data-selected={pathname === item.to || undefined}
+                        data-testid="bottomNavLink"
+                        data-nav-to={item.to}
+                    >
                         <Icon size={20} aria-hidden="true" />
                         <span className={styles.bottomNavLabel}>{item.label}</span>
                     </NavLink>
                 );
             })}
-            <button type="button" className={styles.bottomNavAction} data-selected={!isBottomNavRoute || undefined} onClick={onMoreClick}>
+            <button
+                type="button"
+                className={styles.bottomNavAction}
+                data-selected={!isBottomNavRoute || undefined}
+                onClick={onMoreClick}
+                data-testid="bottomNavMore"
+            >
                 <Menu size={20} aria-hidden="true" />
                 <span className={styles.bottomNavLabel}>More</span>
             </button>

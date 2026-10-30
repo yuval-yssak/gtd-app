@@ -62,10 +62,22 @@ export function ManageInboxesDialog({ db, onClose }: ManageInboxesDialogProps) {
                 {myInboxes.map((inbox, index) => (
                     <div key={inbox._id} className={styles.inboxRow} data-testid="manageInboxRow">
                         <RenameField name={inbox.name} onCommit={(name) => onRename(inbox, name)} />
-                        <IconButton size="sm" disabled={index === 0 || isMutating} onClick={() => onMove(index, -1)} aria-label="move up">
+                        <IconButton
+                            size="sm"
+                            disabled={index === 0 || isMutating}
+                            onClick={() => onMove(index, -1)}
+                            aria-label="move up"
+                            data-testid="moveInboxUpButton"
+                        >
                             <ArrowUp />
                         </IconButton>
-                        <IconButton size="sm" disabled={index === myInboxes.length - 1 || isMutating} onClick={() => onMove(index, 1)} aria-label="move down">
+                        <IconButton
+                            size="sm"
+                            disabled={index === myInboxes.length - 1 || isMutating}
+                            onClick={() => onMove(index, 1)}
+                            aria-label="move down"
+                            data-testid="moveInboxDownButton"
+                        >
                             <ArrowDown />
                         </IconButton>
                         <IconButton size="sm" disabled={isMutating} onClick={() => onRemove(inbox)} aria-label="remove inbox" data-testid="removeInboxButton">
@@ -120,7 +132,7 @@ function RenameField({ name, onCommit }: { name: string; onCommit: (name: string
             onKeyDown={(e) => {
                 if (e.key === 'Enter') commitIfChanged();
             }}
-            inputProps={{ 'aria-label': `Rename ${name}` }}
+            inputProps={{ 'aria-label': `Rename ${name}`, 'data-testid': 'renameInboxInput' }}
         />
     );
 }

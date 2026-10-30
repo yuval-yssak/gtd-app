@@ -46,7 +46,13 @@ export function AccountReauthBanner({ db }: { db: IDBPDatabase<MyDB> }) {
                     tone="warning"
                     onClose={() => dismissAccountReauth(account.id)}
                     action={
-                        <Button tone="warning" size="sm" disabled={!isOnline} onClick={() => reauthForUserId(account.id)}>
+                        <Button
+                            tone="warning"
+                            size="sm"
+                            disabled={!isOnline}
+                            onClick={() => reauthForUserId(account.id)}
+                            data-testid="accountReauthBannerRelogin"
+                        >
                             Re-login
                         </Button>
                     }

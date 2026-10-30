@@ -78,7 +78,7 @@ function NextItemLink({ routine, items }: { routine: StoredRoutine; items: Store
                 Mark done
             </Button>
             <FutureDoneConfirmDialog {...futureDone.dialogProps} />
-            <Toast open={Boolean(toast)} autoHideDuration={4000} onClose={() => setToast('')} message={toast} />
+            <Toast open={Boolean(toast)} autoHideDuration={4000} onClose={() => setToast('')} message={toast} data-testid="routinePageToast" />
         </div>
     );
 }

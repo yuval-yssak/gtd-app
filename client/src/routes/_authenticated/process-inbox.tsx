@@ -44,7 +44,7 @@ function ProcessInboxPage() {
                     Process Inbox
                 </Text>
                 <Text tone="secondary">Inbox zero — nothing to process.</Text>
-                <Button variant="solid" onClick={close}>
+                <Button variant="solid" onClick={close} data-testid="processInboxBackToInbox">
                     Back to Inbox
                 </Button>
             </div>

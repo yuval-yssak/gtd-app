@@ -82,17 +82,37 @@ export function AccountSwitcher({ db }: Props) {
                             ))}
                         </MenuGroup>
                         <MenuSeparator />
-                        <MenuItem disabled={isNetworkActionDisabled} leading={<Plus size={MENU_ICON_SIZE} />} onClick={() => addAnotherAccount('google')}>
+                        <MenuItem
+                            disabled={isNetworkActionDisabled}
+                            leading={<Plus size={MENU_ICON_SIZE} />}
+                            onClick={() => addAnotherAccount('google')}
+                            data-testid="addGoogleAccount"
+                        >
                             Add Google account
                         </MenuItem>
-                        <MenuItem disabled={isNetworkActionDisabled} leading={<Plus size={MENU_ICON_SIZE} />} onClick={() => addAnotherAccount('github')}>
+                        <MenuItem
+                            disabled={isNetworkActionDisabled}
+                            leading={<Plus size={MENU_ICON_SIZE} />}
+                            onClick={() => addAnotherAccount('github')}
+                            data-testid="addGithubAccount"
+                        >
                             Add GitHub account
                         </MenuItem>
                         <MenuSeparator />
-                        <MenuItem disabled={isNetworkActionDisabled} leading={<LogOut size={MENU_ICON_SIZE} />} onClick={() => void signOutCurrent()}>
+                        <MenuItem
+                            disabled={isNetworkActionDisabled}
+                            leading={<LogOut size={MENU_ICON_SIZE} />}
+                            onClick={() => void signOutCurrent()}
+                            data-testid="signOutCurrentAccount"
+                        >
                             Sign out
                         </MenuItem>
-                        <MenuItem disabled={isNetworkActionDisabled} leading={<LogOut size={MENU_ICON_SIZE} />} onClick={() => void signOutAll()}>
+                        <MenuItem
+                            disabled={isNetworkActionDisabled}
+                            leading={<LogOut size={MENU_ICON_SIZE} />}
+                            onClick={() => void signOutAll()}
+                            data-testid="signOutAllAccounts"
+                        >
                             Sign out all accounts
                         </MenuItem>
                     </MenuPopup>

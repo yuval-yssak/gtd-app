@@ -74,7 +74,7 @@ export function SyncIssuesPanel() {
                     the dialog's accessible name. */}
                 <div className={styles.titleRow}>
                     <DialogTitle>Sync issues</DialogTitle>
-                    <IconButton onClick={() => setIsOpen(false)} size="sm" aria-label="Close">
+                    <IconButton onClick={() => setIsOpen(false)} size="sm" aria-label="Close" data-testid="syncIssuesPanelClose">
                         <X />
                     </IconButton>
                 </div>

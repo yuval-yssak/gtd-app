@@ -16,8 +16,8 @@ import styles from './QuickCaptureFab.module.css';
 import { isEditableEventTarget, shouldOpenQuickCapture } from './quickCaptureLogic';
 
 const NOTES_TABS = [
-    { value: 0, label: 'Edit' },
-    { value: 1, label: 'Preview' },
+    { value: 0, label: 'Edit', 'data-testid': 'quickCaptureNotesEditTab' },
+    { value: 1, label: 'Preview', 'data-testid': 'quickCaptureNotesPreviewTab' },
 ] as const;
 
 /**
@@ -174,7 +174,14 @@ export function QuickCaptureFab({ db }: { db: IDBPDatabase<MyDB> }) {
                     />
                     {notesPanel.isOpen && (
                         <div className={styles.captureNotes} data-testid="quickCaptureNotes">
-                            <Tabs value={notesPanel.tab} onValueChange={notesPanel.selectTab} tabs={NOTES_TABS} aria-label="Note" className={styles.tabs} />
+                            <Tabs
+                                value={notesPanel.tab}
+                                onValueChange={notesPanel.selectTab}
+                                tabs={NOTES_TABS}
+                                aria-label="Note"
+                                className={styles.tabs}
+                                data-testid="quickCaptureNotesTabs"
+                            />
                             {notesPanel.tab === 0 ? (
                                 <MarkdownNotesEditor
                                     value={notes}

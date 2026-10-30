@@ -64,7 +64,7 @@ export function QuickCreatePersonDialog({ prefilledEmail, db, ownerUserId, onCre
                 </div>
             </DialogContent>
             <DialogActions>
-                <Button onClick={onCancel} disabled={isSaving}>
+                <Button onClick={onCancel} disabled={isSaving} data-testid="quickCreatePersonCancel">
                     Cancel
                 </Button>
                 <Button onClick={onSave} variant="solid" disabled={!name.trim() || isSaving} data-testid="quickCreatePersonSave">

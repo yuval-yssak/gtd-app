@@ -54,8 +54,8 @@ export const Route = createFileRoute('/_authenticated/inbox')({
 });
 
 const NOTES_TABS = [
-    { value: 0, label: 'Edit' },
-    { value: 1, label: 'Preview' },
+    { value: 0, label: 'Edit', 'data-testid': 'inboxCaptureNotesEditTab' },
+    { value: 1, label: 'Preview', 'data-testid': 'inboxCaptureNotesPreviewTab' },
 ] as const;
 
 // --- Mobile swipe row ---
@@ -139,7 +139,7 @@ function InboxSwipeItem({ item, routineTitle, onTap, onMore, onSwipeNextAction, 
             >
                 {/* Long press drags (as on every ranked list); its touches never swipe the row. A ghost is not a drag source. */}
                 {!isGhost && <RankedRowHandle ranked={ranked} item={item} section={row.section} testId="inboxDragHandle" />}
-                <ListRowButton onActivate={onActivated} className={styles.swipeBody}>
+                <ListRowButton onActivate={onActivated} className={styles.swipeBody} data-testid="inboxSwipeRowBody">
                     <ListRowText
                         primary={
                             <>
@@ -185,15 +185,15 @@ function InboxBottomSheet({ item, onClose, onEdit, onDone, onNextAction, onCalen
 
     return (
         // The title names the sheet (Base UI wires it as the dialog's label).
-        <Drawer side="bottom" open={Boolean(item)} onClose={onClose} title={item.title}>
+        <Drawer side="bottom" open={Boolean(item)} onClose={onClose} title={item.title} data-testid="inboxActionSheet">
             <ul className={styles.sheetActions}>
-                <SheetAction icon={<Pencil />} label="Edit" onSelected={() => action(onEdit)} />
+                <SheetAction icon={<Pencil />} label="Edit" onSelected={() => action(onEdit)} testId="inboxSheetEdit" />
                 <SheetAction icon={<EllipsisVertical />} label="Move to…" onSelected={() => action(onMoveTo)} testId="inboxSheetMoveTo" />
-                <SheetAction icon={<ListChecks />} label="Done (< 2 min)" onSelected={() => action(onDone)} />
-                <SheetAction icon={<ArrowRight />} label="Next Action" onSelected={() => action(onNextAction)} />
-                <SheetAction icon={<Calendar />} label="Calendar" onSelected={() => action(onCalendar)} />
-                <SheetAction icon={<Hourglass />} label="Waiting For" onSelected={() => action(onWaitingFor)} />
-                <SheetAction icon={<Trash2 />} label="Trash" onSelected={() => action(onTrash)} isDestructive />
+                <SheetAction icon={<ListChecks />} label="Done (< 2 min)" onSelected={() => action(onDone)} testId="inboxSheetDone" />
+                <SheetAction icon={<ArrowRight />} label="Next Action" onSelected={() => action(onNextAction)} testId="inboxSheetNextAction" />
+                <SheetAction icon={<Calendar />} label="Calendar" onSelected={() => action(onCalendar)} testId="inboxSheetCalendar" />
+                <SheetAction icon={<Hourglass />} label="Waiting For" onSelected={() => action(onWaitingFor)} testId="inboxSheetWaitingFor" />
+                <SheetAction icon={<Trash2 />} label="Trash" onSelected={() => action(onTrash)} isDestructive testId="inboxSheetTrash" />
             </ul>
         </Drawer>
     );
@@ -406,7 +406,13 @@ function InboxPage() {
                                     <NotebookPen />
                                 </IconButton>
                             </Tooltip>
-                            <IconButton aria-label="Capture" onClick={() => void onCapture()} disabled={!draft.trim()} edge="end">
+                            <IconButton
+                                aria-label="Capture"
+                                onClick={() => void onCapture()}
+                                disabled={!draft.trim()}
+                                edge="end"
+                                data-testid="inboxCaptureSubmit"
+                            >
                                 <Plus />
                             </IconButton>
                         </>
@@ -414,7 +420,14 @@ function InboxPage() {
                 />
                 {notesPanel.isOpen && (
                     <Card padding="none" className={styles.captureNotes}>
-                        <Tabs value={notesPanel.tab} onValueChange={notesPanel.selectTab} tabs={NOTES_TABS} aria-label="Note" className={styles.tabs} />
+                        <Tabs
+                            value={notesPanel.tab}
+                            onValueChange={notesPanel.selectTab}
+                            tabs={NOTES_TABS}
+                            aria-label="Note"
+                            className={styles.tabs}
+                            data-testid="inboxCaptureNotesTabs"
+                        />
                         {notesPanel.tab === 0 ? (
                             <MarkdownNotesEditor
                                 value={notes}
@@ -572,7 +585,7 @@ function InboxPage() {
                 </section>
             )}
 
-            <Toast open={editor.toast.open} autoHideDuration={3000} onClose={editor.closeToast} message={editor.toast.message} />
+            <Toast open={editor.toast.open} autoHideDuration={3000} onClose={editor.closeToast} message={editor.toast.message} data-testid="inboxToast" />
             {hiddenAccountNotice}
 
             {/* Keyboard hints, the reorder announcer, the failure toast and the Move to sheet. */}

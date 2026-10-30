@@ -18,7 +18,7 @@ interface PersonEditDialogProps {
  */
 export function PersonEditDialog({ db, person, showAccountPicker = false, onClose }: PersonEditDialogProps) {
     return (
-        <Dialog open onClose={onClose} size="xs" fullWidth>
+        <Dialog open onClose={onClose} size="xs" fullWidth data-testid="personEditDialog">
             <DialogTitle>Edit person</DialogTitle>
             <DialogContent>
                 <PersonEditorBody db={db} person={person} showAccountPicker={showAccountPicker} onClose={onClose} />

@@ -132,7 +132,7 @@ interface Props {
 }
 
 const FREQ_MODES = ['daily', 'weekly', 'monthly', 'yearly'] as const satisfies readonly FreqMode[];
-const MODE_OPTIONS: RadioOption<FreqMode>[] = FREQ_MODES.map((mode) => ({ value: mode, label: MODE_LABELS[mode] }));
+const MODE_OPTIONS: RadioOption<FreqMode>[] = FREQ_MODES.map((mode) => ({ value: mode, label: MODE_LABELS[mode], 'data-testid': `${mode}FrequencyOption` }));
 
 export function FrequencyPicker({ value, recurrenceAnchor, onChange, disabled }: Props) {
     const [state, setState] = useState<FreqState>(() => parseToFreqState(value, recurrenceAnchor));
@@ -160,7 +160,13 @@ export function FrequencyPicker({ value, recurrenceAnchor, onChange, disabled }:
             {/* `disabled` passed explicitly, not left to the fieldset: the DS radios and toggles are
                 spans, which a native <fieldset disabled> does not reach. */}
             {/* Unnamed on purpose: the host's "Frequency" legend names the group; a second name would read twice. */}
-            <RadioGroup value={state.mode} onValueChange={(mode) => update({ mode })} options={MODE_OPTIONS} disabled={disabled} />
+            <RadioGroup
+                value={state.mode}
+                onValueChange={(mode) => update({ mode })}
+                options={MODE_OPTIONS}
+                disabled={disabled}
+                data-testid="frequencyModeRadio"
+            />
             {/* After the group, not inside it: the day chips and the anchor toggle would otherwise sit
                 in the radio group's arrow-key roving focus. */}
             <SubFields mode={state.mode} state={state} onUpdate={update} onToggleDay={toggleDay} disabled={disabled ?? false} />
@@ -210,6 +216,7 @@ function RecurrenceAnchorToggle({ mode, state, onUpdate, disabled }: RecurrenceA
                 value={state.recurrenceAnchor}
                 onValueChange={(next) => onUpdate({ recurrenceAnchor: next })}
                 options={RECURRENCE_ANCHOR_OPTIONS}
+                data-testid="recurrenceAnchorToggle"
             />
             <Text variant="caption" tone="secondary" className={styles.preview}>
                 {RECURRENCE_ANCHOR_CAPTIONS[mode][state.recurrenceAnchor]}
@@ -244,7 +251,7 @@ function IntervalField({ before, after, label, value, min, max, onValueChange }:
                 className={styles.narrowInput}
                 value={value}
                 onChange={(e) => onValueChange(clamp(parseInt(e.target.value, 10)))}
-                inputProps={{ min, ...(max !== undefined ? { max } : {}), 'aria-label': label }}
+                inputProps={{ min, ...(max !== undefined ? { max } : {}), 'aria-label': label, 'data-testid': 'frequencyIntervalInput' }}
             />
             <Text as="span" variant="bodySm">
                 {after}
@@ -276,7 +283,14 @@ function SubFields({ mode, state, onUpdate, onToggleDay, disabled }: SubFieldsPr
                     {state.recurrenceAnchor === 'fixed' && (
                         <div className={styles.dayChips}>
                             {DAYS.map(({ key, label }) => (
-                                <Chip key={key} label={label} selected={state.selectedDays.includes(key)} onClick={() => onToggleDay(key)} />
+                                <Chip
+                                    key={key}
+                                    label={label}
+                                    selected={state.selectedDays.includes(key)}
+                                    onClick={() => onToggleDay(key)}
+                                    data-testid="frequencyDayChip"
+                                    data-day={key}
+                                />
                             ))}
                         </div>
                     )}

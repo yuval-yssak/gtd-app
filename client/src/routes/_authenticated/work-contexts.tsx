@@ -99,7 +99,7 @@ function WorkContextsPage() {
                             </IconButton>
                         </Tooltip>
                         <Tooltip title="Delete">
-                            <IconButton size="sm" tone="danger" aria-label="Delete" onClick={() => void onDelete(ctx)}>
+                            <IconButton size="sm" tone="danger" aria-label="Delete" onClick={() => void onDelete(ctx)} data-testid="workContextRowDeleteButton">
                                 <Trash2 />
                             </IconButton>
                         </Tooltip>
@@ -138,7 +138,7 @@ function WorkContextsPage() {
                 title="Work Contexts"
                 count={workContexts.length}
                 action={
-                    <Button startIcon={<Plus />} variant="solid" size="sm" onClick={openCreate}>
+                    <Button startIcon={<Plus />} variant="solid" size="sm" onClick={openCreate} data-testid="addWorkContextButton">
                         Add context
                     </Button>
                 }
@@ -164,12 +164,13 @@ function WorkContextsPage() {
                 </ul>
             )}
             {editing && <WorkContextEditDialog db={db} workContext={editing} onClose={() => setEditing(null)} />}
-            <Dialog open={createOpen} onClose={() => setCreateOpen(false)} size="xs" fullWidth>
+            <Dialog open={createOpen} onClose={() => setCreateOpen(false)} size="xs" fullWidth data-testid="createWorkContextDialog">
                 <DialogTitle>Add work context</DialogTitle>
                 <DialogContent className={styles.createContent}>
                     <TextField
                         label="Name"
                         placeholder="e.g. @office, @phone"
+                        inputProps={{ 'data-testid': 'createWorkContextName' }}
                         value={nameInput}
                         onChange={(e) => setNameInput(e.target.value)}
                         fullWidth
@@ -182,8 +183,10 @@ function WorkContextsPage() {
                     {loggedInAccounts.length > 1 && <AccountPicker value={ownerUserId} onChange={setOwnerUserId} />}
                 </DialogContent>
                 <DialogActions>
-                    <Button onClick={() => setCreateOpen(false)}>Cancel</Button>
-                    <Button onClick={() => void onCreate()} variant="solid" disabled={!nameInput.trim()}>
+                    <Button onClick={() => setCreateOpen(false)} data-testid="createWorkContextCancel">
+                        Cancel
+                    </Button>
+                    <Button onClick={() => void onCreate()} variant="solid" disabled={!nameInput.trim()} data-testid="createWorkContextConfirm">
                         Add
                     </Button>
                 </DialogActions>

@@ -15,7 +15,7 @@ type StepIndicatorProps = {
     activeIndex: number;
     /** Makes each step a button. */
     onStepSelected?: ((index: number) => void) | undefined;
-    /** `data-testid` for each step button (only rendered with `onStepSelected`). */
+    /** `data-testid` for each step button (only rendered with `onStepSelected`); each button also carries its `data-step-key`. */
     stepTestId?: string | undefined;
     /** `below` stacks each label under its marker (MUI `alternativeLabel`) — fits many steps in a narrow strip. */
     labelPlacement?: 'inline' | 'below' | undefined;
@@ -40,7 +40,14 @@ export function StepIndicator({ steps, activeIndex, onStepSelected, stepTestId, 
                     // Announced on the element that takes focus: the button when steps are selectable.
                     aria-current={index === activeIndex && !onStepSelected ? 'step' : undefined}
                 >
-                    <StepContent index={index} label={step.label} isCurrent={index === activeIndex} onStepSelected={onStepSelected} testId={stepTestId} />
+                    <StepContent
+                        stepKey={step.key}
+                        index={index}
+                        label={step.label}
+                        isCurrent={index === activeIndex}
+                        onStepSelected={onStepSelected}
+                        testId={stepTestId}
+                    />
                 </li>
             ))}
         </ol>
@@ -48,6 +55,7 @@ export function StepIndicator({ steps, activeIndex, onStepSelected, stepTestId, 
 }
 
 type StepContentProps = {
+    stepKey: string;
     index: number;
     label: ReactNode;
     isCurrent: boolean;
@@ -55,7 +63,7 @@ type StepContentProps = {
     testId: string | undefined;
 };
 
-function StepContent({ index, label, isCurrent, onStepSelected, testId }: StepContentProps) {
+function StepContent({ stepKey, index, label, isCurrent, onStepSelected, testId }: StepContentProps) {
     const content = (
         <>
             <span className={styles.marker} aria-hidden="true">
@@ -75,6 +83,7 @@ function StepContent({ index, label, isCurrent, onStepSelected, testId }: StepCo
             className={styles.content}
             onClick={() => onStepSelected(index)}
             data-testid={testId}
+            data-step-key={stepKey}
         >
             {content}
         </button>

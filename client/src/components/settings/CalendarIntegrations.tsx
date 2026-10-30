@@ -203,7 +203,7 @@ export function CalendarIntegrations() {
                     withActiveAccountSession={withActiveAccountSession}
                 />
             ))}
-            <Button variant="outline" size="sm" onClick={onConnectActiveAccount} disabled={!account}>
+            <Button variant="outline" size="sm" onClick={onConnectActiveAccount} disabled={!account} data-testid="connectCalendarButton">
                 {account ? `Connect Google Calendar for ${account.email}` : 'Connect Google Calendar'}
             </Button>
             {chooseCalendarFor && (
@@ -279,6 +279,7 @@ export function ConnectMismatchError({ onDismiss }: { onDismiss: () => void }) {
             title="Couldn't connect that Google Calendar account"
             action={<DismissButton onDismiss={onDismiss} />}
             className={styles.connectError}
+            data-testid="calendarConnectMismatchError"
         >
             The Google account you authorized didn't match the one you selected. Tokens were revoked and no calendar was added.
         </Callout>
@@ -287,7 +288,7 @@ export function ConnectMismatchError({ onDismiss }: { onDismiss: () => void }) {
 
 function DismissButton({ onDismiss }: { onDismiss: () => void }) {
     return (
-        <Button tone="neutral" size="sm" onClick={onDismiss}>
+        <Button tone="neutral" size="sm" onClick={onDismiss} data-testid="calendarConnectErrorDismiss">
             Dismiss
         </Button>
     );
@@ -560,7 +561,7 @@ function IntegrationRow({ detail, onIntegrationsChanged, onChooseCalendar, withA
     const hasNoCalendarChosen = configs.length === 0;
 
     return (
-        <div className={styles.integration}>
+        <div className={styles.integration} data-testid="calendarIntegrationRow" data-integration-id={integration._id}>
             <Separator className={styles.integrationSeparator} />
             <Text variant="bodySm" weight="semibold" className={styles.integrationTitle}>
                 Google Calendar
@@ -622,7 +623,7 @@ function NoCalendarChosenRow({ onChooseCalendar }: { onChooseCalendar: () => voi
             <Text variant="bodySm" tone="secondary" className={styles.italic}>
                 No calendar selected — choose one
             </Text>
-            <Button size="sm" onClick={onChooseCalendar}>
+            <Button size="sm" onClick={onChooseCalendar} data-testid="chooseCalendarButton">
                 Choose calendar
             </Button>
         </div>
@@ -647,13 +648,13 @@ function IntegrationActions({ isSyncing, isRepairing, hasAvailableCalendars, act
     return (
         <div className={styles.actions}>
             {hasAvailableCalendars && (
-                <Button variant="outline" size="sm" onClick={actions.onAddCalendar}>
+                <Button variant="outline" size="sm" onClick={actions.onAddCalendar} data-testid="addCalendarButton">
                     Add calendar
                 </Button>
             )}
             {/* `loading` disables the button, so the tooltip anchors to a wrapper that still gets pointer events. */}
             <DisabledCapableTooltip title="Fetch the latest changes from Google Calendar right now, without waiting for automatic sync. Also pushes app-created items that haven't reached Google yet.">
-                <Button variant="outline" size="sm" onClick={actions.onSyncNow} loading={isSyncing}>
+                <Button variant="outline" size="sm" onClick={actions.onSyncNow} loading={isSyncing} data-testid="calendarSyncNowButton">
                     {isSyncing ? 'Syncing…' : 'Sync now'}
                 </Button>
             </DisabledCapableTooltip>
@@ -662,7 +663,7 @@ function IntegrationActions({ isSyncing, isRepairing, hasAvailableCalendars, act
                     {isRepairing ? 'Repairing…' : 'Repair sync'}
                 </Button>
             </DisabledCapableTooltip>
-            <Button variant="outline" size="sm" tone="danger" onClick={actions.onDisconnect}>
+            <Button variant="outline" size="sm" tone="danger" onClick={actions.onDisconnect} data-testid="disconnectCalendarButton">
                 Disconnect
             </Button>
         </div>
@@ -723,21 +724,31 @@ function SyncConfigList({ configs, resolveCalendarName, actions }: SyncConfigLis
                 // calendar name the user sees (not the raw calendarId when displayName is null).
                 const calendarName = config.displayName ?? resolveCalendarName(config.calendarId);
                 return (
-                    <li key={config._id} className={styles.configRow}>
+                    <li key={config._id} className={styles.configRow} data-testid="calendarSyncConfigRow" data-sync-config-id={config._id}>
                         <Text as="span" variant="bodySm" tone={config.enabled ? 'primary' : 'disabled'} className={styles.configName}>
                             {calendarName}
                         </Text>
                         <span className={styles.configActions}>
                             {config.isDefault && <Chip label="default" tone="accent" variant="outline" />}
                             {!config.isDefault && config.enabled && (
-                                <Button size="sm" onClick={() => actions.onSetDefault(config)}>
+                                <Button size="sm" onClick={() => actions.onSetDefault(config)} data-testid="calendarSetDefaultButton">
                                     Set default
                                 </Button>
                             )}
                             {/* The aria-label names the otherwise-unlabelled toggle ("Sync <calendar>") and
                                 is what the e2e specs select it by. */}
-                            <Switch checked={config.enabled} onCheckedChange={() => actions.onToggleEnabled(config)} aria-label={`Sync ${calendarName}`} />
-                            <IconButton size="sm" onClick={() => actions.onRemove(config)} aria-label={`Stop syncing ${calendarName}`}>
+                            <Switch
+                                checked={config.enabled}
+                                onCheckedChange={() => actions.onToggleEnabled(config)}
+                                aria-label={`Sync ${calendarName}`}
+                                data-testid="calendarSyncEnabledSwitch"
+                            />
+                            <IconButton
+                                size="sm"
+                                onClick={() => actions.onRemove(config)}
+                                aria-label={`Stop syncing ${calendarName}`}
+                                data-testid="calendarSyncRemoveButton"
+                            >
                                 <X />
                             </IconButton>
                         </span>
@@ -783,7 +794,7 @@ function AddCalendarDialog({ integrationId, availableCalendars, isFirstCalendar,
     }
 
     return (
-        <Dialog open onClose={onClose} size="sm" fullWidth>
+        <Dialog open onClose={onClose} size="sm" fullWidth data-testid="addCalendarDialog">
             <DialogTitle>Add a calendar to sync</DialogTitle>
             <DialogContent>
                 <Select
@@ -793,6 +804,7 @@ function AddCalendarDialog({ integrationId, availableCalendars, isFirstCalendar,
                     value={selectedId}
                     onValueChange={setSelectedId}
                     options={googleCalendarSelectOptions(availableCalendars)}
+                    data-testid="addCalendarSelect"
                 />
                 {saveError && (
                     <Text variant="bodySm" tone="error" className={styles.dialogError}>
@@ -801,10 +813,10 @@ function AddCalendarDialog({ integrationId, availableCalendars, isFirstCalendar,
                 )}
             </DialogContent>
             <DialogActions>
-                <Button onClick={onClose} disabled={isSaving}>
+                <Button onClick={onClose} disabled={isSaving} data-testid="addCalendarCancel">
                     Cancel
                 </Button>
-                <Button onClick={onConfirm} variant="solid" disabled={isSaving || !selectedId}>
+                <Button onClick={onConfirm} variant="solid" disabled={isSaving || !selectedId} data-testid="addCalendarConfirm">
                     {isSaving ? 'Adding…' : 'Add'}
                 </Button>
             </DialogActions>
@@ -872,7 +884,7 @@ function ChooseCalendarDialog({ integration, onClose, onSaved, onStaleIntegratio
     }
 
     return (
-        <Dialog open onClose={onClose} size="sm" fullWidth>
+        <Dialog open onClose={onClose} size="sm" fullWidth data-testid="chooseCalendarDialog">
             <DialogTitle>Choose a calendar to sync</DialogTitle>
             <DialogContent>
                 <DialogDescription className={styles.dialogIntro}>Select which Google Calendar events should appear in this app.</DialogDescription>
@@ -890,6 +902,7 @@ function ChooseCalendarDialog({ integration, onClose, onSaved, onStaleIntegratio
                         value={selectedId}
                         onValueChange={setSelectedId}
                         options={googleCalendarSelectOptions(calendars)}
+                        data-testid="chooseCalendarSelect"
                     />
                 )}
                 {saveError && (
@@ -902,7 +915,7 @@ function ChooseCalendarDialog({ integration, onClose, onSaved, onStaleIntegratio
                 {/* No "Skip" button: Step 2 makes calendar choice mandatory. The integration row
                     surfaces a "No calendar selected — choose one" CTA if the user dismisses the
                     dialog by clicking outside. */}
-                <Button onClick={onConfirm} variant="solid" disabled={isSaving || isLoading || !selectedId}>
+                <Button onClick={onConfirm} variant="solid" disabled={isSaving || isLoading || !selectedId} data-testid="chooseCalendarConfirm">
                     {isSaving ? 'Saving…' : 'Save & sync'}
                 </Button>
             </DialogActions>
@@ -911,9 +924,14 @@ function ChooseCalendarDialog({ integration, onClose, onSaved, onStaleIntegratio
 }
 
 const UNLINK_OPTIONS: RadioOption<UnlinkAction>[] = [
-    { value: 'keepLinkedEntities', label: 'Keep calendar items and calendar routines in the app. Google Calendar events will not be touched.' },
+    {
+        value: 'keepLinkedEntities',
+        label: 'Keep calendar items and calendar routines in the app. Google Calendar events will not be touched.',
+        'data-testid': 'disconnectCalendarKeepOption',
+    },
     {
         value: 'removeLinkedEntities',
+        'data-testid': 'disconnectCalendarRemoveOption',
         // The destructive choice reads in the error colour, as it did before.
         label: (
             <span className={styles.destructiveChoice}>
@@ -973,14 +991,20 @@ function DisconnectDialog({ open, integrationId, onClose, onDisconnected, withAc
     return (
         // A Dialog, not an AlertDialog: this asks a keep-or-remove question (the radio group) before
         // its confirm, so focus belongs on the first choice rather than on the dialog itself.
-        <Dialog open={open} onClose={onClose} size="sm" fullWidth>
+        <Dialog open={open} onClose={onClose} size="sm" fullWidth data-testid="disconnectCalendarDialog">
             <DialogTitle>Disconnect Google Calendar</DialogTitle>
             <DialogContent>
                 <DialogDescription className={styles.dialogIntro}>
                     What would you like to do with calendar items and calendar routines linked to this integration? Disconnecting never modifies your Google
                     Calendar.
                 </DialogDescription>
-                <RadioGroup aria-label="Linked calendar items" value={action} onValueChange={setAction} options={UNLINK_OPTIONS} />
+                <RadioGroup
+                    aria-label="Linked calendar items"
+                    value={action}
+                    onValueChange={setAction}
+                    options={UNLINK_OPTIONS}
+                    data-testid="disconnectCalendarUnlinkRadio"
+                />
                 {deleteError && (
                     <Text variant="bodySm" tone="error" className={styles.dialogError}>
                         {deleteError}
@@ -988,10 +1012,10 @@ function DisconnectDialog({ open, integrationId, onClose, onDisconnected, withAc
                 )}
             </DialogContent>
             <DialogActions>
-                <Button onClick={onClose} disabled={isDeleting}>
+                <Button onClick={onClose} disabled={isDeleting} data-testid="disconnectCalendarCancel">
                     Cancel
                 </Button>
-                <Button onClick={onConfirm} tone="danger" disabled={isDeleting}>
+                <Button onClick={onConfirm} tone="danger" disabled={isDeleting} data-testid="disconnectCalendarConfirm">
                     {isDeleting ? 'Disconnecting…' : 'Disconnect'}
                 </Button>
             </DialogActions>

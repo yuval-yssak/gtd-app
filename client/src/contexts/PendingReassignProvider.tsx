@@ -238,6 +238,7 @@ export function PendingReassignProvider({ db, children }: PropsWithChildren<Prov
                     onClose={() => setRevertNotice(null)}
                     message={revertNotice?.message ?? ''}
                     tone="error"
+                    data-testid="reassignRevertToast"
                 />
             </PendingMapsContext.Provider>
         </PendingReassignContext.Provider>

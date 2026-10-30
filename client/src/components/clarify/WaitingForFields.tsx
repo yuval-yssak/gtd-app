@@ -23,12 +23,13 @@ export function WaitingForFields({ value, onChange, people }: Props) {
                 value={value.waitingForPersonId}
                 onValueChange={(waitingForPersonId) => onChange({ waitingForPersonId })}
                 options={personOptions}
+                data-testid="waitingForPersonSelect"
                 className={styles.waitingForSelect}
             />
             {people.length === 0 && (
                 <Text variant="bodySm" tone="secondary">
                     No people yet — add contacts in the{' '}
-                    <Link to="/people" className={styles.peopleLink}>
+                    <Link to="/people" className={styles.peopleLink} data-testid="waitingForPeopleLink">
                         People
                     </Link>{' '}
                     section to name who you're waiting on.

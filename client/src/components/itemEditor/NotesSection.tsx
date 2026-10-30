@@ -92,6 +92,7 @@ function ExpandedNotes({ notes, onNotesChange }: { notes: string; onNotesChange:
                         // first and the click would land on nothing (or re-enter edit).
                         onMouseDown={(e) => e.preventDefault()}
                         onClick={exitEditExplicitly}
+                        data-testid="notesDoneEditingButton"
                     >
                         <Check />
                     </IconButton>
@@ -120,7 +121,7 @@ function ExpandedNotes({ notes, onNotesChange }: { notes: string; onNotesChange:
                 <Text as="span" variant="caption" tone="secondary" weight="semibold" id={labelId} className={styles.notesLabel}>
                     {NOTES_EDITOR_LABEL}
                 </Text>
-                <IconButton ref={editButtonRef} size="sm" aria-label="Edit notes" onClick={enterEdit}>
+                <IconButton ref={editButtonRef} size="sm" aria-label="Edit notes" onClick={enterEdit} data-testid="notesEditButton">
                     <Pencil />
                 </IconButton>
             </div>

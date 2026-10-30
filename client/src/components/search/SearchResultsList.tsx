@@ -30,7 +30,7 @@ const ResultRow = memo(function ResultRow({ item, showStatusChip, isDivided }: {
     return (
         <ListRow {...SHORTCUT_ROW_PROPS} isDivided={isDivided} actions={<CopyIdButton isRowAction id={item._id} testId="searchResultCopyIdButton" />}>
             {/* The whole row body is the link to the item page. */}
-            <Link to="/item/$itemId" params={{ itemId: item._id }} search={{ status: null }} className={styles.rowLink}>
+            <Link to="/item/$itemId" params={{ itemId: item._id }} search={{ status: null }} className={styles.rowLink} data-testid="searchResultLink">
                 <ListRowText
                     primary={
                         <>

@@ -105,7 +105,12 @@ function TicklerPage() {
                                                 data-testid="ticklerItemEditButton"
                                             />
                                             <Tooltip title="Release now">
-                                                <IconButton size="sm" aria-label="Release now" onClick={() => void onRelease(item)}>
+                                                <IconButton
+                                                    size="sm"
+                                                    aria-label="Release now"
+                                                    onClick={() => void onRelease(item)}
+                                                    data-testid="ticklerItemReleaseButton"
+                                                >
                                                     <CalendarCheck />
                                                 </IconButton>
                                             </Tooltip>
@@ -135,7 +140,7 @@ function TicklerPage() {
                     </ul>
                 </section>
             ))}
-            <Toast open={editor.toast.open} autoHideDuration={3000} onClose={editor.closeToast} message={editor.toast.message} />
+            <Toast open={editor.toast.open} autoHideDuration={3000} onClose={editor.closeToast} message={editor.toast.message} data-testid="ticklerToast" />
         </div>
     );
 }

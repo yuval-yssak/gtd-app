@@ -179,7 +179,7 @@ function CalendarPage() {
             )}
             {renderBody()}
             <FutureDoneConfirmDialog {...futureDone.dialogProps} />
-            <Toast open={editor.toast.open} autoHideDuration={3000} onClose={editor.closeToast} message={editor.toast.message} />
+            <Toast open={editor.toast.open} autoHideDuration={3000} onClose={editor.closeToast} message={editor.toast.message} data-testid="calendarToast" />
         </div>
     );
 }

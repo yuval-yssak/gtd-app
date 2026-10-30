@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Checkbox, Chip, Text, TextField, ToggleGroup } from '../../designSystem';
+import { Checkbox, Chip, Text, TextField, ToggleGroup, type ToggleOption } from '../../designSystem';
 import { EMPTY_USAGE_INDEX, rankByUsage, type UsageIndex } from '../../lib/entityUsage';
 import { sortByName } from '../../lib/sortByName';
 import type { EnergyLevel, StoredPerson, StoredWorkContext } from '../../types/MyDB';
@@ -20,10 +20,10 @@ interface Props {
     dense?: boolean | undefined;
 }
 
-const ENERGY_OPTIONS: { value: EnergyLevel; label: string }[] = [
-    { value: 'low', label: 'Low' },
-    { value: 'medium', label: 'Medium' },
-    { value: 'high', label: 'High' },
+const ENERGY_OPTIONS: ToggleOption<EnergyLevel>[] = [
+    { value: 'low', label: 'Low', 'data-testid': 'energyLow' },
+    { value: 'medium', label: 'Medium', 'data-testid': 'energyMedium' },
+    { value: 'high', label: 'High', 'data-testid': 'energyHigh' },
 ];
 
 export function NextActionFields({ value, onChange, workContexts, people, usage = EMPTY_USAGE_INDEX, dense = false }: Props) {
@@ -61,10 +61,15 @@ export function NextActionFields({ value, onChange, workContexts, people, usage 
                             Item stays hidden from Next Actions until this date
                         </Text>
                     )}
-                    <DateField accessibleName="Tickler date" value={value.ignoreBefore} onChange={(ignoreBefore) => onChange({ ignoreBefore })} />
+                    <DateField
+                        accessibleName="Tickler date"
+                        value={value.ignoreBefore}
+                        onChange={(ignoreBefore) => onChange({ ignoreBefore })}
+                        inputTestId="ignoreBeforeDate"
+                    />
                 </div>
                 {/* The two dates sit together, so the dense grid can pair them on one row. */}
-                <DateField label="Expected by" value={value.expectedBy} onChange={(expectedBy) => onChange({ expectedBy })} />
+                <DateField label="Expected by" value={value.expectedBy} onChange={(expectedBy) => onChange({ expectedBy })} inputTestId="expectedByDate" />
                 {workContexts.length > 0 && (
                     <FieldSection label="Work contexts" className={fullSpan}>
                         <CollapsibleChipGroup
@@ -107,7 +112,13 @@ export function NextActionFields({ value, onChange, workContexts, people, usage 
                 )}
                 <FieldSection label="Energy">
                     {/* No energy is a valid choice: pressing the active level clears it. */}
-                    <ToggleGroup allowDeselect value={value.energy} onValueChange={(energy) => onChange({ energy })} options={ENERGY_OPTIONS} />
+                    <ToggleGroup
+                        allowDeselect
+                        value={value.energy}
+                        onValueChange={(energy) => onChange({ energy })}
+                        options={ENERGY_OPTIONS}
+                        data-testid="energyToggle"
+                    />
                 </FieldSection>
                 <TextField
                     label="Time estimate (min)"
@@ -115,9 +126,9 @@ export function NextActionFields({ value, onChange, workContexts, people, usage 
                     onChange={(e) => onChange({ time: e.target.value })}
                     type="number"
                     className={styles.timeField}
-                    inputProps={{ min: 1 }}
+                    inputProps={{ min: 1, 'data-testid': 'timeEstimateInput' }}
                 />
-                <Checkbox checked={value.urgent} onCheckedChange={(urgent) => onChange({ urgent })} label="Urgent" />
+                <Checkbox checked={value.urgent} onCheckedChange={(urgent) => onChange({ urgent })} label="Urgent" data-testid="urgentCheckbox" />
             </div>
         </div>
     );

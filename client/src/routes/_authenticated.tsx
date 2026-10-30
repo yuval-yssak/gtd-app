@@ -43,7 +43,7 @@ export function AuthenticatedLayout() {
             <AccountReauthDialog db={db} />
             {/* Mobile app bar — fixed at top, hidden on desktop where the sidebar takes over */}
             <header className={styles.mobileAppBar}>
-                <IconButton edge="start" onClick={() => setIsMobileDrawerOpen(true)} aria-label="open navigation">
+                <IconButton edge="start" onClick={() => setIsMobileDrawerOpen(true)} aria-label="open navigation" data-testid="mobileNavOpenButton">
                     <Menu />
                 </IconButton>
                 <Text variant="titleSm" as="span" className={styles.appBarTitle} data-testid="appBrand">

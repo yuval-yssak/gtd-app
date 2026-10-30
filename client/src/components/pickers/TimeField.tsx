@@ -11,6 +11,8 @@ export interface TimeFieldProps {
     required?: boolean | undefined;
     disabled?: boolean | undefined;
     className?: string | undefined;
+    /** `data-testid` for the native input. */
+    inputTestId?: string | undefined;
 }
 
 /**
@@ -18,7 +20,7 @@ export interface TimeFieldProps {
  * have no way to empty the field once it holds a value. The desktop browsers' own time dropdown
  * is kept: unlike the date indicator it has no in-app replacement.
  */
-export function TimeField({ label, value, onChange, size, required, disabled, className }: TimeFieldProps) {
+export function TimeField({ label, value, onChange, size, required, disabled, className, inputTestId }: TimeFieldProps) {
     const { inputRef, onCleared } = useClearAndRefocus(onChange);
     const showClear = value !== '' && !disabled;
     return (
@@ -32,6 +34,7 @@ export function TimeField({ label, value, onChange, size, required, disabled, cl
             required={required}
             disabled={disabled}
             className={className}
+            inputProps={inputTestId ? { 'data-testid': inputTestId } : undefined}
             endAdornment={showClear ? <ClearFieldButton fieldName={label} onClear={onCleared} testId="timeFieldClear" edge="end" /> : undefined}
         />
     );

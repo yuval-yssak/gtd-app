@@ -149,7 +149,13 @@ function ItemPage() {
                     {...(initialStatus ? { initialStatus } : {})}
                 />
             </Card>
-            <Toast open={toast.open} autoHideDuration={3000} onClose={() => setToast((s) => ({ ...s, open: false }))} message={toast.message} />
+            <Toast
+                open={toast.open}
+                autoHideDuration={3000}
+                onClose={() => setToast((s) => ({ ...s, open: false }))}
+                message={toast.message}
+                data-testid="itemPageToast"
+            />
         </div>
     );
 }

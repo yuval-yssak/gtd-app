@@ -146,7 +146,7 @@ function PeoplePage() {
                             </IconButton>
                         </Tooltip>
                         <Tooltip title="Delete">
-                            <IconButton size="sm" tone="danger" aria-label="Delete" onClick={() => void onDelete(person)}>
+                            <IconButton size="sm" tone="danger" aria-label="Delete" onClick={() => void onDelete(person)} data-testid="personRowDeleteButton">
                                 <Trash2 />
                             </IconButton>
                         </Tooltip>
@@ -187,7 +187,7 @@ function PeoplePage() {
                 title="People"
                 count={people.length}
                 action={
-                    <Button startIcon={<Plus />} variant="solid" size="sm" onClick={openCreate}>
+                    <Button startIcon={<Plus />} variant="solid" size="sm" onClick={openCreate} data-testid="addPersonButton">
                         Add person
                     </Button>
                 }
@@ -227,7 +227,7 @@ function PeoplePage() {
             {/* Edit dialog reuses the shared PersonEditDialog component (also used by MeetingDetails).
                 Mount-on-open so the form re-initializes per person — see PersonEditDialog comment. */}
             {editing && <PersonEditDialog db={db} person={editing} showAccountPicker onClose={() => setEditing(null)} />}
-            <Dialog open={createOpen} onClose={() => setCreateOpen(false)} size="xs" fullWidth>
+            <Dialog open={createOpen} onClose={() => setCreateOpen(false)} size="xs" fullWidth data-testid="createPersonDialog">
                 <DialogTitle>Add person</DialogTitle>
                 <DialogContent>
                     <div className={styles.personForm}>
@@ -235,6 +235,7 @@ function PeoplePage() {
                             label="Name"
                             value={createForm.name}
                             onChange={(e) => setCreateForm((f) => ({ ...f, name: e.target.value }))}
+                            inputProps={{ 'data-testid': 'personCreateName' }}
                             fullWidth
                             autoFocus
                             required
@@ -243,10 +244,17 @@ function PeoplePage() {
                             label="Email"
                             value={createForm.email}
                             onChange={(e) => setCreateForm((f) => ({ ...f, email: e.target.value }))}
+                            inputProps={{ 'data-testid': 'personCreateEmail' }}
                             fullWidth
                             type="email"
                         />
-                        <TextField label="Phone" value={createForm.phone} onChange={(e) => setCreateForm((f) => ({ ...f, phone: e.target.value }))} fullWidth />
+                        <TextField
+                            label="Phone"
+                            value={createForm.phone}
+                            onChange={(e) => setCreateForm((f) => ({ ...f, phone: e.target.value }))}
+                            inputProps={{ 'data-testid': 'personCreatePhone' }}
+                            fullWidth
+                        />
                         <TextField
                             label="Notes"
                             value={createForm.notes}
@@ -262,8 +270,10 @@ function PeoplePage() {
                     </div>
                 </DialogContent>
                 <DialogActions>
-                    <Button onClick={() => setCreateOpen(false)}>Cancel</Button>
-                    <Button onClick={() => void saveCreate()} variant="solid" disabled={!createForm.name.trim()}>
+                    <Button onClick={() => setCreateOpen(false)} data-testid="createPersonCancel">
+                        Cancel
+                    </Button>
+                    <Button onClick={() => void saveCreate()} variant="solid" disabled={!createForm.name.trim()} data-testid="createPersonConfirm">
                         Add
                     </Button>
                 </DialogActions>

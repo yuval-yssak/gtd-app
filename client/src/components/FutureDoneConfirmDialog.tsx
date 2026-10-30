@@ -24,7 +24,9 @@ export function FutureDoneConfirmDialog({ open, item, onCancel, onConfirm }: Fut
                 ) : null}
             </DialogDescription>
             <DialogActions>
-                <Button onClick={onCancel}>Cancel</Button>
+                <Button onClick={onCancel} data-testid="futureDoneCancelButton">
+                    Cancel
+                </Button>
                 <Button variant="solid" onClick={onConfirm} data-testid="futureDoneConfirmButton">
                     Mark done anyway
                 </Button>

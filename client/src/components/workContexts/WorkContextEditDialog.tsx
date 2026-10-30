@@ -16,7 +16,7 @@ interface WorkContextEditDialogProps {
  */
 export function WorkContextEditDialog({ db, workContext, onClose }: WorkContextEditDialogProps) {
     return (
-        <Dialog open onClose={onClose} size="xs" fullWidth>
+        <Dialog open onClose={onClose} size="xs" fullWidth data-testid="workContextEditDialog">
             <DialogTitle>Rename context</DialogTitle>
             <DialogContent>
                 <WorkContextEditorBody db={db} workContext={workContext} onClose={onClose} />

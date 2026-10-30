@@ -21,9 +21,15 @@ export function LegalPage({ legalDocument }: { legalDocument: LegalDocument }) {
                 <nav className={styles.nav} aria-label="Legal pages">
                     {/* "/" is the way back for a signed-in reader (Settings links here; an installed PWA has no
                         back button): it routes to the inbox from IndexedDB alone, or to the landing page. */}
-                    <Link to="/">Home</Link>
-                    <Link to="/login">Sign in</Link>
-                    <Link to={otherDocument.path}>{otherDocument.title}</Link>
+                    <Link to="/" data-testid="legalHomeLink">
+                        Home
+                    </Link>
+                    <Link to="/login" data-testid="legalSignInLink">
+                        Sign in
+                    </Link>
+                    <Link to={otherDocument.path} data-testid="legalOtherDocumentLink">
+                        {otherDocument.title}
+                    </Link>
                 </nav>
                 <Text as="h1" variant="headline" weight="semibold" className={styles.title} data-testid="legalTitle">
                     {legalDocument.title}
@@ -35,7 +41,9 @@ export function LegalPage({ legalDocument }: { legalDocument: LegalDocument }) {
                     <ol className={styles.contents}>
                         {headings.map((heading) => (
                             <li key={heading}>
-                                <a href={`#${legalSectionAnchor(heading)}`}>{heading}</a>
+                                <a href={`#${legalSectionAnchor(heading)}`} data-testid="legalTocLink">
+                                    {heading}
+                                </a>
                             </li>
                         ))}
                     </ol>

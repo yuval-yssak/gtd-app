@@ -16,7 +16,9 @@ export function DetailNotFound({ message, actionLabel, onAction }: DetailNotFoun
     return (
         <div className={styles.notFound}>
             <Text tone="secondary">{message}</Text>
-            <Button onClick={onAction}>{actionLabel}</Button>
+            <Button onClick={onAction} data-testid="detailNotFoundAction">
+                {actionLabel}
+            </Button>
         </div>
     );
 }

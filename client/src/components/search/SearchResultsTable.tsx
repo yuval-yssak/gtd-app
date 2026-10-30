@@ -50,6 +50,8 @@ function ColumnPicker({ visibleColumns, onChange }: { visibleColumns: ReadonlySe
                         onCheckedChange={() => toggleColumn(col.id)}
                         disabled={col.fixed === true}
                         closeOnClick={false}
+                        data-testid="searchColumnToggle"
+                        data-column-id={col.id}
                     >
                         {col.label}
                     </MenuCheckboxItem>

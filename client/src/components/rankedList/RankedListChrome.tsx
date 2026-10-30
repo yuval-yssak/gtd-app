@@ -31,7 +31,14 @@ export function RankedListChrome({ ranked, actions, sectionNoun, liveTestId }: P
             <div aria-live="polite" className="srOnly" data-testid={liveTestId}>
                 {ranked.drag.liveText}
             </div>
-            <Toast open={ranked.drag.error !== null} tone="error" autoHideDuration={4000} onClose={ranked.drag.clearError} message={ranked.drag.error ?? ''} />
+            <Toast
+                open={ranked.drag.error !== null}
+                tone="error"
+                autoHideDuration={4000}
+                onClose={ranked.drag.clearError}
+                message={ranked.drag.error ?? ''}
+                data-testid="reorderErrorToast"
+            />
             <MoveToSheet key={key} {...sheet} />
         </>
     );

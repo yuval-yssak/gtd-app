@@ -380,7 +380,9 @@ function CreateDialog({ state, onCancel, onSubmit, onDismissReveal, isCreating }
                     </fieldset>
                 </DialogContent>
                 <DialogActions>
-                    <Button onClick={onCancel}>Cancel</Button>
+                    <Button onClick={onCancel} data-testid="cancelCreateTokenButton">
+                        Cancel
+                    </Button>
                     <Button variant="solid" onClick={handleCreate} disabled={isCreating} data-testid="confirmCreateTokenButton">
                         {isCreating ? 'Creating…' : 'Create'}
                     </Button>
@@ -468,7 +470,9 @@ function RevokeDialog({ state, onCancel, onConfirm, isRevoking }: RevokeDialogPr
                 Revoke <strong>{state.token.label}</strong>? Any integration using this token will stop working immediately.
             </DialogDescription>
             <DialogActions>
-                <Button onClick={onCancel}>Cancel</Button>
+                <Button onClick={onCancel} data-testid="cancelRevokeTokenButton">
+                    Cancel
+                </Button>
                 <Button variant="solid" tone="danger" onClick={onConfirm} disabled={isRevoking} data-testid="confirmRevokeTokenButton">
                     {isRevoking ? 'Revoking…' : 'Revoke'}
                 </Button>

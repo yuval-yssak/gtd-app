@@ -35,7 +35,7 @@ export function RoutineIndicator({ routineId, routineTitle, forceChip = false }:
     if (style === 'chip') {
         return (
             <Tooltip title={label}>
-                <Chip icon={<Repeat />} label="Routine" variant="outline" onClick={onClick} className={styles.chip} />
+                <Chip icon={<Repeat />} label="Routine" variant="outline" onClick={onClick} className={styles.chip} data-testid="routineIndicator" />
             </Tooltip>
         );
     }
@@ -43,14 +43,14 @@ export function RoutineIndicator({ routineId, routineTitle, forceChip = false }:
     if (style === 'colorAccent') {
         return (
             <Tooltip title={label}>
-                <button type="button" className={styles.colorAccent} onClick={onClick} aria-label={label} />
+                <button type="button" className={styles.colorAccent} onClick={onClick} aria-label={label} data-testid="routineIndicator" />
             </Tooltip>
         );
     }
 
     return (
         <Tooltip title={label}>
-            <button type="button" className={styles.iconButton} onClick={onClick} aria-label={label}>
+            <button type="button" className={styles.iconButton} onClick={onClick} aria-label={label} data-testid="routineIndicator">
                 <Repeat size={18} aria-hidden="true" />
             </button>
         </Tooltip>

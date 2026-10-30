@@ -66,6 +66,13 @@ describe('TimeField', () => {
         expect(filled).not.toMatch(/aria-label="[^"]*End time/);
         expect(renderToStaticMarkup(<TimeField label="End time" value="" onChange={() => {}} />)).not.toContain('Clear End time');
     });
+
+    it('puts the input test id on the native time input', () => {
+        const html = renderToStaticMarkup(<TimeField label="End time" value="09:30" onChange={() => {}} inputTestId="endTimeInput" />);
+        const input = html.match(/<input[^>]*>/)?.[0] ?? '';
+        expect(input).toContain('type="time"');
+        expect(input).toContain('data-testid="endTimeInput"');
+    });
 });
 
 describe('DatePickerPanel', () => {

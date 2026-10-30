@@ -345,7 +345,14 @@ function RoutinesPage() {
                             { value: 'calendar', label: `Calendar (${calendarCount})`, 'data-testid': 'routinesTabCalendar' },
                         ]}
                     />
-                    <ToggleGroup size="sm" aria-label="Routines view" value={activeView} onValueChange={onViewSelected} options={VIEW_OPTIONS} />
+                    <ToggleGroup
+                        size="sm"
+                        aria-label="Routines view"
+                        value={activeView}
+                        onValueChange={onViewSelected}
+                        options={VIEW_OPTIONS}
+                        data-testid="routinesViewToggle"
+                    />
                 </div>
             )}
             {isBootstrapping ? <ListSkeleton /> : activeView === 'week' ? renderWeekView() : renderListView()}
@@ -362,7 +369,9 @@ function RoutinesPage() {
                     )}
                 </DialogDescription>
                 <DialogActions>
-                    <Button onClick={() => setRoutineToDelete(null)}>Cancel</Button>
+                    <Button onClick={() => setRoutineToDelete(null)} data-testid="deleteRoutineCancel">
+                        Cancel
+                    </Button>
                     <Button variant="solid" tone="danger" onClick={() => void onConfirmDelete()} data-testid="deleteRoutineConfirm">
                         Delete
                     </Button>

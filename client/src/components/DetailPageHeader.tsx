@@ -14,7 +14,7 @@ interface DetailPageHeaderProps {
 export function DetailPageHeader({ title, onBack, idForCopy }: DetailPageHeaderProps) {
     return (
         <div className={styles.header}>
-            <IconButton size="sm" onClick={onBack} aria-label="Go back">
+            <IconButton size="sm" onClick={onBack} aria-label="Go back" data-testid="detailBackButton">
                 <ArrowLeft />
             </IconButton>
             <Text as="h1" variant="titleSm" weight="semibold" className={styles.title}>

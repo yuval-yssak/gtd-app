@@ -313,7 +313,9 @@ function RemoveDeviceDialog({ state, onCancel, onConfirm, isRemoving }: RemoveDe
                 re-downloads all your data — it will ask what to do with any unsynced changes, so nothing is discarded silently.
             </Text>
             <DialogActions>
-                <Button onClick={onCancel}>Cancel</Button>
+                <Button onClick={onCancel} data-testid="cancelRemoveDeviceButton">
+                    Cancel
+                </Button>
                 <Button variant="solid" tone="danger" onClick={onConfirm} disabled={isRemoving} data-testid="confirmRemoveDeviceButton">
                     {isRemoving ? 'Removing…' : 'Remove'}
                 </Button>
@@ -370,7 +372,9 @@ function RenameDeviceDialog({ device, onCancel, onSubmit }: RenameDeviceDialogPr
                 />
             </DialogContent>
             <DialogActions>
-                <Button onClick={onCancel}>Cancel</Button>
+                <Button onClick={onCancel} data-testid="cancelRenameDeviceButton">
+                    Cancel
+                </Button>
                 <Button variant="solid" onClick={handleSave} data-testid="confirmRenameDeviceButton">
                     Save
                 </Button>

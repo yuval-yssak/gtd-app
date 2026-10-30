@@ -57,7 +57,7 @@ export function ListSearchField({ value, onValueChange, onClose, placeholder, te
             inputProps={{ 'aria-label': placeholder, 'data-testid': testId, [LIST_SEARCH_INPUT_ATTR]: '' }}
             endAdornment={
                 <Tooltip title="Close search (Esc)">
-                    <IconButton size="sm" aria-label="Close search" aria-keyshortcuts="Escape" edge="end" onClick={onClose}>
+                    <IconButton size="sm" aria-label="Close search" aria-keyshortcuts="Escape" edge="end" onClick={onClose} data-testid="listSearchClose">
                         <X />
                     </IconButton>
                 </Tooltip>

@@ -19,8 +19,13 @@ interface Props {
 export function TicklerDateFields({ value, onChange }: Props) {
     return (
         <div className={styles.dates}>
-            <DateField label="Expected by" value={value.expectedBy} onChange={(expectedBy) => onChange({ expectedBy })} />
-            <DateField label="Ignore before" value={value.ignoreBefore} onChange={(ignoreBefore) => onChange({ ignoreBefore })} />
+            <DateField label="Expected by" value={value.expectedBy} onChange={(expectedBy) => onChange({ expectedBy })} inputTestId="expectedByDate" />
+            <DateField
+                label="Ignore before"
+                value={value.ignoreBefore}
+                onChange={(ignoreBefore) => onChange({ ignoreBefore })}
+                inputTestId="ignoreBeforeDate"
+            />
         </div>
     );
 }

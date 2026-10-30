@@ -116,7 +116,7 @@ export function MoveToSheet({ item, sectionItems, sectionLabel, onClose, onMove 
                             No items match.
                         </Text>
                     )}
-                    <Button tone="neutral" onClick={() => setPlacement(null)}>
+                    <Button tone="neutral" onClick={() => setPlacement(null)} data-testid="nextActionMoveToBack">
                         Back
                     </Button>
                 </div>

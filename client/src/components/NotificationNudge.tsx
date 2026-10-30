@@ -39,7 +39,7 @@ export function NotificationNudge({ db }: Props) {
             className={styles.alert}
             onClose={onDismiss}
             action={
-                <Button size="sm" onClick={onEnable}>
+                <Button size="sm" onClick={onEnable} data-testid="notificationNudgeEnable">
                     Enable
                 </Button>
             }

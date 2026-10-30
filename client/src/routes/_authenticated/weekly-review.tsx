@@ -206,7 +206,7 @@ function WeeklyReviewPage() {
                 mode="inline"
                 title="Couldn't load the celebration"
                 fallbackAction={() => (
-                    <Button tone="neutral" size="sm" onClick={finishCelebration}>
+                    <Button tone="neutral" size="sm" onClick={finishCelebration} data-testid="celebrationFallbackDone">
                         Done
                     </Button>
                 )}

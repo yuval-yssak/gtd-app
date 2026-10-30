@@ -29,7 +29,9 @@ export function PauseRoutineConfirmDialog({ routine, onCancel, onConfirm }: Paus
                 To resume, edit the routine and set a new start date.
             </DialogDescription>
             <DialogActions>
-                <Button onClick={onCancel}>Cancel</Button>
+                <Button onClick={onCancel} data-testid="pauseRoutineCancel">
+                    Cancel
+                </Button>
                 <Button variant="solid" onClick={onConfirm} data-testid="pauseRoutineConfirm">
                     Pause
                 </Button>

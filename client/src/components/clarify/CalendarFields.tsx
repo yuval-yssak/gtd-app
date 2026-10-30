@@ -54,7 +54,13 @@ export function CalendarFields({ value, onChange, calendarOptions, forceShowPick
                 onCheckedChange={(allDay) => onChange({ allDay })}
                 label="All day"
             />
-            <DateField label={value.allDay ? 'Start date' : 'Date'} value={value.date} onChange={(date) => onChange({ date })} required />
+            <DateField
+                label={value.allDay ? 'Start date' : 'Date'}
+                value={value.date}
+                onChange={(date) => onChange({ date })}
+                required
+                inputTestId="startDatePicker"
+            />
             {value.allDay ? (
                 <DateField
                     label="End date"
@@ -65,8 +71,8 @@ export function CalendarFields({ value, onChange, calendarOptions, forceShowPick
                 />
             ) : (
                 <div className={styles.timeRow}>
-                    <TimeField label="Start time" value={value.startTime} onChange={(startTime) => onChange({ startTime })} />
-                    <TimeField label="End time" value={value.endTime} onChange={(endTime) => onChange({ endTime })} />
+                    <TimeField label="Start time" value={value.startTime} onChange={(startTime) => onChange({ startTime })} inputTestId="startTimeInput" />
+                    <TimeField label="End time" value={value.endTime} onChange={(endTime) => onChange({ endTime })} inputTestId="endTimeInput" />
                 </div>
             )}
             {showPicker && (
@@ -75,6 +81,7 @@ export function CalendarFields({ value, onChange, calendarOptions, forceShowPick
                     value={value.calendarSyncConfigId}
                     onValueChange={(calendarSyncConfigId) => onChange({ calendarSyncConfigId })}
                     options={calendarSelectOptions(calendarOptions)}
+                    data-testid="calendarSyncConfigSelect"
                     className={styles.calendarSelect}
                 />
             )}

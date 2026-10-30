@@ -81,4 +81,9 @@ describe('StepIndicator', () => {
         fireEvent.click(inbox);
         expect(onStepSelected).toHaveBeenCalledWith(1);
     });
+
+    it('names each selectable step button by its key, so tests survive reordering', () => {
+        render(<StepIndicator activeIndex={0} stepTestId="wizardStep" onStepSelected={vi.fn()} steps={STEPS} />);
+        expect(screen.getAllByTestId('wizardStep').map((button) => button.getAttribute('data-step-key'))).toEqual(['collect', 'inbox', 'calendar']);
+    });
 });

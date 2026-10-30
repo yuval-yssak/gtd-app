@@ -33,17 +33,26 @@ export function DatePickerPanel({ value, onPick, todayIso = getTodayIso() }: Pan
         <div className={styles.panel} data-testid="datePickerPanel">
             <div className={styles.quickPicks}>
                 {quickDatePicks(todayIso).map((pick) => (
-                    <Chip key={pick.label} label={pick.label} size="sm" variant="outline" selected={pick.date === value} onClick={() => onPick(pick.date)} />
+                    <Chip
+                        key={pick.label}
+                        label={pick.label}
+                        size="sm"
+                        variant="outline"
+                        selected={pick.date === value}
+                        onClick={() => onPick(pick.date)}
+                        data-testid="datePickerQuickPick"
+                        data-pick={pick.label}
+                    />
                 ))}
             </div>
             <div className={styles.monthHeader}>
-                <IconButton aria-label="Previous month" size="sm" onClick={() => setMonthIso(shiftMonth(monthIso, -1))}>
+                <IconButton aria-label="Previous month" size="sm" onClick={() => setMonthIso(shiftMonth(monthIso, -1))} data-testid="datePickerPrevMonth">
                     <ChevronLeft />
                 </IconButton>
                 <Text as="span" variant="subtitleSm" data-testid="datePickerMonth">
                     {monthHeading(monthIso)}
                 </Text>
-                <IconButton aria-label="Next month" size="sm" onClick={() => setMonthIso(shiftMonth(monthIso, 1))}>
+                <IconButton aria-label="Next month" size="sm" onClick={() => setMonthIso(shiftMonth(monthIso, 1))} data-testid="datePickerNextMonth">
                     <ChevronRight />
                 </IconButton>
             </div>
@@ -80,6 +89,8 @@ function MonthGrid({ monthIso, value, todayIso, onPick }: MonthGridProps) {
                         aria-label={dayCellLabel(dayIso)}
                         aria-pressed={dayIso === value}
                         onClick={() => onPick(dayIso)}
+                        data-testid="datePickerDay"
+                        data-date={dayIso}
                     >
                         {dayOfMonth(dayIso)}
                     </button>
@@ -98,7 +109,7 @@ interface PopoverProps {
 /** Anchored picker for DateField — the panel unmounts on close, which is what resets its month. */
 export function DatePickerPopover({ anchorEl, value, onPick, onClose }: PopoverProps) {
     return (
-        <Popover open={anchorEl !== null} anchor={anchorEl} onClose={onClose} align="end" aria-label="Pick a date">
+        <Popover open={anchorEl !== null} anchor={anchorEl} onClose={onClose} align="end" aria-label="Pick a date" data-testid="datePickerPopover">
             <DatePickerPanel value={value} onPick={onPick} />
         </Popover>
     );

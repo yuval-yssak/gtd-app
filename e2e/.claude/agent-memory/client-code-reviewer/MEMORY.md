@@ -90,3 +90,4 @@
 - [Cross-package typecheck gated on own dir](feedback_cross_package_typecheck_gated_on_own_dir.md) — e2e typecheck imports client/src but the hook runs it only on e2e/ diffs; client type edits drift silently.
 - [Review-card additions break card-fits spec](feedback_review_card_height_budget_spec.md) — any new row in the review card overflows weekly-review-card-fits; authors never run it.
 - [Inferred move direction from order](feedback_inferred_move_direction_from_order.md) — "current moved down" ≡ "leftover moved up" by order alone; swap drops dirty structural edits.
+- [Testid sweeps tag the group, not the options](feedback_testid_sweep_group_not_option.md) — ToggleGroup/RadioGroup/Tabs root gets the id, option arrays stay bare; repeated chips miss the instance attr.

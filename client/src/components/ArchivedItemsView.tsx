@@ -70,7 +70,7 @@ const ArchivedRow = memo(function ArchivedRow({ item, sortKey, routineTitle, don
     return (
         <ListRowShell itemId={item._id} isGhost={isGhost} onGhostExited={onGhostExited}>
             <div {...SHORTCUT_ROW_PROPS} className={styles.row} data-divided={hasDivider || undefined}>
-                <Link to="/item/$itemId" params={{ itemId: item._id }} search={{ status: null }} className={styles.rowLink}>
+                <Link to="/item/$itemId" params={{ itemId: item._id }} search={{ status: null }} className={styles.rowLink} data-testid="archivedItemLink">
                     <span className={styles.titleRow}>
                         <Text as="span" variant="bodySm">
                             {item.title}
@@ -165,6 +165,7 @@ export function ArchivedItemsView({ status, title, emptyIcon, emptyMessage, urlQ
                     onValueChange={onSortChange}
                     options={SORT_OPTIONS.map((o) => ({ value: encodeSort(o.key, o.dir), label: o.label }))}
                     className={styles.sortField}
+                    data-testid={`${status}SortSelect`}
                 />
             </div>
             {search.isOpen && (

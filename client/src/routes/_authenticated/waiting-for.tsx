@@ -241,7 +241,13 @@ function WaitingForPage() {
                 <AccountSyncChip />
             </ListPageHeader>
             <div className={styles.sortRow}>
-                <ToggleGroup value={sortBy} onValueChange={onSortByChanged} aria-label="Sort waiting-for items" options={SORT_OPTIONS} />
+                <ToggleGroup
+                    value={sortBy}
+                    onValueChange={onSortByChanged}
+                    aria-label="Sort waiting-for items"
+                    options={SORT_OPTIONS}
+                    data-testid="waitingForSortToggle"
+                />
             </div>
             {sortBy === 'date'
                 ? renderDateList()
@@ -255,7 +261,7 @@ function WaitingForPage() {
                   ))}
             {/* Keyboard hints, the reorder announcer, the failure toast and the Move to sheet ("By date"). */}
             <RankedListChrome ranked={ranked} actions={RANKED_LIST_ROW_ACTIONS} sectionNoun="day" liveTestId="waitingForReorderLive" />
-            <Toast open={editor.toast.open} autoHideDuration={3000} onClose={editor.closeToast} message={editor.toast.message} />
+            <Toast open={editor.toast.open} autoHideDuration={3000} onClose={editor.closeToast} message={editor.toast.message} data-testid="waitingForToast" />
         </div>
     );
 }

@@ -313,7 +313,7 @@ function AttendeesEditor({ db, attendees, people, selfEmail, ownerUserIdForNewPe
                     >
                         Add
                     </Button>
-                    <Button size="sm" tone="neutral" onClick={() => setPendingPersonEmail(null)}>
+                    <Button size="sm" tone="neutral" onClick={() => setPendingPersonEmail(null)} data-testid="addEmailCancel">
                         Cancel
                     </Button>
                 </div>
@@ -330,7 +330,7 @@ function AttendeesEditor({ db, attendees, people, selfEmail, ownerUserIdForNewPe
                 />
             )}
             {personEditTarget && <PersonEditDialog db={db} person={personEditTarget} onClose={() => setPersonEditTarget(null)} />}
-            <AlertDialog open={pendingMutation !== null} onClose={() => setPendingMutation(null)} size="xs">
+            <AlertDialog open={pendingMutation !== null} onClose={() => setPendingMutation(null)} size="xs" data-testid="detachWarningDialog">
                 <DialogTitle>Detach this occurrence?</DialogTitle>
                 <DialogDescription data-testid="detachWarningText">
                     Changing attendees here forks just this date from the recurring event. Future attendee changes on the routine series won't apply to this
@@ -414,7 +414,13 @@ function AttendeeChip({ attendee, person, isSelf, onRemove, onSaveAsPerson, onEd
                 <Chip
                     label={
                         clickHandler ? (
-                            <button type="button" className={styles.chipLabelButton} onClick={clickHandler} title={person ? 'Edit person' : 'Save as person'}>
+                            <button
+                                type="button"
+                                className={styles.chipLabelButton}
+                                onClick={clickHandler}
+                                title={person ? 'Edit person' : 'Save as person'}
+                                data-testid="attendeeChipAction"
+                            >
                                 {text}
                             </button>
                         ) : (

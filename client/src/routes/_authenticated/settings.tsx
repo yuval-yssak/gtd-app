@@ -177,6 +177,7 @@ function CalendarHorizonSection() {
         >
             <Select
                 aria-label="Calendar horizon"
+                data-testid="calendarHorizonSelect"
                 size="sm"
                 value={String(horizon)}
                 onValueChange={(months) => onChange(Number(months))}
@@ -188,10 +189,10 @@ function CalendarHorizonSection() {
 }
 
 const ROUTINE_INDICATOR_OPTIONS: RadioOption<RoutineIndicatorStyle>[] = [
-    { value: 'icon', label: 'Loop icon' },
-    { value: 'colorAccent', label: 'Color dot' },
-    { value: 'chip', label: 'Chip label' },
-    { value: 'none', label: 'None' },
+    { value: 'icon', label: 'Loop icon', 'data-testid': 'routineIndicatorIconOption' },
+    { value: 'colorAccent', label: 'Color dot', 'data-testid': 'routineIndicatorColorAccentOption' },
+    { value: 'chip', label: 'Chip label', 'data-testid': 'routineIndicatorChipOption' },
+    { value: 'none', label: 'None', 'data-testid': 'routineIndicatorNoneOption' },
 ];
 
 function RoutineIndicatorSection() {
@@ -204,7 +205,13 @@ function RoutineIndicatorSection() {
 
     return (
         <SettingsSection title="Routine indicator" description="How items linked to a routine are marked in lists.">
-            <RadioGroup aria-label="Routine indicator" value={style} onValueChange={onChange} options={ROUTINE_INDICATOR_OPTIONS} />
+            <RadioGroup
+                aria-label="Routine indicator"
+                value={style}
+                onValueChange={onChange}
+                options={ROUTINE_INDICATOR_OPTIONS}
+                data-testid="routineIndicatorRadio"
+            />
         </SettingsSection>
     );
 }
@@ -301,7 +308,7 @@ function NotificationsBody({ status, isRequesting, onEnableOrRegister }: Notific
     // requestAndRegisterPushSubscription handles both prompting and re-subscribing.
     const label = status === 'needsPermission' ? 'Enable notifications' : 'Re-enable notifications';
     return (
-        <Button variant="outline" size="sm" onClick={onEnableOrRegister} disabled={isRequesting}>
+        <Button variant="outline" size="sm" onClick={onEnableOrRegister} disabled={isRequesting} data-testid="enableNotificationsButton">
             {isRequesting ? 'Requesting…' : label}
         </Button>
     );

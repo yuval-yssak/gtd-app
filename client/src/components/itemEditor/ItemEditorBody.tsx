@@ -1078,9 +1078,17 @@ export function ItemEditorBody({
         renderActions({ triggerSave: onSave, saveDisabled, isSaving, isDirty, hasTextEdits, isRoutineDestination: status === 'routine', onClose: closeEditor })
     ) : (
         <>
-            <Button onClick={closeEditor}>Cancel</Button>
+            <Button onClick={closeEditor} data-testid="itemEditorCancelButton">
+                Cancel
+            </Button>
             <DisabledCapableTooltip title={`Save changes (${chordLabel(['mod', 'enter'], isApple)})`}>
-                <Button variant="solid" disabled={saveDisabled} onClick={() => onSave()} aria-keyshortcuts={isApple ? 'Meta+Enter' : 'Control+Enter'}>
+                <Button
+                    variant="solid"
+                    disabled={saveDisabled}
+                    onClick={() => onSave()}
+                    aria-keyshortcuts={isApple ? 'Meta+Enter' : 'Control+Enter'}
+                    data-testid="itemEditorSaveButton"
+                >
                     Save changes
                 </Button>
             </DisabledCapableTooltip>
@@ -1151,6 +1159,7 @@ export function ItemEditorBody({
                 }}
                 fullWidth
                 required
+                inputProps={{ 'data-testid': 'itemEditorTitle' }}
             />
 
             <BriefSection

@@ -20,7 +20,9 @@ export function ReassignInFlightInline({ onClose, entityLabel = 'item' }: Props)
                 This {entityLabel} is being moved to another account. You can edit it once the move completes.
             </Callout>
             <div className={styles.actions}>
-                <Button onClick={onClose}>Close</Button>
+                <Button onClick={onClose} data-testid="reassignInFlightClose">
+                    Close
+                </Button>
             </div>
         </div>
     );

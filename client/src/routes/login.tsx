@@ -67,10 +67,26 @@ function LoginPage() {
                     Sign in to your account
                 </Text>
                 <div className={styles.buttonGroup}>
-                    <Button variant="outline" size="lg" fullWidth onClick={() => signIn('google')} disabled={isPending} loading={pendingProvider === 'google'}>
+                    <Button
+                        variant="outline"
+                        size="lg"
+                        fullWidth
+                        onClick={() => signIn('google')}
+                        disabled={isPending}
+                        loading={pendingProvider === 'google'}
+                        data-testid="signInWithGoogle"
+                    >
                         {pendingProvider === 'google' ? 'Redirecting…' : 'Sign in with Google'}
                     </Button>
-                    <Button variant="outline" size="lg" fullWidth onClick={() => signIn('github')} disabled={isPending} loading={pendingProvider === 'github'}>
+                    <Button
+                        variant="outline"
+                        size="lg"
+                        fullWidth
+                        onClick={() => signIn('github')}
+                        disabled={isPending}
+                        loading={pendingProvider === 'github'}
+                        data-testid="signInWithGithub"
+                    >
                         {pendingProvider === 'github' ? 'Redirecting…' : 'Sign in with GitHub'}
                     </Button>
                 </div>

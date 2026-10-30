@@ -917,6 +917,7 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
                     textAutosave.onChange({ title: nextTitle, notes: formRef.current.notes });
                 }}
                 onBlur={() => void textAutosave.flush()}
+                inputProps={{ 'data-testid': 'routineEditorTitle' }}
                 // Wraps instead of scrolling horizontally, so a long routine title is readable in
                 // full — including on the weekly review's routine cards.
                 multiline
@@ -957,7 +958,9 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
             )}
 
             <div className={styles.inlineActions}>
-                <Button onClick={closeEditor}>Cancel</Button>
+                <Button onClick={closeEditor} data-testid="routineEditorCancelButton">
+                    Cancel
+                </Button>
                 <Button variant="solid" disabled={saveDisabled} onClick={() => onSave()} data-testid="routineEditorSaveButton">
                     {isEdit ? 'Save changes' : 'Create routine'}
                 </Button>

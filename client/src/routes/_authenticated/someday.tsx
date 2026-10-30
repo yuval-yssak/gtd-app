@@ -211,7 +211,7 @@ function SomedayPage() {
             {renderBody()}
             {/* Keyboard hints, the reorder announcer, the failure toast and the Move to sheet. */}
             <RankedListChrome ranked={ranked} actions={RANKED_LIST_ROW_ACTIONS} sectionNoun="list" liveTestId="somedayReorderLive" />
-            <Toast open={editor.toast.open} autoHideDuration={3000} onClose={editor.closeToast} message={editor.toast.message} />
+            <Toast open={editor.toast.open} autoHideDuration={3000} onClose={editor.closeToast} message={editor.toast.message} data-testid="somedayToast" />
         </div>
     );
 }

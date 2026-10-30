@@ -581,7 +581,7 @@ function NextActionsPage() {
             )}
             {/* Keyboard hints, the polite announcer for every reorder outcome, the failure toast and the Move to sheet. */}
             <RankedListChrome ranked={ranked} actions={NEXT_ACTIONS_ROW_ACTIONS} sectionNoun="day" liveTestId="nextActionsReorderLive" />
-            <Toast open={editor.toast.open} autoHideDuration={3000} onClose={editor.closeToast} message={editor.toast.message} />
+            <Toast open={editor.toast.open} autoHideDuration={3000} onClose={editor.closeToast} message={editor.toast.message} data-testid="nextActionsToast" />
         </div>
     );
 }

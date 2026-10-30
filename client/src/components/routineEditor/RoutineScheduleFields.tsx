@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Checkbox, Chip, Select, Switch, Text, TextField, ToggleGroup } from '../../designSystem';
+import { Checkbox, Chip, Select, Switch, Text, TextField, ToggleGroup, type ToggleOption } from '../../designSystem';
 import type { CalendarOption } from '../../hooks/useCalendarOptions';
 import { rankByUsage, type UsageIndex } from '../../lib/entityUsage';
 import { sortByName } from '../../lib/sortByName';
@@ -29,21 +29,21 @@ export interface RoutineScheduleFieldsProps {
     disabled?: boolean;
 }
 
-const ROUTINE_TYPE_OPTIONS: { value: FormState['routineType']; label: string }[] = [
-    { value: 'nextAction', label: 'Next Action' },
-    { value: 'calendar', label: 'Calendar' },
+const ROUTINE_TYPE_OPTIONS: ToggleOption<FormState['routineType']>[] = [
+    { value: 'nextAction', label: 'Next Action', 'data-testid': 'routineTypeNextAction' },
+    { value: 'calendar', label: 'Calendar', 'data-testid': 'routineTypeCalendar' },
 ];
 
-const ENDS_OPTIONS: { value: EndsMode; label: string }[] = [
-    { value: 'never', label: 'Never' },
-    { value: 'onDate', label: 'On date' },
-    { value: 'afterN', label: 'After N' },
+const ENDS_OPTIONS: ToggleOption<EndsMode>[] = [
+    { value: 'never', label: 'Never', 'data-testid': 'routineEndsNever' },
+    { value: 'onDate', label: 'On date', 'data-testid': 'routineEndsOnDate' },
+    { value: 'afterN', label: 'After N', 'data-testid': 'routineEndsAfterN' },
 ];
 
-const ENERGY_OPTIONS: { value: EnergyLevel; label: string }[] = [
-    { value: 'low', label: 'Low' },
-    { value: 'medium', label: 'Medium' },
-    { value: 'high', label: 'High' },
+const ENERGY_OPTIONS: ToggleOption<EnergyLevel>[] = [
+    { value: 'low', label: 'Low', 'data-testid': 'routineEnergyLow' },
+    { value: 'medium', label: 'Medium', 'data-testid': 'routineEnergyMedium' },
+    { value: 'high', label: 'High', 'data-testid': 'routineEnergyHigh' },
 ];
 
 /**
@@ -81,6 +81,7 @@ export function RoutineScheduleFields({
                     disabled={disabled}
                     onValueChange={(routineType) => onPatch({ routineType })}
                     options={ROUTINE_TYPE_OPTIONS}
+                    data-testid="routineTypeToggle"
                 />
             </FieldSection>
 
@@ -100,6 +101,7 @@ export function RoutineScheduleFields({
                 value={form.startDate}
                 onChange={(startDate) => onPatch({ startDate })}
                 helperText="Optional — anchors the schedule. Leave empty to start today."
+                inputTestId="routineStartDate"
                 disabled={disabled}
             />
 
@@ -155,7 +157,14 @@ function CalendarSettingsFields({
             />
             {!form.allDay && (
                 <div className={styles.timeRow}>
-                    <TimeField label="Start time" value={form.timeOfDay} onChange={(timeOfDay) => onPatch({ timeOfDay })} required disabled={disabled} />
+                    <TimeField
+                        label="Start time"
+                        value={form.timeOfDay}
+                        onChange={(timeOfDay) => onPatch({ timeOfDay })}
+                        required
+                        disabled={disabled}
+                        inputTestId="routineStartTime"
+                    />
                     <TextField
                         label="Duration (min)"
                         type="number"
@@ -164,7 +173,7 @@ function CalendarSettingsFields({
                         size="sm"
                         className={styles.narrowInput}
                         disabled={disabled}
-                        inputProps={{ min: 1 }}
+                        inputProps={{ min: 1, 'data-testid': 'routineDurationInput' }}
                     />
                 </div>
             )}
@@ -189,7 +198,17 @@ interface CalendarPickerProps {
 }
 
 function CalendarPicker({ calendarOptions, value, onChange, disabled }: CalendarPickerProps) {
-    return <Select label="Calendar" size="sm" value={value} onValueChange={onChange} options={calendarSelectOptions(calendarOptions)} disabled={disabled} />;
+    return (
+        <Select
+            label="Calendar"
+            size="sm"
+            value={value}
+            onValueChange={onChange}
+            options={calendarSelectOptions(calendarOptions)}
+            disabled={disabled}
+            data-testid="routineCalendarSelect"
+        />
+    );
 }
 
 // ── Ends section ──────────────────────────────────────────────────────────────
@@ -197,7 +216,14 @@ function CalendarPicker({ calendarOptions, value, onChange, disabled }: Calendar
 function EndsFields({ form, onPatch, disabled }: { form: FormState; onPatch: (patch: Partial<FormState>) => void; disabled?: boolean }) {
     return (
         <FieldSection label="Ends" disabled={disabled}>
-            <ToggleGroup size="sm" value={form.endsMode} disabled={disabled} onValueChange={(endsMode) => onPatch({ endsMode })} options={ENDS_OPTIONS} />
+            <ToggleGroup
+                size="sm"
+                value={form.endsMode}
+                disabled={disabled}
+                onValueChange={(endsMode) => onPatch({ endsMode })}
+                options={ENDS_OPTIONS}
+                data-testid="routineEndsToggle"
+            />
             {form.endsMode === 'onDate' && (
                 <DateField
                     label="End date"
@@ -205,6 +231,7 @@ function EndsFields({ form, onPatch, disabled }: { form: FormState; onPatch: (pa
                     onChange={(endsDate) => onPatch({ endsDate })}
                     disabled={disabled}
                     className={styles.endDate}
+                    inputTestId="routineEndDate"
                 />
             )}
             {form.endsMode === 'afterN' && (
@@ -218,7 +245,7 @@ function EndsFields({ form, onPatch, disabled }: { form: FormState; onPatch: (pa
                         className={styles.narrowInput}
                         value={form.endsCount}
                         onChange={(e) => onPatch({ endsCount: e.target.value })}
-                        inputProps={{ min: 1, 'aria-label': 'Number of occurrences' }}
+                        inputProps={{ min: 1, 'aria-label': 'Number of occurrences', 'data-testid': 'routineEndsCountInput' }}
                     />
                     <Text as="span" variant="bodySm">
                         occurrences
@@ -297,7 +324,14 @@ function TemplateFields({ form, workContexts, people, usage, onPatch, onToggleWo
                 </FieldSection>
             )}
             <FieldSection label="Energy">
-                <ToggleGroup allowDeselect size="sm" value={form.energy} onValueChange={(energy) => onPatch({ energy })} options={ENERGY_OPTIONS} />
+                <ToggleGroup
+                    allowDeselect
+                    size="sm"
+                    value={form.energy}
+                    onValueChange={(energy) => onPatch({ energy })}
+                    options={ENERGY_OPTIONS}
+                    data-testid="routineEnergyToggle"
+                />
             </FieldSection>
             <TextField
                 label="Time estimate (min)"
@@ -306,9 +340,9 @@ function TemplateFields({ form, workContexts, people, usage, onPatch, onToggleWo
                 type="number"
                 size="sm"
                 className={styles.narrowInput}
-                inputProps={{ min: 1 }}
+                inputProps={{ min: 1, 'data-testid': 'routineTimeEstimateInput' }}
             />
-            <Checkbox checked={form.urgent} onCheckedChange={(urgent) => onPatch({ urgent })} label="Urgent" />
+            <Checkbox checked={form.urgent} onCheckedChange={(urgent) => onPatch({ urgent })} label="Urgent" data-testid="routineUrgentCheckbox" />
         </div>
     );
 }
