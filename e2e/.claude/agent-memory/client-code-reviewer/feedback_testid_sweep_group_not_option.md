@@ -9,4 +9,6 @@ Bulk `data-testid` sweeps put the id on the closed-widget root (`<ToggleGroup da
 
 **Why:** the DS widgets have closed prop sets, so an option can only be targeted via its own `data-testid` entry; a group id alone forces tests back to role+text.
 
+Testids are behavioural, not inert: `useTransitionFocusRestore` keys on `closest('[data-testid]')`, so adding an id to a text input inside a weekly-review card flipped focus restore into the next card's field (pinned-bar spec overflowed 91px). Grep for `closest('[data-testid]')` consumers before approving a sweep.
+
 **How to apply:** for every group-level id in a sweep diff, open the options constant and check each entry. Also check repeated primitives (quick-pick chips, TOC links) got an instance `data-*` beside the shared id. For e2e locator helpers keyed by string ids, ask for the client union type — a typo inside `filter({ has })` + `.not.toHaveAttribute` passes vacuously.

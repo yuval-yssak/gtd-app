@@ -54,6 +54,22 @@ interface FocusedControl {
     testId: string;
 }
 
+// Any editable host, not just `="true"`: `contenteditable=""` and `plaintext-only` are editable too.
+const TEXT_ENTRY_SELECTOR = 'input, textarea, [contenteditable]:not([contenteditable="false"])';
+
+/**
+ * What a focus move records: the closest testid'd element at or above the focused one — except a
+ * text field, which always records its container even when it carries a testid itself. Text-field
+ * focus is a disconnection sentinel (see onFocusIn); restoring INTO the next card's field would let
+ * the next Space type rather than reach the bar primary.
+ */
+export function focusRecordOf(target: HTMLElement): FocusedControl | null {
+    const searchFrom = target.matches(TEXT_ENTRY_SELECTOR) ? target.parentElement : target;
+    const recorded = searchFrom?.closest<HTMLElement>('[data-testid]') ?? null;
+    const testId = recorded?.getAttribute('data-testid');
+    return recorded && testId ? { element: recorded, testId } : null;
+}
+
 /**
  * Keeps keyboard focus alive across wizard transitions. Advancing to another item remounts the
  * portaled action row, and a stage change remounts the whole stage — the focused button is ripped
@@ -75,10 +91,10 @@ export function useTransitionFocusRestore(rootRef: React.RefObject<HTMLElement |
             return;
         }
         // Every focus move inside the wizard re-records, so the ref always describes where focus
-        // is RIGHT NOW, never a stale control the user left. A focused text field carries no
-        // testid of its own — its closest testid'd ancestor (the card container) is recorded as a
-        // disconnection SENTINEL: Escape from the field remounts the whole card, and without the
-        // sentinel that unmount would go undetected. resolveFocusTarget never focuses the
+        // is RIGHT NOW, never a stale control the user left. A focused text field records its
+        // closest testid'd ancestor (the card container) as a disconnection SENTINEL, whatever
+        // testid the field itself carries (focusRecordOf): Escape from the field remounts the
+        // whole card, and without the sentinel that unmount would go undetected. resolveFocusTarget never focuses the
         // container itself (canFocus rejects it) — the bar primary takes it instead.
         const onFocusIn = (event: FocusEvent) => {
             const target = event.target instanceof HTMLElement ? event.target : null;
@@ -87,9 +103,7 @@ export function useTransitionFocusRestore(rootRef: React.RefObject<HTMLElement |
             if (isParkedEditorFocus(target)) {
                 return;
             }
-            const recorded = target?.closest<HTMLElement>('[data-testid]') ?? null;
-            const testId = recorded?.getAttribute('data-testid');
-            focusedControlRef.current = recorded && testId ? { element: recorded, testId } : null;
+            focusedControlRef.current = target ? focusRecordOf(target) : null;
         };
         root.addEventListener('focusin', onFocusIn);
         return () => root.removeEventListener('focusin', onFocusIn);
