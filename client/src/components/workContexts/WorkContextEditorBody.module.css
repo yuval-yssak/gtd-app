@@ -1,5 +1,5 @@
-/* Breathing room between the title and the field, and between the field and the account picker. */
-.content {
+/* Space between the name field and the account picker, with a little room under the dialog title. */
+.fields {
     display: flex;
     flex-direction: column;
     gap: var(--space-4);

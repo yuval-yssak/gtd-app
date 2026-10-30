@@ -34,6 +34,7 @@ import { Route as AuthenticatedItemItemIdRouteImport } from './routes/_authentic
 import { Route as AuthenticatedPersonPersonIdRouteImport } from './routes/_authenticated/person.$personId'
 import { Route as AuthenticatedRoutineRoutineIdRouteImport } from './routes/_authenticated/routine.$routineId'
 import { Route as AuthenticatedRoutineNewRouteImport } from './routes/_authenticated/routine.new'
+import { Route as AuthenticatedWorkContextWorkContextIdRouteImport } from './routes/_authenticated/work-context.$workContextId'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -165,6 +166,12 @@ const AuthenticatedRoutineNewRoute = AuthenticatedRoutineNewRouteImport.update({
   path: '/routine/new',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
+const AuthenticatedWorkContextWorkContextIdRoute =
+  AuthenticatedWorkContextWorkContextIdRouteImport.update({
+    id: '/work-context/$workContextId',
+    path: '/work-context/$workContextId',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -191,6 +198,7 @@ export interface FileRoutesByFullPath {
   '/person/$personId': typeof AuthenticatedPersonPersonIdRoute
   '/routine/$routineId': typeof AuthenticatedRoutineRoutineIdRoute
   '/routine/new': typeof AuthenticatedRoutineNewRoute
+  '/work-context/$workContextId': typeof AuthenticatedWorkContextWorkContextIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -217,6 +225,7 @@ export interface FileRoutesByTo {
   '/person/$personId': typeof AuthenticatedPersonPersonIdRoute
   '/routine/$routineId': typeof AuthenticatedRoutineRoutineIdRoute
   '/routine/new': typeof AuthenticatedRoutineNewRoute
+  '/work-context/$workContextId': typeof AuthenticatedWorkContextWorkContextIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -245,6 +254,7 @@ export interface FileRoutesById {
   '/_authenticated/person/$personId': typeof AuthenticatedPersonPersonIdRoute
   '/_authenticated/routine/$routineId': typeof AuthenticatedRoutineRoutineIdRoute
   '/_authenticated/routine/new': typeof AuthenticatedRoutineNewRoute
+  '/_authenticated/work-context/$workContextId': typeof AuthenticatedWorkContextWorkContextIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -273,6 +283,7 @@ export interface FileRouteTypes {
     | '/person/$personId'
     | '/routine/$routineId'
     | '/routine/new'
+    | '/work-context/$workContextId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -299,6 +310,7 @@ export interface FileRouteTypes {
     | '/person/$personId'
     | '/routine/$routineId'
     | '/routine/new'
+    | '/work-context/$workContextId'
   id:
     | '__root__'
     | '/'
@@ -326,6 +338,7 @@ export interface FileRouteTypes {
     | '/_authenticated/person/$personId'
     | '/_authenticated/routine/$routineId'
     | '/_authenticated/routine/new'
+    | '/_authenticated/work-context/$workContextId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -514,6 +527,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedRoutineNewRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/work-context/$workContextId': {
+      id: '/_authenticated/work-context/$workContextId'
+      path: '/work-context/$workContextId'
+      fullPath: '/work-context/$workContextId'
+      preLoaderRoute: typeof AuthenticatedWorkContextWorkContextIdRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
   }
 }
 
@@ -537,6 +557,7 @@ interface AuthenticatedRouteChildren {
   AuthenticatedPersonPersonIdRoute: typeof AuthenticatedPersonPersonIdRoute
   AuthenticatedRoutineRoutineIdRoute: typeof AuthenticatedRoutineRoutineIdRoute
   AuthenticatedRoutineNewRoute: typeof AuthenticatedRoutineNewRoute
+  AuthenticatedWorkContextWorkContextIdRoute: typeof AuthenticatedWorkContextWorkContextIdRoute
 }
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
@@ -559,6 +580,8 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedPersonPersonIdRoute: AuthenticatedPersonPersonIdRoute,
   AuthenticatedRoutineRoutineIdRoute: AuthenticatedRoutineRoutineIdRoute,
   AuthenticatedRoutineNewRoute: AuthenticatedRoutineNewRoute,
+  AuthenticatedWorkContextWorkContextIdRoute:
+    AuthenticatedWorkContextWorkContextIdRoute,
 }
 
 const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(

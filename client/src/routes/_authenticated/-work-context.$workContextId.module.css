@@ -1,0 +1,7 @@
+.page {
+    max-inline-size: 36rem;
+}
+
+.card {
+    padding: var(--space-6);
+}

@@ -68,3 +68,5 @@
 - [Confirm gate writes a stale snapshot](feedback_confirm_gate_stale_snapshot.md) — confirm dialog in front of clarifyToDone closes over the click-time item; confirm must re-resolve by _id + bail.
 - [Collapsed-entry edit drops entry](project_collapsed_entry_edit_drops_entry.md) — autosave on a routine: entry's occurrence can make the entry ineligible mid-edit; reconcile unmounts the card.
 - [Eager row props above virtualizer](feedback_eager_row_props_above_virtualizer.md) — derived props in parent .map() over WindowVirtualizer run for all N rows per render; move into the memo row.
+- [Empty-state story overwritten by live merge](feedback_empty_state_story_overwritten_by_live_merge.md) — Story arg overrides (blank name) get reverted on mount when the provider lists the original row.
+- [Render-mirrored liveness ref vs parent unmount](feedback_render_mirrored_liveness_ref_defeated_by_parent_unmount.md) — `isXLiveRef` stays true when a detail page swaps to not-found; unmount flush resurrects. Re-read IDB in commit.

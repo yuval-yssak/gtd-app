@@ -7,7 +7,7 @@ import { AccountSyncChip } from '../../components/AccountSyncChip';
 import { ListEmptyMessage } from '../../components/ListEmptyMessage';
 import { ListPageHeader } from '../../components/ListPageHeader';
 import { ListSkeleton } from '../../components/ListSkeleton';
-import { ListRow, ListRowText } from '../../components/listRow/ListRow';
+import { ListRow, ListRowButton, ListRowText } from '../../components/listRow/ListRow';
 import { RowActionButton } from '../../components/RowActionButton';
 import { WorkContextEditDialog } from '../../components/workContexts/WorkContextEditDialog';
 import { useAppData } from '../../contexts/AppDataProvider';
@@ -15,6 +15,8 @@ import { createWorkContext, removeWorkContext, updateWorkContext } from '../../d
 import { Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, TextField, Tooltip } from '../../designSystem';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useEntityUsage } from '../../hooks/useEntityUsage';
+import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
+import { useNewTabAwareNavigate } from '../../lib/newTabNavigation';
 import { SHORTCUT_ROW_PROPS } from '../../lib/rowShortcuts';
 import type { StoredWorkContext } from '../../types/MyDB';
 import styles from './-work-contexts.module.css';
@@ -26,6 +28,8 @@ export const Route = createFileRoute('/_authenticated/work-contexts')({
 function WorkContextsPage() {
     useDocumentTitle('Work Contexts');
     const { db } = Route.useRouteContext();
+    const navigateOrNewTab = useNewTabAwareNavigate();
+    useListScrollRestoration();
     const { account, workContexts, refreshWorkContexts, loggedInAccounts, isInitialSyncing } = useAppData();
     const [createOpen, setCreateOpen] = useState(false);
     // Renames autosave inside WorkContextEditDialog (mount-on-open); creation stays an explicit
@@ -102,8 +106,12 @@ function WorkContextsPage() {
                     </>
                 }
             >
-                {/* Not a button: a context row has nothing to open — rename lives in the row actions. */}
-                <div className={styles.rowBody}>
+                {/* Row body opens the full /work-context page (deep-linkable, matching the people
+                    page); the pencil keeps the quick rename dialog. */}
+                <ListRowButton
+                    onActivate={(e) => navigateOrNewTab(e, { to: '/work-context/$workContextId', params: { workContextId: ctx._id } })}
+                    data-testid="workContextRowText"
+                >
                     <ListRowText
                         primary={
                             <span className={styles.primary} data-archived={ctx.archived || undefined}>
@@ -119,7 +127,7 @@ function WorkContextsPage() {
                             </span>
                         }
                     />
-                </div>
+                </ListRowButton>
             </ListRow>
         );
     }
@@ -148,7 +156,10 @@ function WorkContextsPage() {
             ) : (
                 <ul className={styles.list}>
                     {orderedContexts.map((ctx, idx) => (
-                        <li key={ctx._id}>{renderContextRow(ctx, idx < orderedContexts.length - 1)}</li>
+                        // data-list-item-id: scroll-restoration anchor (see useListScrollRestoration)
+                        <li key={ctx._id} data-list-item-id={ctx._id}>
+                            {renderContextRow(ctx, idx < orderedContexts.length - 1)}
+                        </li>
                     ))}
                 </ul>
             )}

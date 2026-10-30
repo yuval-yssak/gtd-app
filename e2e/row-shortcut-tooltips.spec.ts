@@ -131,7 +131,7 @@ test.describe('Row shortcut tooltips', () => {
                 }
             }
 
-            // People rows have no focusable row body: E on the focused row button opens the edit dialog.
+            // E on a focused row action button opens the quick edit dialog (the row body opens the full page).
             await page.goto('/people');
             await page.waitForSelector('text=Tip Person');
             await page.getByTestId('personRowEditButton').first().focus();

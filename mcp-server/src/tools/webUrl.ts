@@ -4,11 +4,10 @@
  * local Claude memory. This lives in the MCP server so the behaviour ships with the protocol,
  * not with one operator's config.
  *
- * `item`, `routine` and `person` get a link: the web app has per-entity routes for them
- * (`/item/<id>`, `/routine/<id>`, `/person/<id>`). Work contexts have a list-only page, so a
- * per-entity URL would be misleading — they're intentionally skipped.
+ * `item`, `routine`, `person` and `workContext` get a link: the web app has a per-entity route
+ * for each (`/item/<id>`, `/routine/<id>`, `/person/<id>`, `/work-context/<id>`).
  *
- * Four response shapes are handled: `one` (a bare entity), `list` (an `{ items|routines: [] }`
+ * Four response shapes are handled: `one` (a bare entity), `list` (an `{ items|routines|people|workContexts: [] }`
  * envelope), `pair` — the `{ head, tail }` composite returned by `gtd_split_routine`, which
  * creates two linkable routines at once — and `batch`, the `{ ok, count, results: [] }` envelope
  * of `gtd_batch`, where each per-op result is stamped from its own `entityType`/`entityId`
@@ -16,7 +15,7 @@
  */
 
 /** Web-app path prefix per linkable entity. Keyed by the tool's entity domain. */
-const PATH_BY_ENTITY = { item: '/item', routine: '/routine', person: '/person' } as const;
+const PATH_BY_ENTITY = { item: '/item', routine: '/routine', person: '/person', workContext: '/work-context' } as const;
 type LinkableEntity = keyof typeof PATH_BY_ENTITY;
 
 /**
@@ -46,12 +45,21 @@ const SHAPE_BY_TOOL: Record<string, ToolShape> = {
     gtd_get_person: { entity: 'person', shape: 'one' },
     gtd_update_person: { entity: 'person', shape: 'one' },
     gtd_list_people: { entity: 'person', shape: 'list' },
+    gtd_create_work_context: { entity: 'workContext', shape: 'one' },
+    gtd_get_work_context: { entity: 'workContext', shape: 'one' },
+    gtd_update_work_context: { entity: 'workContext', shape: 'one' },
+    gtd_list_work_contexts: { entity: 'workContext', shape: 'list' },
     // Batch returns per-op results (not entities); each is stamped from its own entityType.
     gtd_batch: { shape: 'batch' },
 };
 
 /** The array property holding the entities in a list response (mirrors the v1 API envelopes). */
-const LIST_KEY_BY_ENTITY: Record<LinkableEntity, 'items' | 'routines' | 'people'> = { item: 'items', routine: 'routines', person: 'people' };
+const LIST_KEY_BY_ENTITY: Record<LinkableEntity, 'items' | 'routines' | 'people' | 'workContexts'> = {
+    item: 'items',
+    routine: 'routines',
+    person: 'people',
+    workContext: 'workContexts',
+};
 
 /**
  * Returns a shallow copy of `result` with `url` stamped onto the entity (or each entity in a
@@ -131,7 +139,7 @@ function stampBatchResult(result: unknown, webBase: string): unknown {
         return result;
     }
     const { entityType, entityId, opType } = result;
-    // Deletes have no page to link; workContext has a list-only page (see header comment).
+    // Deletes have no page to link; non-linkable entity types (reviewInbox, itemBrief) pass through.
     if (opType === 'delete' || typeof entityId !== 'string' || entityId.length === 0 || !isLinkableEntity(entityType)) {
         return result;
     }

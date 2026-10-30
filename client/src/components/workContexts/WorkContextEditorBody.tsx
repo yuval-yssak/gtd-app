@@ -1,0 +1,179 @@
+import type { IDBPDatabase } from 'idb';
+import { useEffect, useRef, useState } from 'react';
+import { useAppData } from '../../contexts/AppDataProvider';
+import { attemptReassign, reassignEntity } from '../../db/reassignMutations';
+import { updateWorkContext } from '../../db/workContextMutations';
+import { TextField } from '../../designSystem';
+import { useAutosave } from '../../hooks/useAutosave';
+import { offerUndo } from '../../lib/undoStore';
+import type { MyDB, StoredWorkContext } from '../../types/MyDB';
+import { AccountPicker } from '../AccountPicker';
+import styles from './WorkContextEditorBody.module.css';
+
+/** The short "Rename context" dialog, or the full work-context page. */
+export type WorkContextEditorChrome = 'dialog' | 'page';
+
+interface WorkContextEditorBodyProps {
+    db: IDBPDatabase<MyDB>;
+    workContext: StoredWorkContext;
+    /** 'page' skips the name auto-focus and the Enter-to-close — the page has no dialog to dismiss. */
+    chrome?: WorkContextEditorChrome;
+    /** Called after Enter in the dialog, and after a completed owner move (the context now renders under another account). */
+    onClose: () => void;
+}
+
+/**
+ * Renames the stored row, re-read from IDB rather than taken from render: a sync pull can delete
+ * the context underneath the editor — the page host then unmounts the body without re-rendering
+ * it, and the still-live UNDO snackbar outlives it — so a render-time copy would resurrect the row.
+ * Returns false (writing nothing) when the row is gone.
+ */
+async function renameIfStillPresent(db: IDBPDatabase<MyDB>, workContextId: string, name: string) {
+    const current = await db.get('workContexts', workContextId);
+    if (!current) return false;
+    await updateWorkContext(db, { ...current, name });
+    return true;
+}
+
+/**
+ * Work-context editor fields — fully autosaving (no Save button). Typing debounces into
+ * `updateWorkContext` with a "Saved — UNDO" snackbar. Remote renames live-merge in while the
+ * field is untouched; a mid-edit remote rename keeps the local text (it re-commits within a
+ * debounce tick). Owner reassignment applies immediately on selection.
+ *
+ * Chrome-less: WorkContextEditDialog wraps it in a Dialog, the /work-context/$workContextId route
+ * in a page card. Mount-per-context: callers key or conditionally render this component so state
+ * re-seeds per context.
+ */
+export function WorkContextEditorBody({ db, workContext, chrome = 'dialog', onClose }: WorkContextEditorBodyProps) {
+    // Unfiltered allWorkContexts: the deep-linked page must keep merging when the owner account is
+    // toggled out of view; benign for the dialog, which only opens from a visible row.
+    const { loggedInAccounts, refreshWorkContexts, allWorkContexts } = useAppData();
+    const liveContext = allWorkContexts.find((c) => c._id === workContext._id) ?? workContext;
+    const liveContextRef = useRef(liveContext);
+    liveContextRef.current = liveContext;
+
+    const [ownerError, setOwnerError] = useState<string | null>(null);
+    const [isOwnerMoveInFlight, setIsOwnerMoveInFlight] = useState(false);
+    // Skip setState after unmount — the reassign await can outlive the editor if the user closes
+    // it mid-flight (same guard PendingReassignProvider uses for its revert snackbar).
+    const unmountedRef = useRef(false);
+    useEffect(() => {
+        return () => {
+            unmountedRef.current = true;
+        };
+    }, []);
+    const [name, setName] = useState(workContext.name);
+    const nameRef = useRef(name);
+    nameRef.current = name;
+    // Live name the field was last seeded/merged from — differing means the user is mid-edit.
+    const seedNameRef = useRef(workContext.name);
+
+    const autosave = useAutosave<string>({
+        initial: workContext.name,
+        commit: async (value, baseline) => {
+            if (!value.trim()) {
+                return; // never persist a blank name; the field shows the error state
+            }
+            if (!(await renameIfStillPresent(db, workContext._id, value.trim()))) {
+                return;
+            }
+            offerUndo({
+                key: `workContext:${workContext._id}`,
+                message: 'Context saved',
+                undo: async () => {
+                    if (!(await renameIfStillPresent(db, workContext._id, baseline.trim()))) {
+                        return;
+                    }
+                    setName(baseline);
+                    autosave.reset(baseline);
+                    await refreshWorkContexts();
+                },
+                onExpire: () => autosave.endBurst(),
+            });
+            await refreshWorkContexts();
+        },
+    });
+
+    // Live merge (single field): adopt a remote rename only while the input is untouched.
+    useEffect(() => {
+        if (liveContext.name === seedNameRef.current) {
+            return;
+        }
+        const isClean = nameRef.current === seedNameRef.current;
+        seedNameRef.current = liveContext.name;
+        if (isClean) {
+            setName(liveContext.name);
+            autosave.reset(liveContext.name);
+        }
+    }, [liveContext.name, autosave]);
+
+    async function onOwnerPicked(nextOwnerUserId: string) {
+        if (nextOwnerUserId === liveContextRef.current.userId) {
+            return;
+        }
+        setOwnerError(null);
+        setIsOwnerMoveInFlight(true);
+        await autosave.flush(); // the move must carry any rename still in the debounce window
+        const fromUserId = liveContextRef.current.userId;
+        const label = liveContextRef.current.name;
+        const outcome = await attemptReassign(db, { entityType: 'workContext', entityId: workContext._id, fromUserId, toUserId: nextOwnerUserId }, label);
+        if (unmountedRef.current) {
+            return;
+        }
+        setIsOwnerMoveInFlight(false);
+        if (!outcome.ok) {
+            // Keep the editor open with the failure inline — closing with a false "Moved to …"
+            // snackbar would tell the user the move happened when it didn't.
+            setOwnerError(outcome.message);
+            return;
+        }
+        offerUndo({
+            key: `workContext:${workContext._id}:owner`,
+            message: `Moved to ${loggedInAccounts.find((a) => a.id === nextOwnerUserId)?.email ?? 'the other account'}`,
+            undo: async () => {
+                await reassignEntity(db, { entityType: 'workContext', entityId: workContext._id, fromUserId: nextOwnerUserId, toUserId: fromUserId });
+                await refreshWorkContexts();
+            },
+        });
+        await refreshWorkContexts();
+        onClose();
+    }
+
+    return (
+        <div className={styles.fields}>
+            <TextField
+                label="Name"
+                placeholder="e.g. @office, @phone"
+                value={name}
+                onChange={(e) => {
+                    setName(e.target.value);
+                    autosave.onChange(e.target.value);
+                }}
+                onBlur={() => void autosave.flush()}
+                onKeyDown={(e) => {
+                    if (e.key !== 'Enter') {
+                        return;
+                    }
+                    // The page has no dialog to dismiss — Enter just saves there.
+                    void autosave.flush().then(() => {
+                        if (chrome === 'dialog') onClose();
+                    });
+                }}
+                fullWidth
+                autoFocus={chrome === 'dialog'}
+                error={!name.trim()}
+                helperText={name.trim() ? undefined : 'Name is required — changes are not saved while empty.'}
+                data-testid="workContextEditName"
+            />
+            {loggedInAccounts.length > 1 && (
+                <AccountPicker
+                    value={liveContext.userId}
+                    onChange={(v) => void onOwnerPicked(v)}
+                    disabled={isOwnerMoveInFlight}
+                    {...(ownerError ? { error: ownerError } : {})}
+                />
+            )}
+        </div>
+    );
+}

@@ -63,6 +63,22 @@ test.describe('cmd/ctrl+click opens entity pages in a new tab', () => {
         });
     });
 
+    test('work contexts: modified row click opens /work-context/<id> in a new tab', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `newtab-contexts-${uniqueStamp()}@example.com`, async (page) => {
+            const workContext = await gtd.createWorkContext(page, '@newtab');
+            await gtd.flush(page);
+
+            await page.goto('/work-contexts');
+            await page.waitForSelector('text=@newtab');
+
+            await expectModifiedClickOpensNewTab(page, {
+                rowTestId: 'workContextRowText',
+                rowText: '@newtab',
+                expectedNewTabUrl: `**/work-context/${workContext._id}*`,
+            });
+        });
+    });
+
     test('routines: modified row click opens /routine/<id> in a new tab instead of the editor', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `newtab-routines-${uniqueStamp()}@example.com`, async (page) => {
             const routine = await gtd.createRoutine(page, {

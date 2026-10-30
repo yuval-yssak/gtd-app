@@ -1,14 +1,7 @@
 import type { IDBPDatabase } from 'idb';
-import { useEffect, useRef, useState } from 'react';
-import { useAppData } from '../../contexts/AppDataProvider';
-import { attemptReassign, reassignEntity } from '../../db/reassignMutations';
-import { updateWorkContext } from '../../db/workContextMutations';
-import { Button, Dialog, DialogActions, DialogContent, DialogTitle, TextField } from '../../designSystem';
-import { useAutosave } from '../../hooks/useAutosave';
-import { offerUndo } from '../../lib/undoStore';
+import { Button, Dialog, DialogActions, DialogContent, DialogTitle } from '../../designSystem';
 import type { MyDB, StoredWorkContext } from '../../types/MyDB';
-import { AccountPicker } from '../AccountPicker';
-import styles from './WorkContextEditDialog.module.css';
+import { WorkContextEditorBody } from './WorkContextEditorBody';
 
 interface WorkContextEditDialogProps {
     db: IDBPDatabase<MyDB>;
@@ -17,134 +10,16 @@ interface WorkContextEditDialogProps {
 }
 
 /**
- * Rename dialog for an existing work context — fully autosaving (no Save button; Close only).
- * Typing debounces into `updateWorkContext` with a "Saved — UNDO" snackbar. Remote renames
- * live-merge in while the field is untouched; a mid-edit remote rename keeps the local text
- * (it re-commits within a debounce tick). Owner reassignment applies immediately on selection.
- *
- * Mount-on-open: the caller conditionally renders this so state re-seeds per context.
+ * Dialog chrome around WorkContextEditorBody (the /work-context/$workContextId route renders the
+ * same body as a full page). Fully autosaving — the dialog only offers Close. Mount-on-open: the
+ * caller conditionally renders this so state re-seeds per context.
  */
 export function WorkContextEditDialog({ db, workContext, onClose }: WorkContextEditDialogProps) {
-    const { loggedInAccounts, refreshWorkContexts, workContexts } = useAppData();
-    const liveContext = workContexts.find((c) => c._id === workContext._id) ?? workContext;
-    const liveContextRef = useRef(liveContext);
-    liveContextRef.current = liveContext;
-
-    const [ownerError, setOwnerError] = useState<string | null>(null);
-    const [isOwnerMoveInFlight, setIsOwnerMoveInFlight] = useState(false);
-    // Skip setState after unmount — the reassign await can outlive the dialog if the user closes
-    // it mid-flight (same guard PendingReassignProvider uses for its revert snackbar).
-    const unmountedRef = useRef(false);
-    useEffect(() => {
-        return () => {
-            unmountedRef.current = true;
-        };
-    }, []);
-    const [name, setName] = useState(workContext.name);
-    const nameRef = useRef(name);
-    nameRef.current = name;
-    // Live name the field was last seeded/merged from — differing means the user is mid-edit.
-    const seedNameRef = useRef(workContext.name);
-
-    const autosave = useAutosave<string>({
-        initial: workContext.name,
-        commit: async (value, baseline) => {
-            if (!value.trim()) {
-                return; // never persist a blank name; the field shows the error state
-            }
-            await updateWorkContext(db, { ...liveContextRef.current, name: value.trim() });
-            offerUndo({
-                key: `workContext:${workContext._id}`,
-                message: 'Context saved',
-                undo: async () => {
-                    await updateWorkContext(db, { ...liveContextRef.current, name: baseline.trim() });
-                    setName(baseline);
-                    autosave.reset(baseline);
-                    await refreshWorkContexts();
-                },
-                onExpire: () => autosave.endBurst(),
-            });
-            await refreshWorkContexts();
-        },
-    });
-
-    // Live merge (single field): adopt a remote rename only while the input is untouched.
-    useEffect(() => {
-        if (liveContext.name === seedNameRef.current) {
-            return;
-        }
-        const isClean = nameRef.current === seedNameRef.current;
-        seedNameRef.current = liveContext.name;
-        if (isClean) {
-            setName(liveContext.name);
-            autosave.reset(liveContext.name);
-        }
-    }, [liveContext.name, autosave]);
-
-    async function onOwnerPicked(nextOwnerUserId: string) {
-        if (nextOwnerUserId === liveContextRef.current.userId) {
-            return;
-        }
-        setOwnerError(null);
-        setIsOwnerMoveInFlight(true);
-        await autosave.flush(); // the move must carry any rename still in the debounce window
-        const fromUserId = liveContextRef.current.userId;
-        const label = liveContextRef.current.name;
-        const outcome = await attemptReassign(db, { entityType: 'workContext', entityId: workContext._id, fromUserId, toUserId: nextOwnerUserId }, label);
-        if (unmountedRef.current) {
-            return;
-        }
-        setIsOwnerMoveInFlight(false);
-        if (!outcome.ok) {
-            // Keep the dialog open with the failure inline — closing with a false "Moved to …"
-            // snackbar would tell the user the move happened when it didn't.
-            setOwnerError(outcome.message);
-            return;
-        }
-        offerUndo({
-            key: `workContext:${workContext._id}:owner`,
-            message: `Moved to ${loggedInAccounts.find((a) => a.id === nextOwnerUserId)?.email ?? 'the other account'}`,
-            undo: async () => {
-                await reassignEntity(db, { entityType: 'workContext', entityId: workContext._id, fromUserId: nextOwnerUserId, toUserId: fromUserId });
-                await refreshWorkContexts();
-            },
-        });
-        await refreshWorkContexts();
-        onClose();
-    }
-
     return (
         <Dialog open onClose={onClose} size="xs" fullWidth>
             <DialogTitle>Rename context</DialogTitle>
-            <DialogContent className={styles.content}>
-                <TextField
-                    label="Name"
-                    placeholder="e.g. @office, @phone"
-                    value={name}
-                    onChange={(e) => {
-                        setName(e.target.value);
-                        autosave.onChange(e.target.value);
-                    }}
-                    onBlur={() => void autosave.flush()}
-                    onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                            void autosave.flush().then(onClose);
-                        }
-                    }}
-                    fullWidth
-                    autoFocus
-                    error={!name.trim()}
-                    helperText={name.trim() ? undefined : 'Name is required — changes are not saved while empty.'}
-                    data-testid="workContextEditName"
-                />
-                {loggedInAccounts.length > 1 && (
-                    <AccountPicker
-                        value={liveContext.userId}
-                        onChange={(v) => void onOwnerPicked(v)}
-                        disabled={isOwnerMoveInFlight}
-                        {...(ownerError ? { error: ownerError } : {})}
-                    />
-                )}
+            <DialogContent>
+                <WorkContextEditorBody db={db} workContext={workContext} onClose={onClose} />
             </DialogContent>
             <DialogActions>
                 <Button onClick={onClose} data-testid="workContextEditClose">

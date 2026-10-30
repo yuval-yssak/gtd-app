@@ -126,7 +126,7 @@ Ask Claude *"Which Done account am I connected to?"* to verify (`gtd_me`).
 
 #### Web-app deep links (`url` field)
 
-Item, routine and person tool responses include a `url`, a direct web-app link (e.g. `https://getting-things-done.app/item/<id>`), so the client can show a clickable link to what it just created or edited. `gtd_batch` returns one per item/routine/person op in its `results`. The web origin is derived from `GTD_API_BASE` (`local` → `http://localhost:4173`, `staging`/`production` → their web hosts). For a self-hosted or preview deployment (`custom` environment), set `GTD_WEB_BASE` to your web-app origin; without it, `custom` deployments omit `url`. Work contexts have no page in the web app, so they carry no `url`.
+Item, routine, person and work-context tool responses include a `url`, a direct web-app link (e.g. `https://getting-things-done.app/item/<id>`), so the client can show a clickable link to what it just created or edited. `gtd_batch` returns one per item/routine/person/workContext op in its `results` (deletes get none — the row is gone). The web origin is derived from `GTD_API_BASE` (`local` → `http://localhost:4173`, `staging`/`production` → their web hosts). For a self-hosted or preview deployment (`custom` environment), set `GTD_WEB_BASE` to your web-app origin; without it, `custom` deployments omit `url`.
 
 ## Multi-account setup (local server only)
 

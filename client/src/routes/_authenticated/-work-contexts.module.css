@@ -6,15 +6,6 @@
     border-radius: var(--radius-sm);
 }
 
-/* A static row body, spaced exactly like a ListRowButton so the rows match the other list pages. */
-.rowBody {
-    display: flex;
-    flex: 1 1 auto;
-    align-items: center;
-    min-inline-size: 0;
-    padding: calc(var(--space-3) - var(--space-0-5)) var(--space-4);
-}
-
 .primary {
     display: flex;
     align-items: center;

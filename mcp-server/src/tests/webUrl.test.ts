@@ -92,11 +92,21 @@ describe('decorateWithUrls', () => {
         expect(result).toEqual({ people: [{ _id: 'p1', url: `${STAGING}/person/p1` }] });
     });
 
-    it('leaves unknown tools (work contexts, person delete) untouched', () => {
-        const workContextResult = decorateWithUrls('gtd_create_work_context', { _id: 'w1', name: 'near a phone' }, STAGING);
-        expect(workContextResult).toEqual({ _id: 'w1', name: 'near a phone' });
-        const deleteResult = decorateWithUrls('gtd_delete_person', { ok: true }, STAGING);
-        expect(deleteResult).toEqual({ ok: true });
+    it('stamps a work-context deep link on single-context responses', () => {
+        for (const toolName of ['gtd_create_work_context', 'gtd_get_work_context', 'gtd_update_work_context']) {
+            const result = decorateWithUrls(toolName, { _id: 'w1', name: 'near a phone' }, STAGING);
+            expect(result, toolName).toEqual({ _id: 'w1', name: 'near a phone', url: `${STAGING}/work-context/w1` });
+        }
+    });
+
+    it('uses the workContexts key for work-context list responses', () => {
+        const result = decorateWithUrls('gtd_list_work_contexts', { workContexts: [{ _id: 'w1' }], nextCursor: 'c' }, STAGING);
+        expect(result).toEqual({ workContexts: [{ _id: 'w1', url: `${STAGING}/work-context/w1` }], nextCursor: 'c' });
+    });
+
+    it('leaves delete tools untouched (the row is gone)', () => {
+        expect(decorateWithUrls('gtd_delete_person', { ok: true }, STAGING)).toEqual({ ok: true });
+        expect(decorateWithUrls('gtd_delete_work_context', { ok: true }, STAGING)).toEqual({ ok: true });
     });
 
     it('stamps a url onto each linkable per-op result of a gtd_batch response, keyed by its own entityType', () => {
@@ -109,7 +119,6 @@ describe('decorateWithUrls', () => {
                     { entityType: 'item', entityId: 'i1', opType: 'create', applyStatus: 'applied', updatedTs: 't' },
                     { entityType: 'routine', entityId: 'r1', opType: 'update', applyStatus: 'applied', updatedTs: 't' },
                     { entityType: 'person', entityId: 'p1', opType: 'update', applyStatus: 'applied', updatedTs: 't' },
-                    // workContext has a list-only page — no url.
                     { entityType: 'workContext', entityId: 'w1', opType: 'create', applyStatus: 'applied', updatedTs: 't' },
                 ],
             },
@@ -122,7 +131,7 @@ describe('decorateWithUrls', () => {
                 { entityType: 'item', entityId: 'i1', opType: 'create', applyStatus: 'applied', updatedTs: 't', url: `${STAGING}/item/i1` },
                 { entityType: 'routine', entityId: 'r1', opType: 'update', applyStatus: 'applied', updatedTs: 't', url: `${STAGING}/routine/r1` },
                 { entityType: 'person', entityId: 'p1', opType: 'update', applyStatus: 'applied', updatedTs: 't', url: `${STAGING}/person/p1` },
-                { entityType: 'workContext', entityId: 'w1', opType: 'create', applyStatus: 'applied', updatedTs: 't' },
+                { entityType: 'workContext', entityId: 'w1', opType: 'create', applyStatus: 'applied', updatedTs: 't', url: `${STAGING}/work-context/w1` },
             ],
         });
     });
