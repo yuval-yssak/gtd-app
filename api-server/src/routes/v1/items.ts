@@ -8,9 +8,12 @@ import { requireScope } from '../../auth/scopeMiddleware.js';
 import itemsDAO from '../../dataAccess/itemsDAO.js';
 import routinesDAO from '../../dataAccess/routinesDAO.js';
 import type { ApplyEntityOpOutcome } from '../../lib/applyEntityOp.js';
+import { moveItem } from '../../lib/applyItemMove.js';
 import { applyAndPublishOperation, applyAndPublishOperationWithOutcome, OperationValidationError } from '../../lib/applyOperation.js';
 import type { BriefState } from '../../lib/briefSource.js';
 import { clearBrief, loadBrief, loadBriefsByItemId, matchesBriefStateFilter, parseBriefBody, writeAuthoredBrief } from '../../lib/itemBriefs.js';
+import { parseMoveBody } from '../../lib/itemMove.js';
+import { type PriorityItem, priorityComparator, type UserClock } from '../../lib/itemPriorityOrder.js';
 import { rankAt, topRanks } from '../../lib/itemRank.js';
 import { isDuplicateKeyError } from '../../lib/mongoErrors.js';
 import { advanceRoutineAfterDisposal } from '../../lib/routineItemGeneration.js';
@@ -18,6 +21,7 @@ import { normalizeMasterEventId } from '../../lib/routineItemRegeneration.js';
 import { stampStatusBeforeDone, withoutStatusBeforeDone } from '../../lib/statusBeforeDone.js';
 import { lowestRankForUser, topRankForUser } from '../../lib/topRankForUser.js';
 import { hasAtLeastOne } from '../../lib/typeUtils.js';
+import { localDateInTimezone, resolveUserTimezone } from '../../lib/userTimezone.js';
 import { STATUS_FIELD_MATRIX, STATUS_SPECIFIC_FIELD_LIST } from '../../schemas/operations/item.js';
 import { type ItemBriefInterface, type ItemInterface, ItemStatus } from '../../types/entities.js';
 import { type PublicItem, presentItem } from './projections/item.js';
@@ -328,7 +332,9 @@ interface ListQuery {
     /** Exact match on the Google Calendar event id — lets integrations find the item already linked to an event. */
     calendarEventId?: string;
     limit: number;
-    cursor?: { updatedTs: string; id: string };
+    /** `updated` (default): updatedTs DESC, keyset-paged. `priority`: the app's order (`priorityComparator`), offset-paged. */
+    sort: ListSort;
+    cursor?: ListCursor;
     /**
      * Post-filter applied to each fetched page (the state is derived from a hash of the item's
      * current content, so it cannot be a Mongo predicate). A filtered page can come back short
@@ -337,7 +343,21 @@ interface ListQuery {
     briefState?: BriefState;
 }
 
-type ListQueryError = { code: 'invalid_status' | 'invalid_limit' | 'invalid_cursor' | 'invalid_brief_state' | 'invalid_calendar_event_id'; message: string };
+type ListSort = 'updated' | 'priority';
+type UpdatedCursor = { kind: 'updated'; updatedTs: string; id: string };
+type PriorityCursor = { kind: 'priority'; offset: number };
+type ListCursor = UpdatedCursor | PriorityCursor;
+
+type ListQueryError = {
+    code: 'invalid_status' | 'invalid_limit' | 'invalid_cursor' | 'invalid_brief_state' | 'invalid_calendar_event_id' | 'invalid_sort';
+    message: string;
+};
+
+const LIST_SORTS: ReadonlyArray<ListSort> = ['updated', 'priority'];
+
+function isListSort(raw: string): raw is ListSort {
+    return LIST_SORTS.some((sort) => sort === raw);
+}
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
@@ -365,10 +385,18 @@ function parseLimitParam(raw: string | null): ListParamResult<number> {
     return { ok: true, value: limit };
 }
 
-function parseCursorParam(raw: string | null): ListParamResult<ListQuery['cursor']> {
+function parseSortParam(raw: string | null): ListParamResult<ListSort> {
+    if (raw === null || raw === '') {
+        return { ok: true, value: 'updated' };
+    }
+    return isListSort(raw) ? { ok: true, value: raw } : { ok: false, error: { code: 'invalid_sort', message: 'sort must be one of: updated, priority' } };
+}
+
+/** A cursor is a position in ONE order, so one minted under the other sort is refused rather than misread. */
+function parseCursorParam(raw: string | null, sort: ListSort): ListParamResult<ListQuery['cursor']> {
     const cursor = parseCursor(raw);
-    if (cursor === 'invalid') {
-        return { ok: false, error: { code: 'invalid_cursor', message: 'cursor is malformed' } };
+    if (cursor === 'invalid' || (cursor !== null && cursor.kind !== sort)) {
+        return { ok: false, error: { code: 'invalid_cursor', message: `cursor is malformed or was not issued for sort=${sort}` } };
     }
     return { ok: true, value: cursor ?? undefined };
 }
@@ -405,7 +433,11 @@ function parseListQuery(url: URL): ListParamResult<ListQuery> {
     if (!limit.ok) {
         return limit;
     }
-    const cursor = parseCursorParam(url.searchParams.get('cursor'));
+    const sort = parseSortParam(url.searchParams.get('sort'));
+    if (!sort.ok) {
+        return sort;
+    }
+    const cursor = parseCursorParam(url.searchParams.get('cursor'), sort.value);
     if (!cursor.ok) {
         return cursor;
     }
@@ -423,6 +455,7 @@ function parseListQuery(url: URL): ListParamResult<ListQuery> {
         ok: true,
         value: {
             limit: limit.value,
+            sort: sort.value,
             ...(q !== undefined ? { q } : {}),
             ...(statuses.value ? { statuses: statuses.value } : {}),
             ...(since ? { since } : {}),
@@ -433,22 +466,37 @@ function parseListQuery(url: URL): ListParamResult<ListQuery> {
     };
 }
 
-/** Encodes the last item's (updatedTs, _id) as an opaque base64url cursor. */
+function encodeCursorPayload(payload: Record<string, unknown>): string {
+    return Buffer.from(JSON.stringify(payload)).toString('base64url');
+}
+
+/** Encodes the last item's (updatedTs, _id) as an opaque base64url cursor (`sort=updated`). */
 function encodeCursor(item: ItemInterface): string {
-    return Buffer.from(JSON.stringify({ u: item.updatedTs, i: item._id })).toString('base64url');
+    return encodeCursorPayload({ u: item.updatedTs, i: item._id });
+}
+
+/** The cursor of a `sort=priority` page: the offset of the next row in the priority order. */
+function encodePriorityCursor(offset: number): string {
+    return encodeCursorPayload({ o: offset });
+}
+
+function cursorFromPayload(decoded: { u?: unknown; i?: unknown; o?: unknown }): ListCursor | 'invalid' {
+    if (typeof decoded.u === 'string' && typeof decoded.i === 'string') {
+        return { kind: 'updated', updatedTs: decoded.u, id: decoded.i };
+    }
+    if (typeof decoded.o === 'number' && Number.isInteger(decoded.o) && decoded.o >= 0) {
+        return { kind: 'priority', offset: decoded.o };
+    }
+    return 'invalid';
 }
 
 /** Decodes a cursor or returns 'invalid' on malformed input. null when absent. */
-function parseCursor(raw: string | null): { updatedTs: string; id: string } | null | 'invalid' {
+function parseCursor(raw: string | null): ListCursor | null | 'invalid' {
     if (!raw) {
         return null;
     }
     try {
-        const decoded = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8')) as { u?: unknown; i?: unknown };
-        if (typeof decoded.u !== 'string' || typeof decoded.i !== 'string') {
-            return 'invalid';
-        }
-        return { updatedTs: decoded.u, id: decoded.i };
+        return cursorFromPayload(JSON.parse(Buffer.from(raw, 'base64url').toString('utf8')) as { u?: unknown; i?: unknown; o?: unknown });
     } catch {
         return 'invalid';
     }
@@ -471,8 +519,77 @@ function searchClause(q: string): Filter<ItemInterface> {
 }
 
 /** Strictly-less-than (updatedTs, _id): updatedTs DESC primary key, _id DESC tiebreak so same-millisecond writes paginate deterministically. */
-function cursorClause(cursor: NonNullable<ListQuery['cursor']>): Filter<ItemInterface> {
+function cursorClause(cursor: UpdatedCursor): Filter<ItemInterface> {
     return { $or: [{ updatedTs: { $lt: cursor.updatedTs } }, { updatedTs: cursor.updatedTs, _id: { $lt: cursor.id } }] };
+}
+
+interface ListPage {
+    page: ItemInterface[];
+    nextCursor?: string;
+}
+
+/** `sort=updated`: updatedTs DESC straight from Mongo, keyset-paged on (updatedTs, _id). */
+async function updatedPage(userId: string, query: ListQuery): Promise<ListPage> {
+    // Fetch limit+1 so we can tell whether another page exists without a separate count query.
+    const rows = await itemsDAO.findArray(buildListFilter(userId, query), { sort: { updatedTs: -1, _id: -1 }, limit: query.limit + 1 });
+    const hasMore = rows.length > query.limit;
+    const page = hasMore ? rows.slice(0, query.limit) : rows;
+    const last = page.at(-1);
+    // The cursor is derived from the UNFILTERED page so a briefState post-filter never skips rows.
+    return hasMore && last ? { page, nextCursor: encodeCursor(last) } : { page };
+}
+
+// Exactly the fields `priorityComparator` reads — the in-memory sort never loads notes or calendar anchors.
+const PRIORITY_SORT_FIELDS = {
+    _id: 1,
+    user: 1,
+    status: 1,
+    title: 1,
+    rank: 1,
+    createdTs: 1,
+    updatedTs: 1,
+    expectedBy: 1,
+    ignoreBefore: 1,
+    timeStart: 1,
+    allDay: 1,
+};
+
+function withPriorityId(row: ItemInterface): PriorityItem[] {
+    return row._id ? [{ ...row, _id: row._id }] : [];
+}
+
+/** The user's day as the priority order reads it: their reported timezone and local today. */
+async function userClock(userId: string): Promise<UserClock> {
+    const timeZone = await resolveUserTimezone(userId);
+    return { timeZone, today: localDateInTimezone(timeZone) };
+}
+
+/** Full documents for `ids`, returned in `ids` order (a row deleted since the key read simply drops out). */
+async function fullRowsInOrder(userId: string, ids: readonly string[]): Promise<ItemInterface[]> {
+    const rows = await itemsDAO.findArray({ user: userId, _id: { $in: [...ids] } });
+    const byId = new Map(rows.map((row) => [row._id, row]));
+    return ids.flatMap((id) => byId.get(id) ?? []);
+}
+
+/**
+ * `sort=priority`: the app's order (`priorityComparator`). The expected day and the tickler depend
+ * on the user's timezone, so the order cannot be a Mongo sort: every matching row's SORT KEYS are
+ * read (a small projection, so even years of done items stay a light read) and sorted in memory,
+ * then only the page's full documents are loaded. Pages are offsets into that order — an edit
+ * between two page reads can shift a row across the boundary (read twice or skipped); a caller
+ * needing an exact snapshot reads it in one page (`limit` up to the max) narrowed by `status`.
+ */
+async function priorityPage(userId: string, query: ListQuery): Promise<ListPage> {
+    const [keys, clock] = await Promise.all([itemsDAO.findArray(buildListFilter(userId, query), { projection: PRIORITY_SORT_FIELDS }), userClock(userId)]);
+    const offset = query.cursor?.kind === 'priority' ? query.cursor.offset : 0;
+    const end = offset + query.limit;
+    const pageIds = keys
+        .flatMap(withPriorityId)
+        .sort(priorityComparator(clock))
+        .slice(offset, end)
+        .map((row) => row._id);
+    const page = await fullRowsInOrder(userId, pageIds);
+    return end < keys.length ? { page, nextCursor: encodePriorityCursor(end) } : { page };
 }
 
 /**
@@ -491,7 +608,7 @@ function buildListFilter(userId: string, query: ListQuery): Filter<ItemInterface
     const clauses = [
         ...(query.calendarEventId ? [calendarEventClause(query.calendarEventId)] : []),
         ...(query.q ? [searchClause(query.q)] : []),
-        ...(query.cursor ? [cursorClause(query.cursor)] : []),
+        ...(query.cursor?.kind === 'updated' ? [cursorClause(query.cursor)] : []),
     ];
     if (hasAtLeastOne(clauses)) {
         filter.$and = clauses;
@@ -1071,14 +1188,7 @@ export const v1ItemsRoutes = new Hono<{ Variables: BearerVariables }>()
             return c.json({ error: parsed.error.message, code: parsed.error.code }, 400);
         }
         const query = parsed.value;
-        const filter = buildListFilter(userId, query);
-        // Fetch limit+1 so we can tell whether another page exists without a separate count query.
-        const rows = await itemsDAO.findArray(filter, { sort: { updatedTs: -1, _id: -1 }, limit: query.limit + 1 });
-        const hasMore = rows.length > query.limit;
-        const page = hasMore ? rows.slice(0, query.limit) : rows;
-        const last = page.at(-1);
-        // The cursor is derived from the UNFILTERED page so a briefState post-filter never skips rows.
-        const nextCursor = hasMore && last ? encodeCursor(last) : undefined;
+        const { page, nextCursor } = query.sort === 'priority' ? await priorityPage(userId, query) : await updatedPage(userId, query);
         const items = await presentPageWithBriefs(userId, page, query.briefState);
         return c.json({ items, ...(nextCursor ? { nextCursor } : {}) });
     })
@@ -1168,4 +1278,25 @@ export const v1ItemsRoutes = new Hono<{ Variables: BearerVariables }>()
             c.header('X-Idempotent-Replay', 'true');
         }
         return c.json(await presentWithBrief(userId, result.item));
+    })
+
+    // ── POST /v1/items/:id/move ─────────────────────────────────────────────
+    // Re-orders the item inside its priority section (Next Actions / Waiting For day, Inbox,
+    // Someday / Maybe) — the API twin of dragging it in the app. Writes only `rank`. Body: exactly
+    // one of `{ position: 'top' | 'bottom' }`, `{ before: <id> }`, `{ after: <id> }`. Already in
+    // place → no write, X-Idempotent-Replay.
+    .post('/items/:id/move', requireScope('items.write'), async (c) => {
+        const { userId, tokenId } = c.var.apiAuth;
+        const parsed = parseMoveBody(await c.req.json().catch(() => null));
+        if (!parsed.ok) {
+            return c.json({ error: parsed.message, code: 'invalid_body' }, 400);
+        }
+        const result = await moveItem({ userId, tokenId, itemId: c.req.param('id'), target: parsed.value });
+        if (!result.ok) {
+            return c.json({ error: result.message, code: result.code }, result.status);
+        }
+        if (result.isNoop) {
+            c.header('X-Idempotent-Replay', 'true');
+        }
+        return c.json({ ...(await presentWithBrief(userId, result.item)), placement: result.placement });
     });

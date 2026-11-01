@@ -56,8 +56,17 @@ const BRIEF_FIELD_DESCRIPTION =
 const listItems = defineTool({
     name: 'gtd_list_items',
     description:
-        "List or search the user's items. Sorted by updatedTs DESC. Defaults to all statuses except `trash`. " +
-        `Use \`cursor\` from a previous response to paginate. ${BRIEF_FIELD_DESCRIPTION} ` +
+        "List or search the user's items. Defaults to all statuses except `trash`. " +
+        'Sorted in PRIORITY order by default — the order the app presents: lists in the app navigation order Inbox, ' +
+        'Next Actions, Calendar, Waiting For, Tickler, Someday / Maybe, then Done (and Trash when asked for). The Tickler ' +
+        'holds Next Actions / Waiting For / Someday items snoozed until a future date (`ignoreBefore` after today) — the ' +
+        'app hides them from their own lists — earliest wake-up first. Next Actions by expected day (undated last), Waiting ' +
+        'For by expected day (undated first — the page\'s "By date" view), then by priority inside each day; Inbox and ' +
+        'Someday / Maybe by priority; Calendar by day, all-day events first, then by start time; Done most recently updated ' +
+        'first. An item listed above another in the same list and day has ' +
+        'higher priority — use that order to pick `before` / `after` for gtd_move_item. Pass `sort: "updated"` for ' +
+        'most-recently-changed first (pair it with `since` to fetch only what changed). ' +
+        `Use \`cursor\` from a previous response to paginate (a cursor only works with the sort that issued it). ${BRIEF_FIELD_DESCRIPTION} ` +
         'Filter by `briefState` to sweep items that still need a brief (`none` excludes items the server deliberately ' +
         'declined to brief because their notes were too short; ask for `declined` to list the ones it declined). ' +
         'The filter is applied per page, so a page can come back short or empty while `nextCursor` is still present; ' +
@@ -70,7 +79,8 @@ const listItems = defineTool({
             .describe('Comma-separated list of ItemStatus values, e.g. "inbox" or "nextAction,calendar". Defaults to all except trash.'),
         since: z.string().optional().describe('ISO datetime. Only items with updatedTs > since.'),
         limit: z.number().int().positive().max(200).optional().describe('Defaults to 50. Max 200.'),
-        cursor: z.string().optional().describe('Opaque cursor from a previous response.'),
+        cursor: z.string().optional().describe('Opaque cursor from a previous response (same `sort`).'),
+        sort: z.enum(['priority', 'updated']).optional().describe('"priority" (default): the app order, see description. "updated": updatedTs DESC.'),
         calendarEventId: z
             .string()
             .min(1)
@@ -98,6 +108,8 @@ const listItems = defineTool({
                 cursor: args.cursor,
                 briefState: args.briefState,
                 calendarEventId: args.calendarEventId,
+                // The /v1 default stays `updated` for existing integrations; the MCP defaults to the order the user sees.
+                sort: args.sort ?? 'priority',
             },
             requestOptsFromArgs({ account: args.account }),
         ),
@@ -203,7 +215,7 @@ const updateItem = defineTool({
         time: clearable(z.number().nonnegative()).describe('Estimated duration in minutes. Every nextAction should carry one. null clears.'),
         // Deprecated and ignored (the shortlist flag was replaced by the in-app priority order, read
         // back as `rank`); still accepted so older prompts keep working.
-        focus: clearable(z.boolean()).describe('Deprecated — accepted and ignored. Priority is the read-only `rank` order set in the app.'),
+        focus: clearable(z.boolean()).describe('Deprecated — accepted and ignored. To change priority use gtd_move_item.'),
         urgent: clearable(z.boolean()),
         expectedBy: clearable(z.string()).describe(
             'YYYY-MM-DD or ISO datetime. Allowed on nextAction / waitingFor / somedayMaybe. Every waitingFor should carry ' +
@@ -249,6 +261,35 @@ const trashItem = defineTool({
         api.request('POST', `/v1/items/${encodeURIComponent(args.id)}/trash`, {}, undefined, requestOptsFromArgs({ account: args.account })),
 });
 
+const moveItem = defineTool({
+    name: 'gtd_move_item',
+    description:
+        "Change an item's priority: move it within its ordered list, exactly as dragging it in the app does. " +
+        'Give exactly ONE of `position` ("top" | "bottom"), `before` (an item id — land just above it) or `after` ' +
+        '(an item id — land just below it). Only the order changes, never the status or date. Ordered lists: ' +
+        'Inbox, Someday / Maybe, and Next Actions / Waiting For per expected day (items sharing an `expectedBy` day; ' +
+        'undated items form their own group) — `top`/`bottom` mean the top/bottom of that day, and `before`/`after` ' +
+        'need an item of the same status and day (otherwise 409 different_section; change `expectedBy` with ' +
+        'gtd_update_item to move across days). calendar, done and trash items have no manual order (409 not_orderable). ' +
+        'The response is the moved item (its new `rank`) plus `placement: { position, total }` — its 1-based place in ' +
+        'that list, counting items the tickler currently hides. Already in place → returned unchanged. ' +
+        'gtd_list_items returns items in this priority order (its default sort), so read the current order from it ' +
+        'rather than comparing `rank` values yourself. ' +
+        'When moving several items, call this tool one item at a time, in order: parallel calls all succeed, but the ' +
+        'order among them is not guaranteed. 409 item_changed means the item was edited meanwhile; read it again and retry.',
+    inputSchema: {
+        id: idSchema,
+        position: z.enum(['top', 'bottom']).optional().describe('Move to the top (highest priority) or bottom of its list.'),
+        before: z.string().min(1).optional().describe('Id of an item in the same list — the moved item lands directly above it.'),
+        after: z.string().min(1).optional().describe('Id of an item in the same list — the moved item lands directly below it.'),
+        account: accountSchema,
+    },
+    // Undefined targets drop out of the JSON body, so the API sees only the one the caller chose
+    // (and rejects a body naming more than one).
+    handler: async ({ id, account, ...target }, api) =>
+        api.request('POST', `/v1/items/${encodeURIComponent(id)}/move`, target, undefined, requestOptsFromArgs({ account })),
+});
+
 export function registerItemTools(server: McpServer, api: ApiClient): void {
     registerOne(server, capture, api);
     registerOne(server, listItems, api);
@@ -256,9 +297,10 @@ export function registerItemTools(server: McpServer, api: ApiClient): void {
     registerOne(server, updateItem, api);
     registerOne(server, completeItem, api);
     registerOne(server, trashItem, api);
+    registerOne(server, moveItem, api);
     registerOne(server, setBrief, api);
     registerOne(server, generateBrief, api);
 }
 
 // Re-exported for tests.
-export const _itemToolsForTesting = { capture, listItems, getItem, updateItem, completeItem, trashItem, setBrief, generateBrief };
+export const _itemToolsForTesting = { capture, listItems, getItem, updateItem, completeItem, trashItem, moveItem, setBrief, generateBrief };

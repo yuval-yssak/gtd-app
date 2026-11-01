@@ -70,7 +70,7 @@ Each token carries a `scopes` array — the capabilities it is permitted to exer
 |---|---|
 | `items.capture` | `POST /v1/items`, `POST /v1/items/bulk` |
 | `items.read` | `GET /v1/items`, `GET /v1/items/:id` |
-| `items.write` | `PATCH /v1/items/:id`, `POST /v1/items/:id/complete`, `POST /v1/items/:id/trash` |
+| `items.write` | `PATCH /v1/items/:id`, `POST /v1/items/:id/complete`, `POST /v1/items/:id/trash`, `POST /v1/items/:id/move` |
 | `routines.read` | `GET /v1/routines`, `GET /v1/routines/:id` |
 | `routines.write` | `POST /v1/routines`, `PATCH /v1/routines/:id`, `DELETE /v1/routines/:id`, plus the composite gestures (`/pause`, `/resume`, `/split`) |
 | `people.read` | `GET /v1/people`, `GET /v1/people/:id` |
@@ -147,7 +147,7 @@ The full item shape is `ItemInterface` in `api-server/src/types/entities.ts`. Th
 | `updatedTs` | string | Server-assigned on every write. Conflict-resolution anchor. |
 | `externalId` | string? | Caller-provided dedupe key. Unique per `(user, externalId)`. |
 | `brief` | `{ text, origin, state, generatedTs } \| null` | Read-only. The item's one-line brief sidecar (see [Item briefs](#item-briefs)); `null` when the item has none. Written through `PUT /v1/items/:id/brief`, never through `PATCH`. |
-| `rank` | string? | Read-only on `PATCH` (`400 forbidden_field`). The item's position in the Next Actions priority order inside its expected-day section — a fractional-indexing key compared by code unit, minted by the server when an item is created, re-minted when an inbox item is clarified into `nextAction`, and changed by reordering in the app. Absent until minted (`POST /v1/operations/batch` creates are not minted; the app sorts an unranked item to the top of its section). Round-trips through `/v1/operations/batch`. |
+| `rank` | string? | Read-only on `PATCH` (`400 forbidden_field`). The item's position in the Next Actions priority order inside its expected-day section — a fractional-indexing key compared by code unit, minted by the server when an item is created, re-minted when an inbox item is clarified into `nextAction`, and changed by reordering in the app or through [`POST /v1/items/:id/move`](#post-v1itemsidmove--change-priority-order). To read the order, list with [`sort=priority`](#sort-orders) rather than comparing keys. Absent until minted (`POST /v1/operations/batch` creates are not minted; the app sorts an unranked item to the top of its section). Round-trips through `/v1/operations/batch`. |
 | `location` | string? | Read-only. Mirror of the linked Google Calendar event's location, present only on items the calendar sync has linked and whose event names a place. Google-owned: `PATCH` rejects it with `400 forbidden_field` — change it on the Google event and the sync mirrors it back. |
 | `statusBeforeDone` | string? | Read-only on `PATCH`. On a `done` item, the open status it was completed from (`inbox`, `nextAction`, `calendar`, `waitingFor`, `somedayMaybe`), recorded on every completion — `POST /complete`, `PATCH` to `done`, `/v1/operations/batch` and the app alike. Present only on `done` items (and trashed done items); a revive clears it. `PATCH` rejects it with `400 forbidden_field`; `/v1/operations/batch` round-trips it (a done snapshot's value is kept, a missing one is filled in from the stored row, and an open snapshot's is dropped). Absent on items completed before the field existed. |
 
@@ -240,7 +240,8 @@ Returns items owned by the authenticated user.
 | `since` | ISO datetime | — | Only items with `updatedTs > since`. Useful for polling. |
 | `calendarEventId` | string | — | Exact match on the Google Calendar event id, against both linkage fields (`calendarEventId` for standalone events and series masters, `calendarInstanceEventId` for a recurring occurrence). Finds the item the calendar sync already linked to an event, so an integration annotates it instead of creating a second one. Completed items are included by default (only `trash` is excluded); a blank value is `400 invalid_calendar_event_id`. |
 | `limit` | int | 50 | Max 200. |
-| `cursor` | string | — | Opaque cursor from a previous response's `nextCursor`. |
+| `sort` | `updated \| priority` | `updated` | `updated`: `updatedTs DESC, _id DESC`. `priority`: the order the app shows — see [Sort orders](#sort-orders). Anything else is `400 invalid_sort`. |
+| `cursor` | string | — | Opaque cursor from a previous response's `nextCursor`, valid only with the `sort` that issued it (`400 invalid_cursor` otherwise). |
 | `briefState` | `none \| declined \| fresh \| pinnedStale` | — | Keep only items whose `brief.state` matches. **Applied per page, after the page is fetched** (the state is derived from a hash of each item's current content, so it cannot be a database predicate): a page can come back short or empty while `nextCursor` is still present. Keep paginating until `nextCursor` disappears. Typical sweep: `briefState=none` to find items that still need a brief — as a *filter*, `none` also excludes any `origin: "skipped"` row (notes too short), including one whose notes have since moved on and which therefore reads as `brief.state: "none"` — such a row is deliberately reachable through **no** `briefState` value, so list unfiltered if you want it. Use `briefState=declined` to list the items whose *current* content the server looked at and deliberately left without a brief. |
 
 **Response** — `200 OK`
@@ -254,11 +255,22 @@ Returns items owned by the authenticated user.
 }
 ```
 
-`nextCursor` is present when more results exist. Pass it back as `cursor=` to fetch the next page. Cursors are opaque (do not parse them); they encode the last item's `(updatedTs, _id)` pair — of the **unfiltered** page, so a `briefState` filter never skips rows.
+`nextCursor` is present when more results exist. Pass it back as `cursor=` (with the same `sort`) to fetch the next page. Cursors are opaque (do not parse them). Both are taken from the **unfiltered** page, so a `briefState` filter never skips rows.
 
 Each item carries its `brief` (fetched in one query per page — see [Item briefs](#item-briefs)).
 
-Sorted by `updatedTs DESC, _id DESC`. Stable across concurrent writes — newly written items always appear on the first page.
+#### Sort orders
+
+- **`sort=updated`** (default) — `updatedTs DESC, _id DESC`, keyset-paged on that pair. Stable across concurrent writes — newly written items always appear on the first page. Pair it with `since` for polling.
+- **`sort=priority`** — items in the order the app presents them, so the position of one item relative to another in the same list is its priority:
+  1. lists in the app's navigation order: `inbox`, `nextAction`, `calendar`, `waitingFor`, the **tickler**, `somedayMaybe`, then `done`, `trash`. The tickler holds the `nextAction` / `waitingFor` / `somedayMaybe` items snoozed past the user's local today (`ignoreBefore` after today) — the app hides them from their own lists — earliest `ignoreBefore` first;
+  2. `nextAction` / `waitingFor`: by expected day ascending — undated items **last** in `nextAction` (the lowest tier) but **first** in `waitingFor` (the Waiting For page's "By date" view; its default view groups by person instead); a datetime `expectedBy` is read in the user's timezone as last reported by their devices (UTC when none has), a floating one as wall time there — then by priority inside the day;
+  3. priority inside a ranked list (`inbox`, `somedayMaybe`, and each `nextAction` / `waitingFor` day): items without a `rank` first (newest `createdTs` first), then `rank` ascending by code unit — the order [`POST /v1/items/:id/move`](#post-v1itemsidmove--change-priority-order) and in-app dragging write;
+  4. `calendar`: the Calendar page's order — by day (an all-day `timeStart` as written, a timed one as its local day in the user's timezone), all-day events first by title, then timed events by instant (a `Z`/offset time and a floating one compare correctly), items without a `timeStart` last;
+  5. `done` / `trash`: most recently updated first (`updatedTs DESC`);
+  6. `_id` ascending breaks every remaining tie.
+
+  The day boundaries depend on the user's timezone, so the order is computed in memory: the sort keys of every matching row are read (a small projection), sorted, and only the page's full items are loaded. Pages are **offsets** into that order: an edit landing between two page reads can move a row across the page boundary (read twice or skipped). Read a snapshot that must be exact in one page (`limit` up to 200, narrowed by `status`).
 
 ---
 
@@ -385,7 +397,7 @@ The endpoint counts as a **single write** against the per-token rate limit.
 
 Updates any user-settable field on an existing item. **Requires the `items.write` scope.**
 
-Allowed fields (all optional except at least one must be present): `title`, `notes`, `status`, `workContextIds`, `peopleIds`, `waitingForPersonId`, `energy`, `time`, `urgent`, `expectedBy`, `ignoreBefore`, `timeStart`, `timeEnd`, `calendarEventId`, `calendarIntegrationId`, `calendarSyncConfigId`. `rank` is read-only here (`400 forbidden_field`). A transition `inbox` → `nextAction` always mints a fresh key at the top of the item's section (clarifying is when a capture becomes actionable); any other transition into `nextAction` keeps the item's key, minting one only if it has none. The deprecated `focus` is accepted and ignored (a body holding only `focus` is a no-op that returns the current item).
+Allowed fields (all optional except at least one must be present): `title`, `notes`, `status`, `workContextIds`, `peopleIds`, `waitingForPersonId`, `energy`, `time`, `urgent`, `expectedBy`, `ignoreBefore`, `timeStart`, `timeEnd`, `calendarEventId`, `calendarIntegrationId`, `calendarSyncConfigId`. `rank` is read-only here (`400 forbidden_field`) — reorder with [`POST /v1/items/:id/move`](#post-v1itemsidmove--change-priority-order). A transition `inbox` → `nextAction` always mints a fresh key at the top of the item's section (clarifying is when a capture becomes actionable); any other transition into `nextAction` keeps the item's key, minting one only if it has none. The deprecated `focus` is accepted and ignored (a body holding only `focus` is a no-op that returns the current item).
 
 Status transitions are no longer restricted to `inbox` as the source — any matrix-allowed transition is accepted. Field combinations must satisfy the status×field matrix (e.g. `nextAction` + `timeStart` returns `400 status_field_violation`). The matrix is single-source-of-truth in `api-server/src/schemas/operations/item.ts`.
 
@@ -652,6 +664,38 @@ Requires the `items.write` scope.
 
 - Trashing a `routine`-generated item advances the series (next instance is generated), mirroring the in-app `clarifyToTrash` flow.
 - An `OperationInterface` (`opType: 'update'`, not `delete`) is logged with `deviceId = "api:<tokenId>"` so all the user's devices pull the trashed state on their next sync.
+
+---
+
+### `POST /v1/items/:id/move` — change priority order
+
+Moves an item within its ordered list — the API twin of dragging it in the app. Writes only `rank`; never the status or `expectedBy`. Requires the `items.write` scope.
+
+An item is ordered within its **section**: `inbox` and `somedayMaybe` are one list each; `nextAction` and `waitingFor` are one list per expected day (items whose `expectedBy` falls on the same calendar day — a datetime is read in the user's timezone as last reported by their devices, UTC when none has — plus one list of undated items). `calendar`, `done` and `trash` items have no manual order. Tickler-hidden items belong to the section too; the order covers the user's own items only (the app's merged multi-account list has no API equivalent).
+
+**Request body** — exactly one key:
+
+| Body | Effect |
+|---|---|
+| `{ "position": "top" }` / `{ "position": "bottom" }` | First / last of its section. |
+| `{ "before": "<itemId>" }` | Directly above that item (same section). |
+| `{ "after": "<itemId>" }` | Directly below that item (same section). |
+
+**Response** — `200 OK` with the item (its new `rank`) plus `placement: { position, total }` — its 1-based place in the section and the section's size. Already in place → no write, `X-Idempotent-Replay: true`.
+
+**Errors**
+
+| Status | `code` | Meaning |
+|---|---|---|
+| `400` | `invalid_body` | Not exactly one of `position` (`top`/`bottom`), `before`, `after`. |
+| `400` | `invalid_anchor` | `before`/`after` names the item itself. |
+| `404` | `not_found` | Item doesn't exist for this user. |
+| `404` | `anchor_not_found` | The `before`/`after` item doesn't exist for this user. |
+| `409` | `not_orderable` | The item is `calendar`, `done` or `trash`. |
+| `409` | `different_section` | The anchor is in another status or expected day. Change `expectedBy` with `PATCH` to move across days. |
+| `409` | `item_changed` | The item (or a neighbour being re-keyed) changed or vanished while the move ran — a newer edit won. Re-read and retry. |
+
+**Side effects** — one `update` op on the moved item on the happy path. When the neighbours around the slot carry no `rank` yet (batch creates, pre-rollout rows) or equal keys, those neighbours are re-keyed first, one `update` op each, keeping their relative order; when the new key would grow too long, the whole section is re-keyed. Moves of one user run one at a time, so parallel calls never mint equal keys — but the order among parallel calls is not guaranteed; issue them sequentially when it matters.
 
 ---
 

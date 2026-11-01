@@ -131,3 +131,5 @@
 - [CI typecheck vs cross-package test imports](project_ci_typecheck_cross_package_imports.md) — CI installs api-server deps only; tests importing ../mcp-server sources fail TS2307 there
 - [Webhook renew sweep: sequential, no budget](project_webhook_renew_sweep_sequential_deadline.md) — 300s Scheduler/Cloud Run deadline; concurrent call returns silent zeros
 - [Carry-forward hydrator skips creates + calendar.ts revives](feedback_carry_forward_hydrator_skips_creates.md) — field invariants hooked into hydrateItemCarryForwards miss create ops and direct-DAO GCal revives
+- [v1 routes ignore apply outcome](project_v1_routes_ignore_apply_outcome.md) — /v1 writes return 200 on skipped_missing/stale ops; multi-row re-key flows need a per-user KeyedMutex.
+- [App-parity claims: check client source](feedback_app_parity_claims_check_client_source.md) — "mirrors the app" server orders drifted on nav order, tickler, calendar instants

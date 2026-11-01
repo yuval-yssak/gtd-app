@@ -90,7 +90,21 @@ describe('item tools', () => {
         if (!call) throw new Error('expected one call');
         expect(call.method).toBe('GET');
         expect(call.path).toBe('/v1/items');
-        expect(call.query).toEqual({ q: 'mom', status: 'inbox', since: undefined, limit: 25, cursor: undefined });
+        expect(call.query).toEqual({ q: 'mom', status: 'inbox', since: undefined, limit: 25, cursor: undefined, sort: 'priority' });
+    });
+
+    it('gtd_list_items lists in priority order unless the caller asks for updated', async () => {
+        const { api, calls } = makeFakeApi({ items: [] });
+        await t.listItems.handler({}, api);
+        await t.listItems.handler({ sort: 'updated', since: '2026-11-01T00:00:00.000Z' }, api);
+        const [byDefault, byUpdated] = calls;
+        if (!byDefault || !byUpdated) throw new Error('expected two calls');
+        expect(byDefault.query).toMatchObject({ sort: 'priority' });
+        expect(byUpdated.query).toMatchObject({ sort: 'updated', since: '2026-11-01T00:00:00.000Z' });
+    });
+
+    it('gtd_list_items only accepts priority or updated as a sort', () => {
+        expect(t.listItems.inputSchema.sort.safeParse('alphabetical').success).toBe(false);
     });
 
     it('gtd_get_item URL-encodes the id', async () => {
@@ -225,6 +239,25 @@ describe('item tools', () => {
         expect(call.method).toBe('POST');
         expect(call.path).toBe('/v1/items/abc/trash');
         expect(call.body).toEqual({});
+    });
+
+    it.each([
+        [{ position: 'top' as const }, { position: 'top' }],
+        [{ position: 'bottom' as const }, { position: 'bottom' }],
+        [{ before: 'other' }, { before: 'other' }],
+        [{ after: 'other' }, { after: 'other' }],
+    ])('gtd_move_item POSTs /move with only the chosen target %j (account stays out of the body)', async (args, body) => {
+        const { api, calls } = makeFakeApi();
+        await t.moveItem.handler({ id: 'abc', account: 'work', ...args }, api);
+        const [call] = calls;
+        if (!call) throw new Error('expected one call');
+        expect(call.method).toBe('POST');
+        expect(call.path).toBe('/v1/items/abc/move');
+        expect(call.body).toEqual(body);
+    });
+
+    it('gtd_move_item only accepts top or bottom as a position', () => {
+        expect(t.moveItem.inputSchema.position.safeParse('middle').success).toBe(false);
     });
 
     it('gtd_update_item rejects status:"trash" at the schema level (Zod enum)', () => {

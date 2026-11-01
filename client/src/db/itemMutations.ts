@@ -430,6 +430,8 @@ function isRankedBelow(a: StoredItem | undefined, b: StoredItem | undefined): bo
  * another device's edit). Keys from different accounts share no keyspace, so EQUAL keys across a
  * merged section are the normal case, not a corner one — re-keying only this run keeps a drop to
  * one or two ops instead of one per row of both accounts.
+ *
+ * MIRROR: `api-server/src/lib/itemMove.ts` `nonIncreasingRun` (the API's move) — pinned by `tests/itemMoveParity.test.ts` on both sides.
  */
 export function nonIncreasingRun(rows: readonly StoredItem[], from: number, to: number): { lo: number; hi: number } {
     const ordered = (i: number) => isOrderedPair(rows[i], rows[i + 1]);
@@ -470,6 +472,8 @@ function runBounds(rows: readonly StoredItem[], above: StoredItem | undefined, b
  * `rows` is the FULL day section minus the moved row, in display order (hidden rows included —
  * re-keying only the visible rows would scramble the hidden ones). Returns the rows by id after
  * any re-key; nothing is written when the two neighbours are already strictly ordered.
+ *
+ * MIRROR: `api-server/src/lib/itemMove.ts` `rekeyAround` (the API's move; no whole-section fallback there — one owner's sorted rows cannot invert).
  */
 export async function ensureRunRanked(
     db: IDBPDatabase<MyDB>,

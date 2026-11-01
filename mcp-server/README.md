@@ -198,11 +198,12 @@ Every tool except `gtd_reassign` accepts an optional `account` arg (default `"de
 | Tool | Maps to | Scope | Account args |
 |---|---|---|---|
 | `gtd_capture` | `POST /v1/items` | `items.capture` | `account?` |
-| `gtd_list_items` | `GET /v1/items` | `items.read` | `account?` |
+| `gtd_list_items` | `GET /v1/items` | `items.read` | `sort?` — `priority` (default: the app's order) or `updated`; `account?` |
 | `gtd_get_item` | `GET /v1/items/:id` | `items.read` | `account?` |
 | `gtd_update_item` | `PATCH /v1/items/:id` | `items.write` | `account?` |
 | `gtd_complete_item` | `POST /v1/items/:id/complete` | `items.write` | `account?` |
 | `gtd_trash_item` | `POST /v1/items/:id/trash` | `items.write` | `account?` |
+| `gtd_move_item` | `POST /v1/items/:id/move` | `items.write` | `position?` (`top`/`bottom`) \| `before?` \| `after?` (exactly one), `account?` |
 | `gtd_set_brief` | `PUT /v1/items/:id/brief` | `items.write` | `account?` |
 | `gtd_generate_brief` | `POST /v1/items/:id/brief/generate` | `items.write` | `account?` |
 | `gtd_list_routines` / `gtd_get_routine` | `GET /v1/routines[/:id]` | `routines.read` | `account?` |

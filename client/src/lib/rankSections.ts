@@ -15,7 +15,11 @@ export function ownerIdsOfStatus(items: readonly StoredItem[], status: StoredIte
     return [...new Set(items.filter((item) => item.status === status).map((item) => item.userId))];
 }
 
-/** The section an item is ordered within, or null for a status with no manual order (calendar, done, trash). */
+/**
+ * The section an item is ordered within, or null for a status with no manual order (calendar, done, trash).
+ *
+ * MIRROR: `api-server/src/lib/itemMove.ts` `rankSectionKeyOf` (same rules; the day is read in the user's reported zone there).
+ */
 export function rankSectionKeyOf(item: Pick<StoredItem, 'status' | 'expectedBy'>): string | null {
     if (DAY_KEYED_STATUSES.has(item.status)) {
         return `${item.status}:${expectedDayKey(item) ?? 'undated'}`;

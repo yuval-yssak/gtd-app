@@ -73,3 +73,4 @@
 - [Per-account gate, single-account tests](feedback_per_account_gate_single_account_tests.md) — onUserSynced-set gates tested with one account can't tell has(activeId) from size>0; demand a 2-account test.
 - [Load-only e2e flakes can be real bugs](feedback_load_only_flakes_real_bugs.md) — guard sits on a layout threshold (fold); require instrumented, deterministic setup
 - [In-flight guard on sync-queue collapse](feedback_inflight_guard_on_sync_queue_collapse.md) — Merge branch re-ids the create; a failed push may have committed; mark before any await.
+- [Parity fixture misses symmetric branch](feedback_parity_fixture_misses_symmetric_branch.md) — port-pinning fixture tables cover hi-trim only; hand-trace each row, probe the port with tsx.

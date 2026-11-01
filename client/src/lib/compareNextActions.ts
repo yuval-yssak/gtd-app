@@ -51,6 +51,8 @@ export function compareNextActions(a: StoredItem, b: StoredItem): number {
  * The manual order inside one section of any ranked list (a Next Actions day, the Inbox, Someday /
  * Maybe, a Waiting For day): unranked rows first, newest first; then `rank` by code unit; `_id`
  * breaks every remaining tie, so the order is total.
+ *
+ * MIRROR: `api-server/src/lib/itemMove.ts` `compareByRank` (the API's move) — pinned by `tests/itemMoveParity.test.ts` on both sides.
  */
 export function compareByRank(a: StoredItem, b: StoredItem): number {
     const withinDay = compareWithinDay(a, b);

@@ -32,6 +32,11 @@ describe('decorateWithUrls', () => {
         expect(result).toMatchObject({ _id: 'abc123', url: `${STAGING}/item/abc123` });
     });
 
+    it('stamps an item deep link on the gtd_move_item response (the moved item plus its placement)', () => {
+        const result = decorateWithUrls('gtd_move_item', { _id: 'abc123', placement: { position: 1, total: 3 } }, STAGING);
+        expect(result).toMatchObject({ _id: 'abc123', placement: { position: 1, total: 3 }, url: `${STAGING}/item/abc123` });
+    });
+
     it('stamps a routine deep link on a single-routine response', () => {
         const result = decorateWithUrls('gtd_create_routine', { _id: 'r1', name: 'water plants' }, STAGING);
         expect(result).toEqual({ _id: 'r1', name: 'water plants', url: `${STAGING}/routine/r1` });
