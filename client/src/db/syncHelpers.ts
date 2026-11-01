@@ -84,7 +84,7 @@ async function mergeUpdateIntoCreate(db: IDBPDatabase<MyDB>, existing: SyncOpera
     // Only entity-write ops carry gcalMeta — `mergeUpdateIntoCreate` is the create/update collapse path,
     // not the rsvp stream, so this branch never sees `opType: 'rsvp'`.
     const gcalMeta = op.opType !== 'rsvp' ? op.gcalMeta : undefined;
-    await db.add('syncOperations', {
+    const mergedId = await db.add('syncOperations', {
         userId,
         opType: 'create',
         entityType: op.entityType,
@@ -95,6 +95,13 @@ async function mergeUpdateIntoCreate(db: IDBPDatabase<MyDB>, existing: SyncOpera
         // ever attaches it here we forward it onto the merged op so nothing is silently dropped.
         ...(gcalMeta ? { gcalMeta } : {}),
     });
+    // The merged row replaces a create a push may already have carried: it must stay "attempted"
+    // so a delete after it is still kept (see pushAttemptedOpIds). Re-pushing the merged create is
+    // safe either way — the server applies a create as a last-write-wins upsert.
+    if (wasPushAttempted(queued)) {
+        forgetPushAttempted([queued]);
+        pushAttemptedOpIds.add(mergedId);
+    }
 }
 
 async function clearExistingOps(db: IDBPDatabase<MyDB>, existing: SyncOperation[]) {
@@ -127,15 +134,26 @@ export async function queueSyncOp(db: IDBPDatabase<MyDB>, op: SyncOpParams): Pro
     const existing = (await db.getAll('syncOperations')).filter((q) => q.entityType === entityType && q.entityId === entityId && q.opType !== 'rsvp');
     const hasPendingCreate = existing.some((q) => q.opType === 'create');
 
+    // An update always folds into a pending create, even one a push has carried: the server applies
+    // a create as a last-write-wins upsert, so re-pushing the merged snapshot is safe — whereas a
+    // lone update for a row the server does not hold yet is quarantined (`skipped_missing`), which
+    // a create + update pair in one batch can hit.
     if (opType === 'update' && hasPendingCreate) {
         await mergeUpdateIntoCreate(db, existing, op, userId);
         return;
     }
 
     if (opType === 'delete') {
-        // Collapse all prior ops. If a 'create' was pending, the item never reached the server — drop everything.
-        await clearExistingOps(db, existing);
-        if (hasPendingCreate) {
+        // Collapse the unsent prior ops. If the create itself is among them, the entity never reached
+        // the server — drop everything. A create a push has carried (acknowledged or not — a timed-out
+        // request may have committed) is different: the server may hold the row, so the delete must go
+        // out and hold the entity back until its echo, or the next pull re-delivers the create into
+        // the empty slot and resurrects the row. The attempted create stays queued ahead of it.
+        await clearExistingOps(
+            db,
+            existing.filter((q) => !wasPushAttempted(q)),
+        );
+        if (existing.some(isUnsentCreate)) {
             return;
         }
         rememberQueuedDelete(entityKey(entityType, entityId));
@@ -341,6 +359,9 @@ async function pushQueuedOpsUntilEmpty(db: IDBPDatabase<MyDB>, options: FlushOpt
 }
 
 async function pushBatch(db: IDBPDatabase<MyDB>, ops: SyncOperation[], options: FlushOptions): Promise<void> {
+    // First, before any await: the batch is already read, so a queueSyncOp interleaving with the
+    // device-id read below would otherwise still see these ops as unsent and collapse them.
+    markPushAttempted(ops);
     console.log(
         `[sync-flush] pushing ${ops.length} ops to server (filter=${options.userIdFilter ?? 'all'})`,
         ops.map((op) => `${op.opType}:${op.entityType}:${op.entityId}`),
@@ -353,11 +374,44 @@ async function pushBatch(db: IDBPDatabase<MyDB>, ops: SyncOperation[], options: 
     await deleteSentOps(db, ops);
 }
 
+/**
+ * Queue rows some push request has carried, acknowledged or not. They stay in IDB until a request
+ * succeeds, so `queueSyncOp` cannot tell them from unsent ops by the queue alone — and a request
+ * that timed out or lost its connection may have committed, so the mark outlives a failed push and
+ * is dropped only when the op leaves the queue. In memory, per context: a request another context
+ * sent (a Service Worker's) is invisible here, and a reload forgets the marks — the same residual
+ * as unconfirmedDeletes.ts.
+ */
+const pushAttemptedOpIds = new Set<number>();
+
+/** The ids of queue rows — present on every record read from IDB; the type reflects pre-insert optionality. */
+const queuedOpIds = (ops: SyncOperation[]) => ops.flatMap((op) => (op.id !== undefined ? [op.id] : []));
+
+function markPushAttempted(ops: SyncOperation[]) {
+    for (const id of queuedOpIds(ops)) {
+        pushAttemptedOpIds.add(id);
+    }
+}
+
+function forgetPushAttempted(ops: SyncOperation[]) {
+    for (const id of queuedOpIds(ops)) {
+        pushAttemptedOpIds.delete(id);
+    }
+}
+
+const wasPushAttempted = (op: SyncOperation) => op.id !== undefined && pushAttemptedOpIds.has(op.id);
+const isUnsentCreate = (op: SyncOperation) => op.opType === 'create' && !wasPushAttempted(op);
+
+/** Test-only: a fresh fake-indexeddb database restarts its ids at 1, so a mark left by one test would land on the next test's op. */
+export function __resetPushAttemptedForTests() {
+    pushAttemptedOpIds.clear();
+}
+
 /** Batch succeeded — remove the sent ops in ONE transaction, so a context dying mid-way cannot leave half of them to be re-pushed. If the request failed, they stay for retry. */
 async function deleteSentOps(db: IDBPDatabase<MyDB>, sent: SyncOperation[]): Promise<void> {
     const tx = db.transaction('syncOperations', 'readwrite');
-    const sentIds = sent.flatMap((op) => (op.id !== undefined ? [op.id] : []));
-    await Promise.all([...sentIds.map((id) => tx.store.delete(id)), tx.done]);
+    await Promise.all([...queuedOpIds(sent).map((id) => tx.store.delete(id)), tx.done]);
+    forgetPushAttempted(sent);
 }
 
 /**

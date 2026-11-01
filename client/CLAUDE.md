@@ -133,7 +133,7 @@ Before flushing, `flushSyncQueue()` collapses redundant ops per entity:
 | Sequence | Result |
 |---|---|
 | create → update | merged into a single create with final snapshot |
-| create → delete | both dropped (entity never reached server) |
+| create → delete | both dropped — only while no push has carried the create; once one has (acknowledged or not), the create stays and the delete goes out behind it |
 | update → delete | single delete |
 
 `POST /sync/push` sends the collapsed ops. Ops are removed from IDB only on a successful response. A server-side 400 on any op in the batch jams the queue permanently — see the op-schema warning in the root `CLAUDE.md`.

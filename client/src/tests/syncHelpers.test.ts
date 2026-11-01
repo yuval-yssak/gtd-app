@@ -18,6 +18,7 @@ import { removeAccountAndData } from '../db/accountHelpers';
 import { SYNC_APPLY_LOCK, SYNC_FLUSH_LOCK } from '../db/crossContextLock';
 import { syncSingleUser } from '../db/multiUserSync';
 import {
+    __resetPushAttemptedForTests,
     bootstrapFromServer,
     DEFAULT_FLUSH_LOCK_WAIT_MS,
     flushSyncQueue,
@@ -101,6 +102,7 @@ beforeEach(async () => {
 
 afterEach(() => {
     __resetUnconfirmedDeletesForTests();
+    __resetPushAttemptedForTests();
     // clearAllMocks resets call history on vi.fn() instances while preserving their default
     // implementations (unlike restoreAllMocks which is for vi.spyOn() spies).
     vi.clearAllMocks();
@@ -144,7 +146,103 @@ describe('queueSyncOp — a queued delete holds its entity back at once', () => 
 
         expect(isAwaitingDeleteEcho(entityKey('item', 'fleeting'))).toBe(false);
     });
+
+    // A create the flush has already sent is still in the queue until the server acknowledges it.
+    // A delete arriving in that window used to collapse both away as "never reached the server" —
+    // but the server was holding the row by then, nothing ever deleted it, and the next pull
+    // re-delivered the create into the empty slot (the Weekly Review's inbox checklist resurrected
+    // a bucket removed right after the review seeded it).
+    it('keeps a delete whose create is already in flight, holds the entity back, and pushes the delete once the create is acknowledged', async () => {
+        const acknowledgeCreate = holdNextPushOpen();
+        await queueSyncOp(db, { opType: 'create', entityType: 'item', entityId: 'sent', snapshot: makeItem('sent'), userId: USER_ID });
+        await waitFor(() => vi.mocked(pushSyncOps).mock.calls.length === 1);
+
+        await queueSyncOp(db, { opType: 'delete', entityType: 'item', entityId: 'sent', snapshot: null, userId: USER_ID });
+
+        const isHeldBack = isAwaitingDeleteEcho(entityKey('item', 'sent'));
+        acknowledgeCreate(); // before asserting: a failed assertion must not leave the flush hanging on the held push
+        expect(isHeldBack).toBe(true);
+        await waitFor(() => vi.mocked(pushSyncOps).mock.calls.length === 2);
+        expect(pushedOpsPerRequest()).toEqual([['create:sent'], ['delete:sent']]);
+    });
+
+    // An update arriving while the create is in flight merges into a NEW create row; that row must
+    // inherit the "attempted" mark, or a following delete collapses with it and reopens the hole above.
+    it('an update after an in-flight create merges into it and keeps it "attempted", so a delete after it is still kept', async () => {
+        const acknowledgeCreate = holdNextPushOpen();
+        await queueSyncOp(db, { opType: 'create', entityType: 'item', entityId: 'edited', snapshot: makeItem('edited'), userId: USER_ID });
+        await waitFor(() => vi.mocked(pushSyncOps).mock.calls.length === 1);
+
+        await queueSyncOp(db, {
+            opType: 'update',
+            entityType: 'item',
+            entityId: 'edited',
+            snapshot: makeItem('edited', '2025-01-02T00:00:00.000Z'),
+            userId: USER_ID,
+        });
+        await queueSyncOp(db, { opType: 'delete', entityType: 'item', entityId: 'edited', snapshot: null, userId: USER_ID });
+
+        const isHeldBack = isAwaitingDeleteEcho(entityKey('item', 'edited'));
+        acknowledgeCreate();
+        expect(isHeldBack).toBe(true);
+        await waitFor(() => vi.mocked(pushSyncOps).mock.calls.length === 2);
+        // The merged create (an upsert on the server) goes out again ahead of the delete.
+        expect(pushedOpsPerRequest()).toEqual([['create:edited'], ['create:edited', 'delete:edited']]);
+    });
+
+    // The everyday offline case: the create's push fails at once, the user keeps editing. The edits
+    // must still fold into the create — a create + update pair in one batch can lose the update
+    // (the server quarantines an update for a row it has not inserted yet).
+    it('an update after a create whose push failed still merges into that create', async () => {
+        vi.mocked(pushSyncOps).mockRejectedValueOnce(new Error('offline'));
+        await queueSyncOp(db, { opType: 'create', entityType: 'item', entityId: 'drafted', snapshot: makeItem('drafted'), userId: USER_ID });
+        await waitFor(() => vi.mocked(pushSyncOps).mock.calls.length === 1);
+        await waitForPendingFlush();
+
+        await queueSyncOp(db, {
+            opType: 'update',
+            entityType: 'item',
+            entityId: 'drafted',
+            snapshot: { ...makeItem('drafted'), title: 'Edited' },
+            userId: USER_ID,
+        });
+
+        // A merge dispatches no flush of its own (the create's did, and failed) — reconnecting does.
+        await flushSyncQueue(db);
+        expect(pushedOpsPerRequest()).toEqual([['create:drafted'], ['create:drafted']]);
+        const [, retry] = vi.mocked(pushSyncOps).mock.calls;
+        if (!retry) throw new Error('expected a retry push');
+        expect(retry[1].map((op) => (op.snapshot && 'title' in op.snapshot ? op.snapshot.title : null))).toEqual(['Edited']);
+    });
+
+    // A push that timed out or lost its connection may still have committed on the server.
+    it('a create whose push failed stays "attempted": a delete after it is kept and both go out on the retry', async () => {
+        vi.mocked(pushSyncOps).mockRejectedValueOnce(new Error('timeout'));
+        await queueSyncOp(db, { opType: 'create', entityType: 'item', entityId: 'retried', snapshot: makeItem('retried'), userId: USER_ID });
+        await waitFor(() => vi.mocked(pushSyncOps).mock.calls.length === 1);
+        await waitForPendingFlush();
+
+        await queueSyncOp(db, { opType: 'delete', entityType: 'item', entityId: 'retried', snapshot: null, userId: USER_ID });
+
+        expect(isAwaitingDeleteEcho(entityKey('item', 'retried'))).toBe(true);
+        await waitFor(() => vi.mocked(pushSyncOps).mock.calls.length === 2);
+        expect(pushedOpsPerRequest()).toEqual([['create:retried'], ['create:retried', 'delete:retried']]);
+    });
 });
+
+/** Makes the next push hang until the returned function is called, so an op can be observed mid-flight. */
+function holdNextPushOpen() {
+    // let: the executor is the only place the resolver is handed out (Promise.withResolvers is ES2024).
+    let release: () => void = () => {};
+    vi.mocked(pushSyncOps).mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+            release = resolve;
+        }),
+    );
+    return () => release();
+}
+
+const pushedOpsPerRequest = () => vi.mocked(pushSyncOps).mock.calls.map(([, ops]) => ops.map((op) => `${op.opType}:${op.entityId}`));
 
 describe('queueSyncOp — userId field', () => {
     afterEach(async () => {

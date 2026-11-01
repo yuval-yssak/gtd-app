@@ -1,6 +1,6 @@
 import * as path from 'node:path';
 import { defineConfig } from '@playwright/test';
-import { API_URL, CLIENT_URL, E2E_API_PORT, E2E_CLIENT_OUT_DIR, E2E_CLIENT_PORT } from './helpers/env';
+import { API_URL, CLIENT_URL, E2E_API_PORT, E2E_CLIENT_OUT_DIR, E2E_CLIENT_PORT, E2E_DB_NAME } from './helpers/env';
 
 /** `GTD_E2E_WORKERS` as Playwright takes it: a count (`6`) or a share of the cores (`50%`). */
 function parseWorkers(override: string | undefined) {
@@ -53,9 +53,10 @@ export default defineConfig({
             // specs exercise the same server-local-vs-user-local split production has.
             // BRIEF_FAKE_MODEL=1 swaps the Anthropic call behind brief generation for a deterministic
             // fake (`[fake] <first sentence of the notes>`), so the brief specs need no key.
-            // The URL variables win over api-server/.env (dotenv never overrides the environment).
+            // The URL and database variables win over api-server/.env (dotenv never overrides the
+            // environment): the suite gets its own database (helpers/env.ts), never the dev one.
             // Plain `tsx`, not `tsx watch`: an edit mid-run must not restart the server under a test.
-            command: `cd ../api-server && TZ=UTC BRIEF_FAKE_MODEL=1 PORT=${E2E_API_PORT} BETTER_AUTH_URL=${API_URL} CLIENT_URL=${CLIENT_URL} npx tsx src/index.ts`,
+            command: `cd ../api-server && TZ=UTC BRIEF_FAKE_MODEL=1 PORT=${E2E_API_PORT} MONGO_DB_NAME=${E2E_DB_NAME} BETTER_AUTH_URL=${API_URL} CLIENT_URL=${CLIENT_URL} npx tsx src/index.ts`,
             url: `${API_URL}/sync/config`,
             reuseExistingServer: false,
             stdout: 'ignore',

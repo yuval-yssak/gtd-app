@@ -7,6 +7,14 @@
 export const E2E_API_PORT = Number(process.env.GTD_E2E_API_PORT ?? 4100);
 export const E2E_CLIENT_PORT = Number(process.env.GTD_E2E_CLIENT_PORT ?? 4273);
 
+/**
+ * The e2e API's own database, one per port. Without it the stack inherits `MONGO_DB_NAME` from
+ * api-server/.env — the DEV database — so two worktrees' suites (and the developer's dev server)
+ * wrote into one set of collections, and every seeded calendar integration leaked into dev data.
+ * The name is derived, not configurable: a second suite is told apart by its port already.
+ */
+export const E2E_DB_NAME = `gtd_e2e_${E2E_API_PORT}`;
+
 export const API_URL = `http://localhost:${E2E_API_PORT}`;
 export const CLIENT_URL = `http://localhost:${E2E_CLIENT_PORT}`;
 

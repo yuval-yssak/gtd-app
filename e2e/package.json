@@ -7,7 +7,7 @@
         "typecheck": "tsrs --noEmit",
         "lint:fix": "biome check . --write",
         "lint:fix:unsafe": "biome check --write --unsafe",
-        "cleanup-e2e-seeds": "set -a && . ../api-server/.env && set +a && mongosh \"$MONGO_DB_URL/$MONGO_DB_NAME\" --quiet --file scripts/cleanupE2ECalendarSeeds.js"
+        "cleanup-e2e-seeds": "set -a && . ../api-server/.env && set +a && mongosh \"$MONGO_DB_URL/gtd_e2e_${GTD_E2E_API_PORT:-4100}\" --quiet --file scripts/cleanupE2ECalendarSeeds.js"
     },
     "devDependencies": {
         "@biomejs/biome": "2.6.2",
