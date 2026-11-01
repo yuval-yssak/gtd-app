@@ -2,7 +2,7 @@ import type { Page } from '@playwright/test';
 import { expect, test } from '@playwright/test';
 import { resetServerForEmails, withOneLoggedInDevice, withTwoLoggedInDevices } from './helpers/context';
 import { API_URL, CLIENT_URL } from './helpers/env';
-import { gtd } from './helpers/gtd';
+import { evaluateWithHarness, gtd } from './helpers/gtd';
 import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Settings → Connected devices: list every device syncing this account, rename, and remove one.
@@ -35,15 +35,19 @@ function fetchReportedBuilds(page: Page): Promise<(string | undefined)[]> {
 
 /** True when the server has a deviceSyncState row for this page's device. */
 function isDeviceRegisteredOnServer(page: Page): Promise<boolean> {
-    return page.evaluate(async (apiUrl) => {
-        const harness = (window as unknown as { __gtd: { getDeviceId(): Promise<string> } }).__gtd;
-        const deviceId = await harness.getDeviceId();
-        const res = await fetch(`${apiUrl}/sync/device-status?deviceId=${encodeURIComponent(deviceId)}`, { credentials: 'include' });
-        if (!res.ok) {
-            throw new Error(`device-status ${res.status}`);
-        }
-        return ((await res.json()) as { registered: boolean }).registered;
-    }, API_URL);
+    return evaluateWithHarness(
+        page,
+        async (apiUrl) => {
+            const harness = (window as unknown as { __gtd: { getDeviceId(): Promise<string> } }).__gtd;
+            const deviceId = await harness.getDeviceId();
+            const res = await fetch(`${apiUrl}/sync/device-status?deviceId=${encodeURIComponent(deviceId)}`, { credentials: 'include' });
+            if (!res.ok) {
+                throw new Error(`device-status ${res.status}`);
+            }
+            return ((await res.json()) as { registered: boolean }).registered;
+        },
+        API_URL,
+    );
 }
 
 test.describe('Connected devices (settings)', () => {

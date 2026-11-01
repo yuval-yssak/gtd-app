@@ -104,14 +104,12 @@ test.describe('clarify inbox item to routine', () => {
             await page.getByTestId('undoSnackbarButton').click();
             await expect(snackbar).toBeHidden();
 
+            // The undo is a transition: the snackbar leaves before its IDB writes land, so poll.
+            await expect.poll(() => gtd.listRoutines(page)).toHaveLength(0);
+            await expect
+                .poll(async () => (await gtd.listItems(page)).map((i) => ({ _id: i._id, status: i.status })))
+                .toEqual([{ _id: inbox._id, status: 'inbox' }]);
             await gtd.flush(page);
-            expect(await gtd.listRoutines(page)).toHaveLength(0);
-            const items = await gtd.listItems(page);
-            expect(items).toHaveLength(1);
-            const [restored] = items;
-            if (!restored) throw new Error('expected the restored inbox item');
-            expect(restored._id).toBe(inbox._id);
-            expect(restored.status).toBe('inbox');
         });
     });
 

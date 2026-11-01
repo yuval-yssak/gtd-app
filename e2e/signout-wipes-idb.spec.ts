@@ -1,6 +1,7 @@
 import { expect, type Page, test } from '@playwright/test';
 import { withOneLoggedInDevice } from './helpers/context';
 import { CLIENT_URL } from './helpers/env';
+import { evaluateWithHarness } from './helpers/gtd';
 import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Verifies that signing out wipes the previous user's IDB rows so the next user on the same
@@ -19,41 +20,45 @@ interface IdbCounts {
 }
 
 async function readUserIdbCounts(page: Page, userId: string): Promise<IdbCounts> {
-    return page.evaluate(async (uid) => {
-        type Cursor = { userId: string };
-        type Op = { userId: string };
-        type Harness = {
-            db: {
-                getAllFromIndex(store: 'items' | 'routines' | 'people' | 'workContexts', index: 'userId', key: string): Promise<unknown[]>;
-                get(store: 'syncCursors', key: string): Promise<Cursor | undefined>;
-                get(store: 'deviceMeta', key: 'local'): Promise<unknown>;
-                getAll(store: 'syncOperations'): Promise<Op[]>;
+    return evaluateWithHarness(
+        page,
+        async (uid) => {
+            type Cursor = { userId: string };
+            type Op = { userId: string };
+            type Harness = {
+                db: {
+                    getAllFromIndex(store: 'items' | 'routines' | 'people' | 'workContexts', index: 'userId', key: string): Promise<unknown[]>;
+                    get(store: 'syncCursors', key: string): Promise<Cursor | undefined>;
+                    get(store: 'deviceMeta', key: 'local'): Promise<unknown>;
+                    getAll(store: 'syncOperations'): Promise<Op[]>;
+                };
             };
-        };
-        const harness = (window as unknown as { __gtd: Harness }).__gtd;
-        const [items, routines, people, workContexts, syncCursor, syncOps, deviceMeta] = await Promise.all([
-            harness.db.getAllFromIndex('items', 'userId', uid),
-            harness.db.getAllFromIndex('routines', 'userId', uid),
-            harness.db.getAllFromIndex('people', 'userId', uid),
-            harness.db.getAllFromIndex('workContexts', 'userId', uid),
-            harness.db.get('syncCursors', uid),
-            harness.db.getAll('syncOperations'),
-            harness.db.get('deviceMeta', 'local'),
-        ]);
-        return {
-            items: items.length,
-            routines: routines.length,
-            people: people.length,
-            workContexts: workContexts.length,
-            syncCursorPresent: syncCursor !== undefined,
-            syncOps: syncOps.filter((o) => o.userId === uid).length,
-            deviceMetaPresent: deviceMeta !== undefined,
-        };
-    }, userId);
+            const harness = (window as unknown as { __gtd: Harness }).__gtd;
+            const [items, routines, people, workContexts, syncCursor, syncOps, deviceMeta] = await Promise.all([
+                harness.db.getAllFromIndex('items', 'userId', uid),
+                harness.db.getAllFromIndex('routines', 'userId', uid),
+                harness.db.getAllFromIndex('people', 'userId', uid),
+                harness.db.getAllFromIndex('workContexts', 'userId', uid),
+                harness.db.get('syncCursors', uid),
+                harness.db.getAll('syncOperations'),
+                harness.db.get('deviceMeta', 'local'),
+            ]);
+            return {
+                items: items.length,
+                routines: routines.length,
+                people: people.length,
+                workContexts: workContexts.length,
+                syncCursorPresent: syncCursor !== undefined,
+                syncOps: syncOps.filter((o) => o.userId === uid).length,
+                deviceMetaPresent: deviceMeta !== undefined,
+            };
+        },
+        userId,
+    );
 }
 
 async function readActiveAccountId(page: Page): Promise<string> {
-    const id = await page.evaluate(() => {
+    const id = await evaluateWithHarness(page, () => {
         type Harness = { getActiveAccountId(): Promise<string | null> };
         return (window as unknown as { __gtd: Harness }).__gtd.getActiveAccountId();
     });
@@ -73,9 +78,6 @@ test.describe("sign-out wipes the previous user's IDB rows", () => {
         const email = `signout-wipe-${uniqueStamp()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             await page.goto(`${CLIENT_URL}/inbox`);
-            // mountDevTools runs after an async openAppDB in main.tsx — page.goto resolves on the
-            // `load` event and can race the harness mount, leaving window.__gtd briefly undefined.
-            await page.waitForFunction(() => typeof (window as unknown as { __gtd?: unknown }).__gtd !== 'undefined');
             const userId = await readActiveAccountId(page);
 
             // Seed entities under this user via the dev harness so we have something to wipe.

@@ -2,6 +2,14 @@ import * as path from 'node:path';
 import { defineConfig } from '@playwright/test';
 import { API_URL, CLIENT_URL, E2E_API_PORT, E2E_CLIENT_OUT_DIR, E2E_CLIENT_PORT } from './helpers/env';
 
+/** `GTD_E2E_WORKERS` as Playwright takes it: a count (`6`) or a share of the cores (`50%`). */
+function parseWorkers(override: string | undefined) {
+    if (!override) {
+        return '75%';
+    }
+    return override.endsWith('%') ? override : Number(override);
+}
+
 export default defineConfig({
     testDir: '.', // config lives in e2e/ — tests are in the same directory
     // Builds the MCP packages once before any worker starts (see global-setup.ts). Lives in
@@ -11,17 +19,30 @@ export default defineConfig({
     timeout: 30_000,
     // No retries: a test that passes only on a second attempt is flaky, and a retry would hide it.
     retries: 0,
-    // Cap workers well below Playwright's default (≈half the 12 cores = 6). The stop-hook runs this
-    // e2e suite IN PARALLEL with the client + api-server vitest suites (each with its own worker pool)
-    // against one local Mongo, often alongside the developer's own Chrome; 6 browsers on top of that
-    // oversubscribed the machine and starved operations past their timeouts. 2 keeps each browser
-    // adequately fed under that concurrent load while still parallelising e2e.
-    workers: 2,
+    // 75% of the cores (9 on the 12-core Mac). The suite is CPU-bound in the browsers — the API sits
+    // near a quarter of one core and Mongo at a tenth while Chromium takes the rest — so more workers
+    // only stretch each test: at 12 the wall time drops a little further but post-action polls start
+    // timing out. Measured 2026-10-30 on 556 tests: 6 workers 3.1 min, 9 workers 2.4 min, 12 workers
+    // 2.1 min with failures. The stop hook passes --workers=2 itself (it runs beside the vitest suites).
+    workers: parseWorkers(process.env.GTD_E2E_WORKERS),
+    // Tests of one file spread across workers. Per-file scheduling left 8 of 9 workers idle for the
+    // last 50–66s of every run while one worker finished a 23-test file alone.
+    fullyParallel: true,
     use: {
         baseURL: CLIENT_URL,
-        // Each test file gets fresh contexts — no shared browser state
-        trace: 'retain-on-failure',
-        video: 'retain-on-failure',
+        // Each test gets fresh contexts — no shared browser state.
+        // Both recorders stay off: on a 133-test subset the suite cost 259 CPU-seconds with neither,
+        // 415 with the trace alone and 569 with trace + video, and the run is CPU-bound. A failure
+        // still gets its ARIA snapshot (error-context.md); for a trace, rerun the spec with
+        // GTD_E2E_TRACE=1.
+        trace: process.env.GTD_E2E_TRACE === '1' ? 'retain-on-failure' : 'off',
+        video: 'off',
+        // A fresh context would otherwise install the PWA's service worker, which precaches the whole
+        // bundle (~200 requests, 4 MB) — about 0.8 CPU-seconds per context across Chromium and the
+        // preview server, for ~650 contexts a run. No spec needs it: the offline specs never reload
+        // while offline (the e2e shell is not served from the cache) and push registration is seeded
+        // server-side. A spec that does need it opts back in with `test.use({ serviceWorkers: 'allow' })`.
+        serviceWorkers: 'block',
     },
     // The e2e stack always starts its own API and client on dedicated ports (helpers/env.ts) and never
     // reuses a running server: a developer's dev server on 4000/4173 keeps ITS environment and may run

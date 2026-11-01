@@ -1,7 +1,7 @@
 import { expect, type Page, test } from '@playwright/test';
 import { withOneLoggedInDevice } from './helpers/context';
 import { CLIENT_URL } from './helpers/env';
-import { gtd } from './helpers/gtd';
+import { evaluateWithHarness, gtd } from './helpers/gtd';
 import { uniqueStamp } from './helpers/uniqueStamp';
 
 // E2E coverage for the blocking account-reauth dialog. When the sync orchestrator flags an
@@ -118,9 +118,13 @@ test.describe('account reauth dialog', () => {
             // Drive the SAME call auth.callback makes after a successful OAuth re-login in the
             // first tab. The cross-tab storage broadcast must clear the second tab's dialog AND
             // banner without a reload — and the first tab's own dialog clears synchronously.
-            await page.evaluate((id) => {
-                (window as unknown as { __gtd: { announceReauthResolved(userId: string): void } }).__gtd.announceReauthResolved(id);
-            }, userId);
+            await evaluateWithHarness(
+                page,
+                (id) => {
+                    (window as unknown as { __gtd: { announceReauthResolved(userId: string): void } }).__gtd.announceReauthResolved(id);
+                },
+                userId,
+            );
 
             await expect(page.getByTestId('accountReauthDialog')).not.toBeVisible();
             await expect(secondTab.getByTestId('accountReauthDialog')).not.toBeVisible();

@@ -18,6 +18,11 @@
  * width, so those gutters scroll the review content too. It must stay a SIBLING of the pinned
  * action bar (not an ancestor), or the bar would scroll away with the content. */
 .cardScroller {
+    /* Containing block for absolutely positioned descendants — the `.srOnly` spans in the card
+       (Position row text) are `position: absolute`. Without a positioned scrollport they resolve
+       against the document: laid out below the fold they grow the page's scroll height, which the
+       pinned bar then scrolls away with (the "nothing outside the stage scrolls" rule). */
+    position: relative;
     flex: 1;
     min-block-size: 0;
     inline-size: 100%;
@@ -43,6 +48,7 @@
  * Scrolls for the same reason as .cardScroller: it spans the full column width, so a wheel in the
  * gutters beside a centered card still scrolls. */
 .centeredArea {
+    position: relative; /* same containment as .cardScroller */
     flex: 1;
     min-block-size: 0;
     inline-size: 100%;

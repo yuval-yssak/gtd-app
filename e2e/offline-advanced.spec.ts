@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { withOneLoggedInDevice, withTwoLoggedInDevices } from './helpers/context';
-import { gtd } from './helpers/gtd';
+import { evaluateWithHarness, gtd } from './helpers/gtd';
 import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Advanced offline scenarios: multi-entity offline mutations and offline conflict resolution.
@@ -27,7 +27,7 @@ test.describe('offline advanced', () => {
             // Reconnect — all ops should flush together
             await page.context().setOffline(false);
 
-            await page.evaluate(async () => {
+            await evaluateWithHarness(page, async () => {
                 type Harness = { queuedOps(): Promise<unknown[]> };
                 const harness = (window as unknown as { __gtd: Harness }).__gtd;
                 const deadline = Date.now() + 15_000;
@@ -75,7 +75,7 @@ test.describe('offline advanced', () => {
             await page1.context().setOffline(false);
 
             // Wait for queue drain
-            await page1.evaluate(async () => {
+            await evaluateWithHarness(page1, async () => {
                 type Harness = { queuedOps(): Promise<unknown[]> };
                 const harness = (window as unknown as { __gtd: Harness }).__gtd;
                 const deadline = Date.now() + 15_000;

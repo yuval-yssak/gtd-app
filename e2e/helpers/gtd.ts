@@ -27,6 +27,19 @@ async function waitForHarness(page: Page): Promise<void> {
     await page.waitForFunction(() => typeof (window as unknown as { __gtd?: unknown }).__gtd !== 'undefined');
 }
 
+/**
+ * `page.evaluate` for inline `window.__gtd` access in a spec: the same harness wait as the Proxy
+ * below, for code the Proxy cannot wrap. Matters after every full-page navigation (reload, the
+ * sign-out redirect, an account switch): a bare evaluate there throws "Cannot read properties of
+ * undefined", and an `expect.poll` callback that throws fails outright instead of retrying.
+ */
+export async function evaluateWithHarness<R, Arg>(page: Page, pageFunction: (arg: Arg) => R | Promise<R>, arg: Arg): Promise<R>;
+export async function evaluateWithHarness<R>(page: Page, pageFunction: () => R | Promise<R>): Promise<R>;
+export async function evaluateWithHarness(page: Page, pageFunction: (arg: unknown) => unknown, arg?: unknown): Promise<unknown> {
+    await waitForHarness(page);
+    return page.evaluate(pageFunction, arg);
+}
+
 // Typed wrappers around window.__gtd.* that hide the page.evaluate() boilerplate.
 // All functions accept a Page as the first argument and run the corresponding __gtd
 // method in the browser context, returning a typed result.

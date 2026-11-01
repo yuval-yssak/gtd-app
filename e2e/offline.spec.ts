@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { withOneLoggedInDevice, withTwoLoggedInDevices } from './helpers/context';
-import { gtd } from './helpers/gtd';
+import { evaluateWithHarness, gtd } from './helpers/gtd';
 import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Uses Playwright's context.setOffline() to simulate network loss.
@@ -30,7 +30,7 @@ test.describe('offline behaviour', () => {
             // evaluate() with an inline loop is required here: waitForFunction() resolves as soon
             // as the predicate is truthy, but a Promise is always truthy, so it would return
             // immediately without awaiting the IDB read (same caveat as waitForItemByIdOnDevice).
-            await page1.evaluate(async () => {
+            await evaluateWithHarness(page1, async () => {
                 type Harness = { queuedOps(): Promise<unknown[]> };
                 const harness = (window as unknown as { __gtd: Harness }).__gtd;
                 // Date.now() is intentional — this closure runs in the browser context where dayjs is unavailable.

@@ -2,7 +2,7 @@ import type { Page } from '@playwright/test';
 import { expect, test } from '@playwright/test';
 import { closeContextQuietly, withOneLoggedInDevice, withTwoAccountsOnOneDevice } from './helpers/context';
 import { API_URL, CLIENT_URL } from './helpers/env';
-import { gtd } from './helpers/gtd';
+import { evaluateWithHarness, gtd } from './helpers/gtd';
 import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Dev-only endpoints exercised here:
@@ -73,21 +73,25 @@ async function waitForDeviceUserRowGone(deviceId: string, userId: string): Promi
 // reach into Better Auth internals. signOutCurrent() handles the deviceUsers cleanup.
 async function signOutCurrentInPage(page: Page): Promise<void> {
     // The callback runs in the browser, so the API URL travels in as an argument.
-    await page.evaluate(async (apiServer) => {
-        // Run the sign-out path used by the production sign-out menu — it calls /devices/signout
-        // before authClient.signOut, exactly the order the production code uses.
-        type IDBDatabase = { get(store: string, key: string): Promise<{ deviceId: string } | undefined> };
-        const dbHandle = (window as unknown as { __gtd: { db: IDBDatabase } }).__gtd.db;
-        // Post-v4 the device identity lives in `deviceMeta` (split from per-user `syncCursors`).
-        const meta = await dbHandle.get('deviceMeta', 'local');
-        const deviceId = meta?.deviceId;
-        await fetch(`${apiServer}/devices/signout`, {
-            method: 'POST',
-            credentials: 'include',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ deviceId }),
-        });
-    }, API_URL);
+    await evaluateWithHarness(
+        page,
+        async (apiServer) => {
+            // Run the sign-out path used by the production sign-out menu — it calls /devices/signout
+            // before authClient.signOut, exactly the order the production code uses.
+            type IDBDatabase = { get(store: string, key: string): Promise<{ deviceId: string } | undefined> };
+            const dbHandle = (window as unknown as { __gtd: { db: IDBDatabase } }).__gtd.db;
+            // Post-v4 the device identity lives in `deviceMeta` (split from per-user `syncCursors`).
+            const meta = await dbHandle.get('deviceMeta', 'local');
+            const deviceId = meta?.deviceId;
+            await fetch(`${apiServer}/devices/signout`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ deviceId }),
+            });
+        },
+        API_URL,
+    );
 }
 
 test.describe('deviceUsers join — single account', () => {
@@ -166,7 +170,8 @@ test.describe('deviceUsers join — multi-account', () => {
             page.on('console', (message) => {
                 if (message.text().includes('session gate task exceeded')) gateTimeouts.push(message.text());
             });
-            await page.evaluate(
+            await evaluateWithHarness(
+                page,
                 async ({ rawToken, apiUrl }) => {
                     type Harness = { withSessionGate(task: () => Promise<void>): Promise<void> };
                     const pageWindow = window as unknown as { __gtd: Harness; __releaseSpecSessionGate?: () => void };

@@ -4,7 +4,7 @@ import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { API_URL } from './helpers/env';
-import { gtd } from './helpers/gtd';
+import { evaluateWithHarness, gtd } from './helpers/gtd';
 import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Reaped-device recovery flow. When the server's stale-device reaper deletes a device's
@@ -36,15 +36,19 @@ async function reapDevice(page: Page, email: string): Promise<void> {
 
 /** True when the server has a deviceSyncState row for this page's device — i.e. /sync/bootstrap re-registered it. */
 function isDeviceRegisteredOnServer(page: Page): Promise<boolean> {
-    return page.evaluate(async (apiUrl) => {
-        const harness = (window as unknown as { __gtd: { getDeviceId(): Promise<string> } }).__gtd;
-        const deviceId = await harness.getDeviceId();
-        const res = await fetch(`${apiUrl}/sync/device-status?deviceId=${encodeURIComponent(deviceId)}`, { credentials: 'include' });
-        if (!res.ok) {
-            throw new Error(`device-status ${res.status}`);
-        }
-        return ((await res.json()) as { registered: boolean }).registered;
-    }, API_URL);
+    return evaluateWithHarness(
+        page,
+        async (apiUrl) => {
+            const harness = (window as unknown as { __gtd: { getDeviceId(): Promise<string> } }).__gtd;
+            const deviceId = await harness.getDeviceId();
+            const res = await fetch(`${apiUrl}/sync/device-status?deviceId=${encodeURIComponent(deviceId)}`, { credentials: 'include' });
+            if (!res.ok) {
+                throw new Error(`device-status ${res.status}`);
+            }
+            return ((await res.json()) as { registered: boolean }).registered;
+        },
+        API_URL,
+    );
 }
 
 /**

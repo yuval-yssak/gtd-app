@@ -3,43 +3,51 @@ import { expect, test } from '@playwright/test';
 import type { StoredItem } from '../client/src/types/MyDB';
 import { closeContextQuietly, withTwoAccountsOnOneDevice } from './helpers/context';
 import { API_URL } from './helpers/env';
-import { gtd } from './helpers/gtd';
+import { evaluateWithHarness, gtd } from './helpers/gtd';
 import { loginAs } from './helpers/login';
 import { uniqueStamp } from './helpers/uniqueStamp';
 
 const API_SERVER = API_URL;
 
 async function waitForChannelCount(page: Page, expected: number): Promise<string[]> {
-    return page.evaluate(async (target) => {
-        type Harness = { sseChannelUserIds(): string[] };
-        const harness = (window as unknown as { __gtd: Harness }).__gtd;
-        const deadline = Date.now() + 10_000;
-        while (Date.now() < deadline) {
-            const ids = harness.sseChannelUserIds();
-            if (ids.length >= target) {
-                return ids;
+    return evaluateWithHarness(
+        page,
+        async (target) => {
+            type Harness = { sseChannelUserIds(): string[] };
+            const harness = (window as unknown as { __gtd: Harness }).__gtd;
+            const deadline = Date.now() + 10_000;
+            while (Date.now() < deadline) {
+                const ids = harness.sseChannelUserIds();
+                if (ids.length >= target) {
+                    return ids;
+                }
+                await new Promise((r) => setTimeout(r, 100));
             }
-            await new Promise((r) => setTimeout(r, 100));
-        }
-        return harness.sseChannelUserIds();
-    }, expected);
+            return harness.sseChannelUserIds();
+        },
+        expected,
+    );
 }
 
 async function waitForItemTitle(page: Page, title: string): Promise<StoredItem> {
-    const found = await page.evaluate(async (t) => {
-        type Harness = { listItems(): Promise<StoredItem[]> };
-        const harness = (window as unknown as { __gtd: Harness }).__gtd;
-        const deadline = Date.now() + 10_000;
-        while (Date.now() < deadline) {
-            const items = await harness.listItems();
-            const match = items.find((i) => i.title === t);
-            if (match) {
-                return match;
+    const found = await evaluateWithHarness(
+        page,
+        async (t) => {
+            type Harness = { listItems(): Promise<StoredItem[]> };
+            const harness = (window as unknown as { __gtd: Harness }).__gtd;
+            const deadline = Date.now() + 10_000;
+            while (Date.now() < deadline) {
+                const items = await harness.listItems();
+                const match = items.find((i) => i.title === t);
+                if (match) {
+                    return match;
+                }
+                await new Promise((r) => setTimeout(r, 200));
             }
-            await new Promise((r) => setTimeout(r, 200));
-        }
-        return null;
-    }, title);
+            return null;
+        },
+        title,
+    );
     if (!found) {
         throw new Error(`Item "${title}" not found on device after 10s`);
     }

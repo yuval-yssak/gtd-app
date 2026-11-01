@@ -167,7 +167,9 @@ test.describe('Weekly review — priority from the card', () => {
             await expect(clarifyTitle).toHaveValue('Newer thought');
             await page.getByTestId('nextActionPositionBottom').click();
             await expect(clarifyTitle).toHaveValue('Older thought');
-            await expect.poll(() => storedOrder(page, 'inbox')).toEqual(['Older thought', 'Newer thought']);
+            // 10s, as the other order polls: the card swaps on the queue state before the rank write
+            // is readable, and a loaded machine stretches that gap past the 5s default.
+            await expect.poll(() => storedOrder(page, 'inbox'), { timeout: 10_000 }).toEqual(['Older thought', 'Newer thought']);
 
             await gtd.flush(page); // the reorder queued an op — never navigate mid-flush
             // A review is in progress: the landing offers to resume it; the URL's stage still wins.

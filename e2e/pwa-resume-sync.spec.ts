@@ -1,7 +1,7 @@
 import type { Page } from '@playwright/test';
 import { expect, test } from '@playwright/test';
 import { withTwoLoggedInDevices } from './helpers/context';
-import { gtd } from './helpers/gtd';
+import { evaluateWithHarness, gtd } from './helpers/gtd';
 import { uniqueStamp } from './helpers/uniqueStamp';
 
 /**
@@ -15,7 +15,7 @@ import { uniqueStamp } from './helpers/uniqueStamp';
 
 /** Simulates the OS foregrounding the app. Both events fire, as iOS does on a real resume. */
 async function simulateAppResume(page: Page): Promise<void> {
-    await page.evaluate(() => {
+    await evaluateWithHarness(page, () => {
         document.dispatchEvent(new Event('visibilitychange'));
         window.dispatchEvent(new Event('pageshow'));
     });
@@ -23,20 +23,24 @@ async function simulateAppResume(page: Page): Promise<void> {
 
 /** Polls the page's IDB for a title, without pulling — the app must sync itself. */
 async function waitForTitleWithoutPulling(page: Page, title: string): Promise<void> {
-    const found = await page.evaluate(async (wanted) => {
-        type Harness = { listItems(): Promise<{ title: string }[]> };
-        const harness = (window as unknown as { __gtd: Harness }).__gtd;
-        // Date.now() is intentional — this closure runs in the browser, where dayjs is unavailable.
-        const deadline = Date.now() + 10_000;
-        while (Date.now() < deadline) {
-            const items = await harness.listItems();
-            if (items.some((i) => i.title === wanted)) {
-                return true;
+    const found = await evaluateWithHarness(
+        page,
+        async (wanted) => {
+            type Harness = { listItems(): Promise<{ title: string }[]> };
+            const harness = (window as unknown as { __gtd: Harness }).__gtd;
+            // Date.now() is intentional — this closure runs in the browser, where dayjs is unavailable.
+            const deadline = Date.now() + 10_000;
+            while (Date.now() < deadline) {
+                const items = await harness.listItems();
+                if (items.some((i) => i.title === wanted)) {
+                    return true;
+                }
+                await new Promise((r) => setTimeout(r, 200));
             }
-            await new Promise((r) => setTimeout(r, 200));
-        }
-        return false;
-    }, title);
+            return false;
+        },
+        title,
+    );
 
     if (!found) {
         throw new Error(`"${title}" never reached device IDB after resume (10s)`);
@@ -49,7 +53,7 @@ test.describe('PWA resume sync', () => {
         await withTwoLoggedInDevices(browser, email, async (page1, page2) => {
             // Device 2 is the "backgrounded phone": sever its live channel so it cannot learn about
             // the change through SSE, which is exactly the state iOS leaves a frozen PWA in.
-            await page2.evaluate(() => {
+            await evaluateWithHarness(page2, () => {
                 const harness = (window as unknown as { __gtd: { closeSse?: () => void } }).__gtd;
                 harness.closeSse?.();
             });
@@ -69,9 +73,11 @@ test.describe('PWA resume sync', () => {
             // A freeze hits a settled app: let the boot open its channel first, or that late open
             // would land after the simulated teardown below.
             await expect
-                .poll(() => page2.evaluate(() => (window as unknown as { __gtd: { sseConnectedUserIds(): string[] } }).__gtd.sseConnectedUserIds().length))
+                .poll(() =>
+                    evaluateWithHarness(page2, () => (window as unknown as { __gtd: { sseConnectedUserIds(): string[] } }).__gtd.sseConnectedUserIds().length),
+                )
                 .toBeGreaterThan(0);
-            await page2.evaluate(() => {
+            await evaluateWithHarness(page2, () => {
                 const harness = (window as unknown as { __gtd: { closeSse?: () => void } }).__gtd;
                 harness.closeSse?.();
             });
@@ -81,7 +87,9 @@ test.describe('PWA resume sync', () => {
 
             // Reconnecting here would race the isOnline effect and churn dead sockets; the resume
             // handler must defer instead.
-            expect(await page2.evaluate(() => (window as unknown as { __gtd: { sseChannelUserIds(): string[] } }).__gtd.sseChannelUserIds())).toEqual([]);
+            expect(
+                await evaluateWithHarness(page2, () => (window as unknown as { __gtd: { sseChannelUserIds(): string[] } }).__gtd.sseChannelUserIds()),
+            ).toEqual([]);
             await page2.context().setOffline(false);
         });
     });
@@ -92,23 +100,29 @@ test.describe('PWA resume sync', () => {
             // A freeze hits a settled app: let the boot open its channel first, or that late open
             // would land after the simulated teardown below.
             await expect
-                .poll(() => page2.evaluate(() => (window as unknown as { __gtd: { sseConnectedUserIds(): string[] } }).__gtd.sseConnectedUserIds().length))
+                .poll(() =>
+                    evaluateWithHarness(page2, () => (window as unknown as { __gtd: { sseConnectedUserIds(): string[] } }).__gtd.sseConnectedUserIds().length),
+                )
                 .toBeGreaterThan(0);
-            await page2.evaluate(() => {
+            await evaluateWithHarness(page2, () => {
                 const harness = (window as unknown as { __gtd: { closeSse?: () => void } }).__gtd;
                 harness.closeSse?.();
             });
             await expect
-                .poll(() => page2.evaluate(() => (window as unknown as { __gtd: { sseChannelUserIds(): string[] } }).__gtd.sseChannelUserIds()))
+                .poll(() => evaluateWithHarness(page2, () => (window as unknown as { __gtd: { sseChannelUserIds(): string[] } }).__gtd.sseChannelUserIds()))
                 .toEqual([]);
 
             await simulateAppResume(page2);
 
             // Reconnect is async (it awaits the deviceId read), so poll rather than assert once.
             await expect
-                .poll(() => page2.evaluate(() => (window as unknown as { __gtd: { sseChannelUserIds(): string[] } }).__gtd.sseChannelUserIds().length), {
-                    timeout: 10_000,
-                })
+                .poll(
+                    () =>
+                        evaluateWithHarness(page2, () => (window as unknown as { __gtd: { sseChannelUserIds(): string[] } }).__gtd.sseChannelUserIds().length),
+                    {
+                        timeout: 10_000,
+                    },
+                )
                 .toBeGreaterThan(0);
         });
     });

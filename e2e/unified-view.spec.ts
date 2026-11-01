@@ -1,7 +1,7 @@
 import { expect, type Page, test } from '@playwright/test';
 import { withTwoAccountsOnOneDevice } from './helpers/context';
 import { API_URL, CLIENT_URL } from './helpers/env';
-import { gtd } from './helpers/gtd';
+import { evaluateWithHarness, gtd } from './helpers/gtd';
 import { uniqueStamp } from './helpers/uniqueStamp';
 
 // E2E coverage for Step 3 of the multi-account calendar plan: the unified view that pulls
@@ -20,7 +20,8 @@ const DEV_SEED_CALENDAR_URL = `${API_URL}/dev/calendar/seed-integration`;
  * doesn't force us to pivot Better Auth sessions just to materialize a row in IDB.
  */
 async function seedItemForUser(page: Page, userId: string, title: string): Promise<string> {
-    return page.evaluate(
+    return evaluateWithHarness(
+        page,
         ({ userId, title }) => {
             // Inline IDB-row shape so we don't have to import types into the page context.
             type IDBItem = { _id: string; userId: string; status: string; title: string; createdTs: string; updatedTs: string };
@@ -105,7 +106,8 @@ test.describe('unified view — items + AccountChips', () => {
             // and resurrects the row.
             // Inside the app's session gate: the page's own sync pass pivots the cookie onto the
             // secondary to sync it, and a revoke landing mid-pivot loses the ACTIVE session too.
-            await page.evaluate(
+            await evaluateWithHarness(
+                page,
                 async ({ rawToken, uid, apiUrl }) => {
                     type DBHandle = { delete(store: 'accounts', key: string): Promise<unknown> };
                     type Harness = { db: DBHandle; withSessionGate(task: () => Promise<void>): Promise<void> };

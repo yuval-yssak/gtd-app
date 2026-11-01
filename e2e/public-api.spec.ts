@@ -1,6 +1,7 @@
 import { type APIRequestContext, type Browser, type BrowserContext, expect, test } from '@playwright/test';
 import { resetServerForEmails, withOneLoggedInDevice } from './helpers/context';
 import { API_URL } from './helpers/env';
+import { evaluateWithHarness } from './helpers/gtd';
 import { uniqueStamp } from './helpers/uniqueStamp';
 
 /**
@@ -121,7 +122,8 @@ test.describe('public /v1 API', () => {
                 await sseUpdatePromise;
 
                 // Now assert IDB caught up — this is the end-to-end pipeline assertion.
-                await page.evaluate(
+                await evaluateWithHarness(
+                    page,
                     async (ids) => {
                         type Harness = { listItems(): Promise<Array<{ _id: string }>> };
                         const harness = (window as unknown as { __gtd: Harness }).__gtd;

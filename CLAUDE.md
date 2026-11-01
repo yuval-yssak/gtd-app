@@ -56,18 +56,20 @@ npm run storybook                    # Storybook on port 6006
 
 ### E2E (`cd e2e`)
 ```bash
-npm run test                    # Full Playwright suite (slow)
+npm run test                    # Full Playwright suite (~2.5 min at 9 workers)
 npx playwright test <spec>      # Single spec — the inner loop
 npm run lint:fix                # Biome format + lint
 npm run typecheck               # tsrs --noEmit (specs + the client modules they import)
 npm run cleanup-e2e-seeds       # Drop calendar integrations leaked by /dev/calendar/seed-integration (mongosh, reads api-server/.env)
 ```
 
-The e2e stack runs on **its own ports** — API `4100`, client `4273` (`e2e/helpers/env.ts`; override with `GTD_E2E_API_PORT` / `GTD_E2E_CLIENT_PORT` to run two worktrees side by side) — and Playwright always starts both itself (`reuseExistingServer: false`), so your dev servers on 4000/4173 are never touched or reused. The API runs with `TZ=UTC BRIEF_FAKE_MODEL=1`; the client is a `vite build` into `client/dist-e2e` against the e2e API, then `vite preview`. A port already taken fails the run loudly. Specs reach the stack through `API_URL` / `CLIENT_URL` from `helpers/env.ts` — never a hardcoded port; code inside `page.evaluate` runs in the browser and takes the URL as an argument. `global-setup.ts` builds `tools/mcp-gtd` and `mcp-server` once before workers spawn. `retries: 0` — a test that only passes on a retry is flaky and must be fixed. Prove a fix with `--repeat-each=N --workers=4`; test emails and timestamp-derived seeded ids take `uniqueStamp()` (`helpers/uniqueStamp.ts`), because a bare `dayjs().valueOf()` collides when repeats start in the same millisecond and two runs then share one user's data (or one id).
+The e2e stack runs on **its own ports** — API `4100`, client `4273` (`e2e/helpers/env.ts`; override with `GTD_E2E_API_PORT` / `GTD_E2E_CLIENT_PORT` to run two worktrees side by side) — and Playwright always starts both itself (`reuseExistingServer: false`), so your dev servers on 4000/4173 are never touched or reused. The API runs with `TZ=UTC BRIEF_FAKE_MODEL=1`; the client is a `vite build` into `client/dist-e2e` against the e2e API, then `vite preview`. A port already taken fails the run loudly. Specs reach the stack through `API_URL` / `CLIENT_URL` from `helpers/env.ts` — never a hardcoded port; code inside `page.evaluate` runs in the browser and takes the URL as an argument. `global-setup.ts` builds `tools/mcp-gtd` and `mcp-server` once before workers spawn. The config runs `75%` of the cores (9 on the 12-core Mac) with `fullyParallel`; the suite is CPU-bound in the browsers, so the knobs that matter are per-test browser work: the service worker is blocked for every context (no spec needs it — opt back in per spec with `test.use({ serviceWorkers: 'allow' })`), and trace/video recording is off (`GTD_E2E_TRACE=1` turns the trace back on for a failing spec; `GTD_E2E_WORKERS=N` overrides the worker count). The stop hook pins its own runs to `--workers=2` because it shares the machine with the two vitest suites. `retries: 0` — a test that only passes on a retry is flaky and must be fixed. Prove a fix with `--repeat-each=N --workers=12` (a 12-browser thrash reproduces load-only races a quiet 9-worker run hides); test emails and timestamp-derived seeded ids take `uniqueStamp()` (`helpers/uniqueStamp.ts`), because a bare `dayjs().valueOf()` collides when repeats start in the same millisecond and two runs then share one user's data (or one id).
 
 Manual Google Calendar smoke-test plans (one Claude session per case, driven through Chrome) live under `e2e/gcal-sync-smoke/`; `CONTINUE_HERE.md` at the root is their index.
 
 **Always `await gtd.flush()` before `page.goto()`** after a `gtd.*` mutation — navigating mid-flush wedges the IndexedDB flush lock for 30s.
+
+**Inline `window.__gtd` access goes through `evaluateWithHarness(page, …)`** (`helpers/gtd.ts`), never a bare `page.evaluate`: after a reload or a sign-out redirect the `load` event fires before `mountDevTools`, and a bare evaluate in that window throws instead of waiting — an `expect.poll` callback that throws fails outright. The `gtd.*` helpers already wait through their Proxy.
 
 If e2e cannot start because 4100 or 4273 is taken, an earlier run left a server behind (or another worktree's suite is running): stop it, or set the port variables above.
 

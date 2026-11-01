@@ -2,6 +2,7 @@ import { expect, type Page, test } from '@playwright/test';
 import type { StoredDraft, StoredInboxCaptureDraft } from '../client/src/types/MyDB';
 import { withOneLoggedInDevice } from './helpers/context';
 import { CLIENT_URL } from './helpers/env';
+import { evaluateWithHarness } from './helpers/gtd';
 import { uniqueStamp } from './helpers/uniqueStamp';
 
 const NOTES_EDITOR_NAME = 'Notes (Markdown)';
@@ -9,7 +10,7 @@ const NOTES_EDITOR_NAME = 'Notes (Markdown)';
 // Reads the drafts store through the dev-tools harness so the specs can wait for the debounced
 // IDB write deterministically instead of sleeping past the debounce interval.
 async function readInboxDrafts(page: Page) {
-    const drafts = await page.evaluate(() =>
+    const drafts = await evaluateWithHarness(page, () =>
         (window as unknown as { __gtd: { db: { getAll(store: 'drafts'): Promise<StoredDraft[]> } } }).__gtd.db.getAll('drafts'),
     );
     return drafts.filter((draft): draft is StoredInboxCaptureDraft => draft.kind === 'inboxCapture');

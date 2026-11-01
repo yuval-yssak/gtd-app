@@ -411,15 +411,17 @@ test.describe('Next actions — keyboard (one tab stop, jumps, preview order)', 
             await rowOf(page, 'Water plants').focus();
             await page.keyboard.press('d');
             await page.keyboard.press('d');
-            await expect.poll(async () => (await gtd.listItems(page)).filter((i) => i.routineId === routine._id && i.status === 'done')).toHaveLength(1);
-            await gtd.flush(page);
-            const open = (await gtd.listItems(page)).filter((i) => i.routineId === routine._id && i.status === 'nextAction');
-            expect(open).toHaveLength(1);
-            // The ghost row offers no Edit / Done / Move to.
+            // The ghost row offers no Edit / Done / Move to. Asserted FIRST: a ghost lingers only
+            // ~900ms (ListRowShell's linger + collapse) and the IDB polls + flush below outlive it
+            // on a loaded machine.
             const ghost = page.getByTestId('ghostListRow');
             await expect(ghost).toHaveCount(1);
             await expect(ghost.getByTestId('nextActionItemDoneButton')).toHaveCount(0);
             await expect(ghost.getByTestId('nextActionItemEditButton')).toHaveCount(0);
+            await expect.poll(async () => (await gtd.listItems(page)).filter((i) => i.routineId === routine._id && i.status === 'done')).toHaveLength(1);
+            await gtd.flush(page);
+            const open = (await gtd.listItems(page)).filter((i) => i.routineId === routine._id && i.status === 'nextAction');
+            expect(open).toHaveLength(1);
         });
     });
 

@@ -1,4 +1,5 @@
 import type { Page } from '@playwright/test';
+import { evaluateWithHarness } from './gtd';
 
 // Direct-IDB seeding for multi-account specs: rows are written under an arbitrary userId via the
 // window.__gtd dev harness, bypassing the active-account-based `__gtd.collect` path so specs
@@ -6,7 +7,8 @@ import type { Page } from '@playwright/test';
 
 /** Seeds a StoredWorkContext directly into the device's IDB under the supplied userId. */
 export async function seedWorkContextForUser(page: Page, userId: string, name: string): Promise<string> {
-    return page.evaluate(
+    return evaluateWithHarness(
+        page,
         ({ userId, name }) => {
             type IDBWorkContext = { _id: string; userId: string; name: string; createdTs: string; updatedTs: string };
             type DBHandle = { put(store: 'workContexts', value: IDBWorkContext): Promise<unknown> };
@@ -21,7 +23,8 @@ export async function seedWorkContextForUser(page: Page, userId: string, name: s
 
 /** Seeds a StoredPerson directly into the device's IDB under the supplied userId. */
 export async function seedPersonForUser(page: Page, userId: string, name: string): Promise<string> {
-    return page.evaluate(
+    return evaluateWithHarness(
+        page,
         ({ userId, name }) => {
             type IDBPerson = { _id: string; userId: string; name: string; createdTs: string; updatedTs: string };
             type DBHandle = { put(store: 'people', value: IDBPerson): Promise<unknown> };
@@ -36,7 +39,8 @@ export async function seedPersonForUser(page: Page, userId: string, name: string
 
 /** Seeds a nextAction StoredItem directly into IDB, optionally pre-tagged with work contexts. */
 export async function seedNextActionForUser(page: Page, userId: string, title: string, workContextIds: string[] = []): Promise<string> {
-    return page.evaluate(
+    return evaluateWithHarness(
+        page,
         ({ userId, title, workContextIds }) => {
             type IDBItem = { _id: string; userId: string; status: string; title: string; createdTs: string; updatedTs: string; workContextIds?: string[] };
             type DBHandle = { put(store: 'items', value: IDBItem): Promise<unknown> };
@@ -55,7 +59,8 @@ export async function seedNextActionForUser(page: Page, userId: string, title: s
 
 /** Seeds a waitingFor StoredItem directly into IDB, blocked on the supplied person. */
 export async function seedWaitingForForUser(page: Page, userId: string, title: string, waitingForPersonId: string): Promise<string> {
-    return page.evaluate(
+    return evaluateWithHarness(
+        page,
         ({ userId, title, waitingForPersonId }) => {
             type IDBItem = { _id: string; userId: string; status: string; title: string; createdTs: string; updatedTs: string; waitingForPersonId: string };
             type DBHandle = { put(store: 'items', value: IDBItem): Promise<unknown> };
@@ -70,7 +75,8 @@ export async function seedWaitingForForUser(page: Page, userId: string, title: s
 
 /** Seeds a minimal nextAction StoredRoutine directly into IDB under the supplied userId. */
 export async function seedRoutineForUser(page: Page, userId: string, title: string): Promise<string> {
-    return page.evaluate(
+    return evaluateWithHarness(
+        page,
         ({ userId, title }) => {
             type IDBRoutine = {
                 _id: string;

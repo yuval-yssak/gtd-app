@@ -1,13 +1,15 @@
 import { expect, type Page, test } from '@playwright/test';
 import type { StoredDraft } from '../client/src/types/MyDB';
 import { withOneLoggedInDevice } from './helpers/context';
-import { gtd } from './helpers/gtd';
+import { evaluateWithHarness, gtd } from './helpers/gtd';
 import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Reads the drafts store through the dev-tools harness so specs can wait for the debounced IDB
 // write deterministically instead of sleeping past the debounce interval.
 function readDrafts(page: Page): Promise<StoredDraft[]> {
-    return page.evaluate(() => (window as unknown as { __gtd: { db: { getAll(store: 'drafts'): Promise<StoredDraft[]> } } }).__gtd.db.getAll('drafts'));
+    return evaluateWithHarness(page, () =>
+        (window as unknown as { __gtd: { db: { getAll(store: 'drafts'): Promise<StoredDraft[]> } } }).__gtd.db.getAll('drafts'),
+    );
 }
 
 // Global quick capture: a FAB on every authenticated page plus the "c" keyboard shortcut, both

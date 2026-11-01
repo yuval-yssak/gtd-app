@@ -2,7 +2,7 @@ import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import type { ReviewStageId } from '../client/src/components/weeklyReview/reviewFlowState';
 import { resetServerForEmails, withOneLoggedInDevice, withTwoAccountsOnOneDevice } from './helpers/context';
-import { gtd } from './helpers/gtd';
+import { evaluateWithHarness, gtd } from './helpers/gtd';
 import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Weekly Review wizard: guided multi-step flow — inbox checklist (seeded user-defined external
@@ -232,6 +232,11 @@ test.describe('weekly review', () => {
         browser,
     }) => {
         await withOneLoggedInDevice(browser, `wr-pinned-${uniqueStamp()}@example.com`, async (page) => {
+            // 640 tall (not the 720 default): the long item's card is ~660px, so at 720 its compact
+            // Position row — whose sr-only text is absolutely positioned — lands right on the fold
+            // and only a slower render (fallback font metrics on a loaded machine) pushed it past.
+            // Below the fold on every machine, the row discriminates the scrollport containment.
+            await page.setViewportSize({ width: 1280, height: 640 });
             // One item long enough to force internal scrolling, one short — the action bar must
             // not move between them, and the page itself must never scroll.
             const longNotes = Array.from({ length: 120 }, (_, i) => `Note line ${i + 1}`).join('\n\n');
@@ -258,6 +263,20 @@ test.describe('weekly review', () => {
                     const scroller = stage.querySelector('[data-testid="stageCardScroller"]');
                     return scroller ? scroller.scrollHeight - scroller.clientHeight : -1;
                 });
+            // NOTHING outside the stage area scrolls — neither the layout container nor the document
+            // (the document is what a stray element laid out below the fold would grow: a de-fixed
+            // FAB, or an absolutely positioned sr-only span whose containing block escaped the
+            // scrollport). Checked on BOTH items, because only the long one pushes such an element
+            // below the fold.
+            const expectNothingOutsideTheStageScrolls = async () => {
+                const mainOverflow = await page.evaluate(() => {
+                    const main = document.querySelector('main');
+                    return main ? main.scrollHeight - main.clientHeight : -1;
+                });
+                expect(mainOverflow).toBeLessThanOrEqual(1);
+                const docOverflow = await page.evaluate(() => document.documentElement.scrollHeight - document.documentElement.clientHeight);
+                expect(docOverflow).toBeLessThanOrEqual(1);
+            };
 
             // Item 1: primary button fully visible with zero scrolling, and living in the pinned
             // bar — NOT inside the scrolling stage area (pins the portal destination).
@@ -268,6 +287,7 @@ test.describe('weekly review', () => {
             if (!barOnFirstItem) throw new Error('expected the action bar to render');
             expect(barOnFirstItem.y + barOnFirstItem.height).toBeLessThanOrEqual(viewport.height);
             const firstItemOverflow = await stageScrollOverflow();
+            await expectNothingOutsideTheStageScrolls();
             // Portal ordering: portaled actions land in the content slot, LEFT of the ⏩ travel
             // arrow — a revert to portaling into the bar element itself would append them after it.
             const keepBox = await page.getByTestId('focusKeep').boundingBox();
@@ -290,15 +310,7 @@ test.describe('weekly review', () => {
             // Discrimination guard: the long item genuinely overflowed its card (otherwise this
             // test would pass trivially with content that happens to fit).
             expect(Math.max(firstItemOverflow, secondItemOverflow)).toBeGreaterThan(0);
-            // NOTHING outside the stage area scrolls — neither the layout container nor the document
-            // (the document is what a stray in-flow element, e.g. a de-fixed FAB, would grow).
-            const mainOverflow = await page.evaluate(() => {
-                const main = document.querySelector('main');
-                return main ? main.scrollHeight - main.clientHeight : -1;
-            });
-            expect(mainOverflow).toBeLessThanOrEqual(1);
-            const docOverflow = await page.evaluate(() => document.documentElement.scrollHeight - document.documentElement.clientHeight);
-            expect(docOverflow).toBeLessThanOrEqual(1);
+            await expectNothingOutsideTheStageScrolls();
             // The bar is pinned to the SCREEN, not merely laid out last: scrolling must not move it.
             await page.evaluate(() => window.scrollTo(0, 99999));
             const barAfterScroll = await page.getByTestId('stageActionBar').boundingBox();
@@ -757,12 +769,16 @@ test.describe('weekly review', () => {
                 await expect
                     .poll(
                         async () =>
-                            page.evaluate(async (id) => {
-                                const g = (
-                                    window as unknown as { __gtd: { db: { get(store: 'items', key: string): Promise<{ userId: string } | undefined> } } }
-                                ).__gtd;
-                                return (await g.db.get('items', id))?.userId;
-                            }, moving._id),
+                            evaluateWithHarness(
+                                page,
+                                async (id) => {
+                                    const g = (
+                                        window as unknown as { __gtd: { db: { get(store: 'items', key: string): Promise<{ userId: string } | undefined> } } }
+                                    ).__gtd;
+                                    return (await g.db.get('items', id))?.userId;
+                                },
+                                moving._id,
+                            ),
                         { timeout: 15_000 },
                     )
                     .toBe(secondary.userId);
@@ -858,7 +874,9 @@ test.describe('weekly review', () => {
             // primary takes focus (via the transient end-card Continue while the requeue settles).
             await expect(page.getByTestId('focusKeep')).toBeFocused();
             await expect(page.getByTestId('reviewStageCounter')).toContainText('2 of 2');
-            await expect.poll(async () => (await gtd.listItems(page)).find((i) => i._id === second._id)?.status).toBe('nextAction');
+            // 10s: the restore is an IDB write behind the requeue; a 12-browser machine can hold the
+            // page's main thread past the 5s default before the read even runs.
+            await expect.poll(async () => (await gtd.listItems(page)).find((i) => i._id === second._id)?.status, { timeout: 10_000 }).toBe('nextAction');
 
             // The remaining (snapshot-less) decision undoes too: the text-edited item was decided
             // without a write, so undo simply requeues it — at the cursor, ahead of Second.

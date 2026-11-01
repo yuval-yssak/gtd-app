@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { resetServerForEmails, withTwoAccountsOnOneDevice } from './helpers/context';
 import { API_URL, CLIENT_URL } from './helpers/env';
-import { gtd } from './helpers/gtd';
+import { evaluateWithHarness, gtd } from './helpers/gtd';
 import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Regression for the "item disappears after cross-account move" bug. The reassign endpoint emits
@@ -98,7 +98,7 @@ test.describe('cross-account reassign — item survives delete-op clobber', () =
 
             // Now drive the per-user pulls so the source's delete + target's create reach IDB.
             // Without this nudge the e2e harness has no SSE/online event to trigger syncAndRefresh.
-            await page.evaluate(() => (window as unknown as { __gtd: { pull(): Promise<unknown> } }).__gtd.pull());
+            await evaluateWithHarness(page, () => (window as unknown as { __gtd: { pull(): Promise<unknown> } }).__gtd.pull());
 
             // Row must be present in IDB after the move, under target, with target's calendar config.
             await expect

@@ -5,7 +5,7 @@ import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import { resetServerForEmails, withOneLoggedInDevice, withTwoAccountsOnOneDevice } from './helpers/context';
 import { API_URL, CLIENT_URL } from './helpers/env';
-import { gtd } from './helpers/gtd';
+import { evaluateWithHarness, gtd } from './helpers/gtd';
 import { uniqueStamp } from './helpers/uniqueStamp';
 
 dayjs.extend(utc);
@@ -39,31 +39,33 @@ async function readUserIdbFootprint(page: Page, userId: string, attempt = 0): Pr
 }
 
 async function readUserIdbFootprintOnce(page: Page, userId: string): Promise<UserIdbFootprint> {
-    // A read that lands right after a navigation would see no harness yet.
-    await page.waitForFunction(() => typeof (window as unknown as { __gtd?: unknown }).__gtd !== 'undefined');
-    return page.evaluate(async (uid) => {
-        type Harness = {
-            db: {
-                getAllFromIndex(store: 'items', index: 'userId', key: string): Promise<unknown[]>;
-                get(store: 'accounts', key: string): Promise<unknown>;
-                get(store: 'syncCursors', key: string): Promise<unknown>;
-                get(store: 'deviceMeta', key: 'local'): Promise<unknown>;
+    return evaluateWithHarness(
+        page,
+        async (uid) => {
+            type Harness = {
+                db: {
+                    getAllFromIndex(store: 'items', index: 'userId', key: string): Promise<unknown[]>;
+                    get(store: 'accounts', key: string): Promise<unknown>;
+                    get(store: 'syncCursors', key: string): Promise<unknown>;
+                    get(store: 'deviceMeta', key: 'local'): Promise<unknown>;
+                };
             };
-        };
-        const harness = (window as unknown as { __gtd: Harness }).__gtd;
-        const [items, account, cursor, deviceMeta] = await Promise.all([
-            harness.db.getAllFromIndex('items', 'userId', uid),
-            harness.db.get('accounts', uid),
-            harness.db.get('syncCursors', uid),
-            harness.db.get('deviceMeta', 'local'),
-        ]);
-        return {
-            items: items.length,
-            accountPresent: account !== undefined,
-            syncCursorPresent: cursor !== undefined,
-            deviceMetaPresent: deviceMeta !== undefined,
-        };
-    }, userId);
+            const harness = (window as unknown as { __gtd: Harness }).__gtd;
+            const [items, account, cursor, deviceMeta] = await Promise.all([
+                harness.db.getAllFromIndex('items', 'userId', uid),
+                harness.db.get('accounts', uid),
+                harness.db.get('syncCursors', uid),
+                harness.db.get('deviceMeta', 'local'),
+            ]);
+            return {
+                items: items.length,
+                accountPresent: account !== undefined,
+                syncCursorPresent: cursor !== undefined,
+                deviceMetaPresent: deviceMeta !== undefined,
+            };
+        },
+        userId,
+    );
 }
 
 async function fetchUserStatus(userId: string): Promise<{ status: string; deletedAt?: string }> {

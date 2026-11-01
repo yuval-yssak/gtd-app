@@ -103,8 +103,12 @@ run_e2e() {
             # kills this block mid-run) carries the specs into the next turn even when that turn's fix
             # lands in app code and touches no spec.
             echo "$specs" >"$PENDING_SPECS"
+            # --workers=2: this block runs alongside the client + api-server vitest suites (each with
+            # its own worker pool) against one local Mongo, often next to the developer's own Chrome;
+            # the config's default worker count is sized for a standalone full run and would starve
+            # them. The cap lives here, not in playwright.config.ts, so it costs full runs nothing.
             # shellcheck disable=SC2086
-            if npx playwright test --retries=0 $specs; then
+            if npx playwright test --retries=0 --workers=2 $specs; then
                 rm -f "$PENDING_SPECS"
             else
                 echo "❌ test failed"

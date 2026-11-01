@@ -2,7 +2,7 @@ import type { Page } from '@playwright/test';
 import { expect, test } from '@playwright/test';
 import type { StoredItem } from '../client/src/types/MyDB';
 import { closeContextQuietly, withTwoLoggedInDevices } from './helpers/context';
-import { gtd } from './helpers/gtd';
+import { evaluateWithHarness, gtd } from './helpers/gtd';
 import { loginAs } from './helpers/login';
 import { uniqueStamp } from './helpers/uniqueStamp';
 
@@ -16,21 +16,25 @@ async function waitForItemByIdOnDevice(page: Page, id: string): Promise<StoredIt
     // Use evaluate() with an inline polling loop rather than waitForFunction() — the latter
     // resolves as soon as the predicate is truthy, but a Promise is always truthy, so
     // waitForFunction() would resolve immediately without awaiting the IDB read.
-    const found = await page.evaluate(async (itemId) => {
-        type Harness = { listItems(): Promise<StoredItem[]> };
-        const harness = (window as unknown as { __gtd: Harness }).__gtd;
-        // Date.now() is intentional — this closure runs in the browser context where dayjs is unavailable.
-        const deadline = Date.now() + 10_000;
-        while (Date.now() < deadline) {
-            const items = await harness.listItems();
-            const match = items.find((i) => i._id === itemId);
-            if (match) {
-                return match;
+    const found = await evaluateWithHarness(
+        page,
+        async (itemId) => {
+            type Harness = { listItems(): Promise<StoredItem[]> };
+            const harness = (window as unknown as { __gtd: Harness }).__gtd;
+            // Date.now() is intentional — this closure runs in the browser context where dayjs is unavailable.
+            const deadline = Date.now() + 10_000;
+            while (Date.now() < deadline) {
+                const items = await harness.listItems();
+                const match = items.find((i) => i._id === itemId);
+                if (match) {
+                    return match;
+                }
+                await new Promise((r) => setTimeout(r, 200));
             }
-            await new Promise((r) => setTimeout(r, 200));
-        }
-        return null;
-    }, id);
+            return null;
+        },
+        id,
+    );
 
     if (!found) {
         throw new Error(`Item ${id} not found on device after 10s`);
@@ -135,7 +139,7 @@ test.describe('multi-device sync', () => {
         // bootstrapFromServer run can briefly reset IDB (epoch + empty items) before the
         // second fetch completes. Polling inside evaluate() atomically returns the snapshot
         // only after both items AND a non-epoch lastSyncedTs are stable.
-        const items = await page2.evaluate(async () => {
+        const items = await evaluateWithHarness(page2, async () => {
             // Date.now() is intentional — this closure runs in the browser context where dayjs is unavailable.
             type Cursor = { userId: string; lastSyncedTs: string };
             type Harness = { listItems(): Promise<Array<{ title: string }>>; syncState(): Promise<{ syncCursors: Cursor[] } | undefined> };

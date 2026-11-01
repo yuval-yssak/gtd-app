@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { closeContextQuietly } from './helpers/context';
 import { CLIENT_URL } from './helpers/env';
-import { gtd } from './helpers/gtd';
+import { evaluateWithHarness, gtd } from './helpers/gtd';
 import { fetchDevSessionCookie, loginAs } from './helpers/login';
 import { uniqueStamp } from './helpers/uniqueStamp';
 
@@ -63,9 +63,8 @@ test.describe('initial-sync skeleton', () => {
             const page = await ctx.newPage();
             await page.goto(`${CLIENT_URL}/auth/callback`);
             await page.waitForURL(`${CLIENT_URL}/inbox`);
-            await page.waitForFunction(() => typeof (window as unknown as { __gtd?: unknown }).__gtd !== 'undefined');
-            await page.evaluate(() => (window as unknown as { __gtd: { collect(t: string): Promise<unknown> } }).__gtd.collect('Already cached'));
-            await page.evaluate(() => (window as unknown as { __gtd: { flush(): Promise<void> } }).__gtd.flush());
+            await evaluateWithHarness(page, () => (window as unknown as { __gtd: { collect(t: string): Promise<unknown> } }).__gtd.collect('Already cached'));
+            await evaluateWithHarness(page, () => (window as unknown as { __gtd: { flush(): Promise<void> } }).__gtd.flush());
 
             // Reload: this device already has a cursor + cached items, so even a throttled pull
             // must not raise the skeleton — the data is already on screen.

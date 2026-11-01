@@ -1,6 +1,7 @@
 import { expect, type Page, test } from '@playwright/test';
 import { withOneLoggedInDevice, withTwoAccountsOnOneDevice } from './helpers/context';
 import { CLIENT_URL } from './helpers/env';
+import { evaluateWithHarness } from './helpers/gtd';
 import { uniqueStamp } from './helpers/uniqueStamp';
 
 // E2E coverage for the per-account visibility toggles: the avatar row next to the account
@@ -15,7 +16,8 @@ const INBOX_URL = `${CLIENT_URL}/inbox`;
  * doesn't force us to pivot Better Auth sessions just to materialize a row in IDB.
  */
 async function seedItemForUser(page: Page, userId: string, title: string): Promise<string> {
-    return page.evaluate(
+    return evaluateWithHarness(
+        page,
         ({ userId, title }) => {
             // Inline IDB-row shape so we don't have to import types into the page context.
             type IDBItem = { _id: string; userId: string; status: string; title: string; createdTs: string; updatedTs: string };

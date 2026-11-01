@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import type { StoredItem } from '../client/src/types/MyDB';
 import { withTwoLoggedInDevices } from './helpers/context';
-import { gtd } from './helpers/gtd';
+import { evaluateWithHarness, gtd } from './helpers/gtd';
 import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Tests multi-device sync for entity types and mutations not covered by
@@ -11,18 +11,24 @@ import { uniqueStamp } from './helpers/uniqueStamp';
 // and item deletion.
 
 async function waitForItemByIdOnDevice(page: Page, id: string): Promise<StoredItem> {
-    const found = await page.evaluate(async (itemId) => {
-        type Harness = { listItems(): Promise<StoredItem[]> };
-        const harness = (window as unknown as { __gtd: Harness }).__gtd;
-        const deadline = Date.now() + 10_000;
-        while (Date.now() < deadline) {
-            const items = await harness.listItems();
-            const match = items.find((i) => i._id === itemId);
-            if (match) return match;
-            await new Promise((r) => setTimeout(r, 200));
-        }
-        return null;
-    }, id);
+    const found = await evaluateWithHarness(
+        page,
+        async (itemId) => {
+            type Harness = { listItems(): Promise<StoredItem[]> };
+            const harness = (window as unknown as { __gtd: Harness }).__gtd;
+            const deadline = Date.now() + 10_000;
+            while (Date.now() < deadline) {
+                const items = await harness.listItems();
+                const match = items.find((i) => i._id === itemId);
+                if (match) {
+                    return match;
+                }
+                await new Promise((r) => setTimeout(r, 200));
+            }
+            return null;
+        },
+        id,
+    );
 
     if (!found) throw new Error(`Item ${id} not found on device after 10s`);
     return found;
@@ -79,18 +85,24 @@ test.describe('entity sync', () => {
             await gtd.flush(page1);
 
             // Poll device-2 for the status change (arrives via SSE → syncAndRefresh)
-            await page2.evaluate(async (itemId) => {
-                type Harness = { listItems(): Promise<Array<{ _id: string; status: string }>> };
-                const harness = (window as unknown as { __gtd: Harness }).__gtd;
-                const deadline = Date.now() + 15_000;
-                while (Date.now() < deadline) {
-                    const items = await harness.listItems();
-                    const match = items.find((i) => i._id === itemId);
-                    if (match?.status === 'done') return true;
-                    await new Promise((r) => setTimeout(r, 300));
-                }
-                throw new Error('Status change did not arrive via SSE within 15s');
-            }, inbox._id);
+            await evaluateWithHarness(
+                page2,
+                async (itemId) => {
+                    type Harness = { listItems(): Promise<Array<{ _id: string; status: string }>> };
+                    const harness = (window as unknown as { __gtd: Harness }).__gtd;
+                    const deadline = Date.now() + 15_000;
+                    while (Date.now() < deadline) {
+                        const items = await harness.listItems();
+                        const match = items.find((i) => i._id === itemId);
+                        if (match?.status === 'done') {
+                            return true;
+                        }
+                        await new Promise((r) => setTimeout(r, 300));
+                    }
+                    throw new Error('Status change did not arrive via SSE within 15s');
+                },
+                inbox._id,
+            );
         });
     });
 
@@ -110,18 +122,24 @@ test.describe('entity sync', () => {
 
             // Poll until the delete arrives on device-2 (may come via SSE or explicit pull).
             // A single pull() call can race with an SSE-triggered pull due to the pullInFlight guard.
-            await page2.evaluate(async (itemId) => {
-                type Harness = { pull(): Promise<void>; listItems(): Promise<Array<{ _id: string }>> };
-                const harness = (window as unknown as { __gtd: Harness }).__gtd;
-                const deadline = Date.now() + 10_000;
-                while (Date.now() < deadline) {
-                    await harness.pull();
-                    const items = await harness.listItems();
-                    if (!items.some((i) => i._id === itemId)) return true;
-                    await new Promise((r) => setTimeout(r, 300));
-                }
-                throw new Error('Deleted item still present on device-2 after 10s');
-            }, inbox._id);
+            await evaluateWithHarness(
+                page2,
+                async (itemId) => {
+                    type Harness = { pull(): Promise<void>; listItems(): Promise<Array<{ _id: string }>> };
+                    const harness = (window as unknown as { __gtd: Harness }).__gtd;
+                    const deadline = Date.now() + 10_000;
+                    while (Date.now() < deadline) {
+                        await harness.pull();
+                        const items = await harness.listItems();
+                        if (!items.some((i) => i._id === itemId)) {
+                            return true;
+                        }
+                        await new Promise((r) => setTimeout(r, 300));
+                    }
+                    throw new Error('Deleted item still present on device-2 after 10s');
+                },
+                inbox._id,
+            );
         });
     });
 });

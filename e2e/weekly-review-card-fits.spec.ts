@@ -223,9 +223,15 @@ test.describe('Weekly review card fits without scrolling', () => {
             const cardWidth = await card.locator('[class*="editorCard"]').evaluate((el) => el.getBoundingClientRect().width);
             const marginX = box.x + (box.width - cardWidth) / 4;
             await page.mouse.move(marginX, box.y + box.height / 2);
-            await page.mouse.wheel(0, 400);
-
-            await expect.poll(async () => scroller.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+            // The wheel is re-sent on every poll tick: Chromium drops a wheel that lands while the
+            // page is mid-layout (a loaded machine makes that window wide), and a dead gutter stays
+            // at 0 no matter how many wheels it gets — so repeating keeps the assertion honest.
+            await expect
+                .poll(async () => {
+                    await page.mouse.wheel(0, 400);
+                    return scroller.evaluate((el) => el.scrollTop);
+                })
+                .toBeGreaterThan(0);
         });
     });
 });
