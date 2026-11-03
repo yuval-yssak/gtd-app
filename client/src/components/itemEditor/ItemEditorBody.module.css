@@ -120,6 +120,25 @@
     overflow-wrap: anywhere;
 }
 
+/* Only the captions are held to one line — the Position row keeps its own wrapping, so its error
+ * message can never widen the line. */
+.body[data-review] .createdAt {
+    white-space: nowrap;
+}
+
+/* The review card keeps its meta line to ONE line on a desktop card (the card-fits budget) while the
+ * Position row's "n of m" grows with the day's size: the ID is what gives way, ellipsized down to
+ * 8rem — the copy button beside it and its tooltip still carry the full value. Below that (a phone)
+ * the line wraps as before instead of clipping the ID and the copy button off the card. */
+.body[data-review] .metaRow > .itemId {
+    flex: 1 1 0;
+    min-inline-size: 8rem;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    text-align: end;
+}
+
 /* Read view of the brief: plain text filling the row so the pencil and generate buttons sit at
  * its far end. Padded to the icon buttons' height so a one-line brief centres beside them. */
 .briefText {

@@ -59,13 +59,16 @@ export const Locked: Story = {
     },
 };
 
-/** Compact (the weekly-review card's meta line): icon-only moves, no label, no "Move to…", the count read out only. */
+/** Compact (the weekly-review card's meta line): icon-only moves, no label, no "Move to…", the count as a caption. */
 export const Compact: Story = {
     args: { density: 'compact' },
     play: async ({ canvasElement }) => {
         const canvas = within(canvasElement);
         await waitFor(() => expect(canvas.getByRole('button', { name: 'Top' })).toBeVisible());
         await expect(canvas.queryByTestId('nextActionPositionMoveTo')).toBeNull();
+        // Measured, not toBeVisible: a visually hidden (srOnly) count is clipped to 1px yet still "visible".
+        const countText = canvas.getByTestId('nextActionPositionText');
+        await expect(countText.getBoundingClientRect().width).toBeGreaterThan(16);
     },
 };
 

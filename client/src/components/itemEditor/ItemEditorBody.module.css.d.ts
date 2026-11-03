@@ -7,6 +7,7 @@ declare const styles: {
     readonly briefNotice: string;
     readonly briefRow: string;
     readonly briefText: string;
+    readonly createdAt: string;
     readonly inlineActions: string;
     readonly itemId: string;
     readonly keyScope: string;

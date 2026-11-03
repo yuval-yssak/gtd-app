@@ -17,6 +17,32 @@ const positionRow = (page: Page) => page.getByTestId('nextActionPositionRow');
 /** The full-width wrapper that owns the stage's scroll — its overflow proves whether the card fits. */
 const scrollerOf = (stage: Locator) => stage.getByTestId('stageCardScroller');
 
+/**
+ * The card's "n of m" reads as text, not only to a screen reader: a visually hidden (srOnly)
+ * span keeps its text but is clipped to 1px, so the width is what proves it is on screen.
+ */
+async function expectVisiblePositionCount(scope: Page | Locator, count: string) {
+    const countText = scope.getByTestId('nextActionPositionText');
+    await expect(countText).toHaveText(count);
+    await expect.poll(async () => (await countText.boundingBox())?.width ?? 0).toBeGreaterThan(16);
+}
+
+async function centreYOf(page: Page, testId: string) {
+    const box = await page.getByTestId(testId).boundingBox();
+    if (!box) throw new Error(`expected ${testId} on screen`);
+    return box.y + box.height / 2;
+}
+
+/** Count, Created and ID share the card's single meta line inside the card — the ID ellipsizes rather than wrapping below. */
+async function expectOneLineMetaRow(page: Page) {
+    const createdY = await centreYOf(page, 'itemEditorCreatedAt');
+    // Precision -1: centres within 5px of each other, i.e. the same line (a wrapped line is ~30px down).
+    expect(await centreYOf(page, 'nextActionPositionText')).toBeCloseTo(createdY, -1);
+    expect(await centreYOf(page, 'itemEditorId')).toBeCloseTo(createdY, -1);
+    const metaRow = page.getByTestId('itemEditorCreatedAt').locator('..');
+    expect(await metaRow.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+}
+
 async function storedOrder(page: Page, status: StoredItem['status']): Promise<string[]> {
     return (await gtd.listItems(page))
         .filter((item) => item.status === status)
@@ -57,7 +83,8 @@ test.describe('Weekly review — priority from the card', () => {
             await expect(titleField(page)).toHaveValue('Charlie');
             await expect(page.getByTestId('reviewStageCounter')).toHaveText('1 of 3');
             await expect(positionRow(page)).toBeVisible();
-            await expect(page.getByTestId('nextActionPositionText')).toHaveText('1 of 3');
+            await expectVisiblePositionCount(page, '1 of 3');
+            await expectOneLineMetaRow(page);
             expect(await scrollerOf(page.getByTestId('focusStage')).evaluate((el) => el.scrollHeight - el.clientHeight)).toBeLessThanOrEqual(1);
 
             await page.getByTestId('nextActionPositionBottom').click();
@@ -71,6 +98,23 @@ test.describe('Weekly review — priority from the card', () => {
             await page.getByTestId('focusKeep').click();
             await expect(titleField(page)).toHaveValue('Charlie');
             await expect(page.getByTestId('reviewStageCounter')).toHaveText('3 of 3');
+        });
+    });
+
+    test('on a phone the meta line wraps instead of clipping the ID and its copy button off the card', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `wr-pos-phone-${uniqueStamp()}@example.com`, async (page) => {
+            await seedNextActions(page, ['Alpha', 'Bravo']);
+            await page.setViewportSize({ width: 390, height: 844 });
+            await startNextActionsStage(page);
+            await expectVisiblePositionCount(page, '1 of 2');
+            const metaRow = page.getByTestId('itemEditorCreatedAt').locator('..');
+            expect(await metaRow.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+            const scroller = scrollerOf(page.getByTestId('focusStage'));
+            expect(await scroller.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+            // It wraps: the captions drop below the arrows and count rather than being squeezed beside them.
+            expect(await centreYOf(page, 'itemEditorCreatedAt')).toBeGreaterThan((await centreYOf(page, 'nextActionPositionText')) + 10);
+            await page.getByTestId('copyItemIdButton').scrollIntoViewIfNeeded();
+            await expect(page.getByTestId('copyItemIdButton')).toBeInViewport({ ratio: 1 });
         });
     });
 
@@ -168,7 +212,7 @@ test.describe('Weekly review — priority from the card', () => {
             await expect.poll(() => storedOrder(page, 'nextAction'), { timeout: 10_000 }).toEqual(['Bravo', 'Alpha', 'Charlie']);
             // A decided item is out of the walk: re-ranking it never swaps the revisit card out.
             await expect(revisitTitle).toHaveValue('Charlie');
-            await expect(revisit.getByTestId('nextActionPositionText')).toHaveText('3 of 3');
+            await expectVisiblePositionCount(revisit, '3 of 3');
 
             // …nor disturbs the live walk: ▶ returns to the same live card, counter unchanged.
             await page.getByTestId('stageNavForward').click();

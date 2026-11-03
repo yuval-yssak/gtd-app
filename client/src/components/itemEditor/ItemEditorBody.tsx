@@ -1345,10 +1345,10 @@ export function ItemEditorBody({
 
             <div className={styles.metaRow}>
                 {isPositionRowInMetaRow && positionRow}
-                <Text as="span" variant="caption" tone="secondary" data-testid="itemEditorCreatedAt">
+                <Text as="span" variant="caption" tone="secondary" className={styles.createdAt} data-testid="itemEditorCreatedAt">
                     Created {dayjs(liveItem.createdTs).format('MMM D, YYYY h:mm A')}
                 </Text>
-                <Text as="span" variant="caption" tone="secondary" className={styles.itemId} data-testid="itemEditorId">
+                <Text as="span" variant="caption" tone="secondary" className={styles.itemId} title={item._id} data-testid="itemEditorId">
                     ID {item._id}
                 </Text>
                 {/* The shared hardened button (tooltip + failure snackbar). Hosts with their own

@@ -45,8 +45,8 @@ interface Props {
      */
     isLocked?: boolean | undefined;
     /**
-     * `compact` renders the four moves as icon buttons on one line (no label, no "Move to…", the
-     * count read out only) and nothing at all for a one-item section — the weekly-review card
+     * `compact` renders the four moves as icon buttons on one line (no visible label, no "Move to…",
+     * the count as a caption) and nothing at all for a one-item section — the weekly-review card
      * runs on a tight vertical budget and hosts the row on its meta line.
      */
     density?: 'default' | 'compact' | undefined;
@@ -155,12 +155,14 @@ export function NextActionPositionRow({ db, item, onBeforeMove, onMoved, isLocke
                         </Button>
                     )}
                 </ButtonGroup>
+                {/* Visible in compact too: in a long day the arrows alone cannot say whether the item is 2nd or
+                    one before last. The section name stays in the native tooltip — no room on the meta line. */}
                 <Text
                     as="span"
-                    variant="bodySm"
+                    variant={density === 'compact' ? 'caption' : 'bodySm'}
                     tone="secondary"
                     aria-live="polite"
-                    className={density === 'compact' ? 'srOnly' : undefined}
+                    title={density === 'compact' ? `Position in ${label}` : undefined}
                     data-testid="nextActionPositionText"
                 >
                     {moves.position} of {moves.total}

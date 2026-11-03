@@ -12,6 +12,9 @@
 .row[data-compact] {
     flex-flow: row wrap;
     align-items: center;
+
+    /* Sets the "n of m" count apart from the meta line's "Created …" caption that follows it. */
+    margin-inline-end: var(--space-4);
 }
 
 .controls {
