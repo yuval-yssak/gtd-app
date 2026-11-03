@@ -150,6 +150,57 @@ test.describe('Weekly review — priority from the card', () => {
         });
     });
 
+    test('a revisited decision (◀) carries the row too: a move re-ranks the item and keeps the revisit card on screen', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `wr-pos-revisit-${uniqueStamp()}@example.com`, async (page) => {
+            await seedNextActions(page, ['Alpha', 'Bravo', 'Charlie']);
+            await startNextActionsStage(page);
+            await expect(titleField(page)).toHaveValue('Charlie');
+            await page.getByTestId('focusKeep').click();
+            await expect(titleField(page)).toHaveValue('Bravo');
+
+            await page.getByTestId('stageNavBack').click();
+            const revisit = page.getByTestId('revisitDecisionCard');
+            const revisitTitle = revisit.getByRole('textbox', { name: 'Title' });
+            await expect(revisitTitle).toHaveValue('Charlie');
+            await expect(revisit.getByTestId('nextActionPositionRow')).toBeVisible();
+
+            await revisit.getByTestId('nextActionPositionBottom').click();
+            await expect.poll(() => storedOrder(page, 'nextAction'), { timeout: 10_000 }).toEqual(['Bravo', 'Alpha', 'Charlie']);
+            // A decided item is out of the walk: re-ranking it never swaps the revisit card out.
+            await expect(revisitTitle).toHaveValue('Charlie');
+            await expect(revisit.getByTestId('nextActionPositionText')).toHaveText('3 of 3');
+
+            // …nor disturbs the live walk: ▶ returns to the same live card, counter unchanged.
+            await page.getByTestId('stageNavForward').click();
+            await expect(titleField(page)).toHaveValue('Bravo');
+            await expect(page.getByTestId('reviewStageCounter')).toHaveText('2 of 3');
+        });
+    });
+
+    test('a revisited tickler decision has no row — that stage walks by wake-up date', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `wr-pos-revisit-tickler-${uniqueStamp()}@example.com`, async (page) => {
+            // A visible neighbour in the same (undated) section, or the compact row would hide itself
+            // for a one-row section and the absence below would hold with or without the stage gate.
+            await seedNextActions(page, ['Visible action']);
+            const wakeUp = dayjs().add(4, 'day').format('YYYY-MM-DD');
+            for (const title of ['Snoozed one', 'Snoozed two']) {
+                await gtd.clarifyToNextAction(page, await gtd.collect(page, title), { ignoreBefore: wakeUp });
+            }
+            await gtd.flush(page);
+            await page.goto('/weekly-review?stage=tickler');
+            await page.getByTestId('startReviewButton').click();
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Tickler');
+            const firstTitle = await titleField(page).inputValue();
+            await page.getByTestId('focusKeep').click();
+            await expect(titleField(page)).not.toHaveValue(firstTitle);
+
+            await page.getByTestId('stageNavBack').click();
+            const revisit = page.getByTestId('revisitDecisionCard');
+            await expect(revisit.getByRole('textbox', { name: 'Title' })).toHaveValue(firstTitle);
+            await expect(revisit.getByTestId('nextActionPositionRow')).toHaveCount(0);
+        });
+    });
+
     test('Clarify and Someday / Maybe rank their lists; a one-item section shows no row; the tickler stage never does', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `wr-pos-stages-${uniqueStamp()}@example.com`, async (page) => {
             await gtd.collect(page, 'Older thought');

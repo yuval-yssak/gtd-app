@@ -46,7 +46,7 @@ export function ClarifyStage({ queue, db, onQueueChange, onStageFinished, travel
     const nav = useStageDecisionNavigation({ db, queue, onQueueChange, onUndoFailed: stageToast.showError });
 
     if (nav.revisitProps) {
-        return <RevisitDecisionCard db={db} {...nav.revisitProps} travel={travel} />;
+        return <RevisitDecisionCard db={db} {...nav.revisitProps} travel={travel} hasPositionRow />;
     }
 
     const currentId = currentQueueItemId(queue);

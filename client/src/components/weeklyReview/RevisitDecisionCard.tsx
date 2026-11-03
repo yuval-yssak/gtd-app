@@ -28,6 +28,11 @@ interface RevisitDecisionCardProps {
     /** Escape / post-save close — jumps straight back to the live queue. */
     onExit: () => void;
     travel: StageTravel;
+    /**
+     * Whether the editor offers its Position row, as the live card of the same stage does — the
+     * tickler walks by wake-up date, so a row there would reorder a list the user is not looking at.
+     */
+    hasPositionRow: boolean;
 }
 
 /**
@@ -47,6 +52,7 @@ export function RevisitDecisionCard({
     isUndoing,
     onExit,
     travel,
+    hasPositionRow,
 }: RevisitDecisionCardProps) {
     // `routines` (visible accounts) matches the wizard's queue producer — see FocusStage.
     const { allItems, routines, people, workContexts, refreshItems } = useAppData();
@@ -126,6 +132,8 @@ export function RevisitDecisionCard({
                         // Same density as the live stages: this is the review, and without it a
                         // long-notes item overflows the card here exactly as it did there.
                         presentation="review"
+                        // No onPositionMoved: a decided item is out of the walk, so a move never swaps this card.
+                        hasPositionRow={hasPositionRow}
                         renderActions={(api) => (
                             <>
                                 {/* Arrows lock while a structural edit is pending — navigating away here
@@ -151,7 +159,7 @@ export function RevisitDecisionCard({
                                 {/* Manual-fix path: structural edits (e.g. flipping a wrong Done's status
                                 chip) commit here; text edits autosave and need no explicit save.
                                 Note: a manual save does NOT refresh the decision's undo snapshot —
-                                a subsequent Undo reverts past the manual fix too. */}
+                                a subsequent Undo reverts past the manual fix too, a Position-row move included. */}
                                 <Button variant="solid" disabled={!api.isDirty || api.saveDisabled} onClick={api.triggerSave} data-testid="revisitSave">
                                     Save
                                 </Button>

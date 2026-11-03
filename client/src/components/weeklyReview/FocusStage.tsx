@@ -64,9 +64,12 @@ export function FocusStage({ stage, queue, db, onQueueChange, onStageFinished, t
     const [isEditorLocked, setIsEditorLocked] = useState(false);
     const lockedTravel = isEditorLocked ? { ...travel, prevDisabled: true, nextDisabled: true } : travel;
     const nav = useStageDecisionNavigation({ db, queue, onQueueChange, onUndoFailed: stageToast.showError });
+    // The tickler walks by wake-up date, not rank — a Position row there would move the item in a
+    // list the user is not looking at. One gate for the live card and the revisit card alike.
+    const hasPositionRow = stage.id !== 'tickler';
 
     if (nav.revisitProps) {
-        return <RevisitDecisionCard db={db} {...nav.revisitProps} travel={travel} />;
+        return <RevisitDecisionCard db={db} {...nav.revisitProps} travel={travel} hasPositionRow={hasPositionRow} />;
     }
 
     const currentId = currentQueueItemId(queue);
@@ -203,9 +206,7 @@ export function FocusStage({ stage, queue, db, onQueueChange, onStageFinished, t
                         presentation="review"
                         renderActions={renderActions}
                         actionsContainer={actionsBarEl}
-                        // The tickler walks by wake-up date, not rank — a Position row there would
-                        // move the item in a list the user is not looking at.
-                        hasPositionRow={stage.id !== 'tickler'}
+                        hasPositionRow={hasPositionRow}
                         onPositionMoved={yieldSlotOnDownMove(onQueueChange)}
                     />
                 </Card>

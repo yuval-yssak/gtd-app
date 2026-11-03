@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react';
-import { fn } from 'storybook/test';
+import { expect, fn, within } from 'storybook/test';
 import { RouterDecorator } from '../../../.storybook/RouterDecorator';
 import { editorProvidersDecorator } from '../../test-utils/storybookAppData';
 import { mockDb, sampleCalendarRoutine, sampleNextActionItem, samplePeople, sampleWorkContexts } from '../../test-utils/storybookMocks';
@@ -34,6 +34,7 @@ const meta = {
         isUndoing: false,
         onExit: fn(),
         travel: { onPrevStage: fn(), onNextStage: fn(), prevDisabled: false, nextDisabled: false },
+        hasPositionRow: true,
     },
 } satisfies Meta<typeof RevisitDecisionCard>;
 
@@ -66,4 +67,35 @@ export const RoutineEntry: Story = {
 /** The decided item was hard-deleted since — a notice, with the arrows still in the bar. */
 export const MissingItem: Story = {
     args: { decision: { itemId: 'item-gone' } },
+};
+
+/** A second item shares the revisited item's day, so its section has an order to change. */
+const sameDayNeighbour = { ...sampleNextActionItem, _id: 'item-na-2', title: 'Book the venue', rank: 'a1' };
+const sectionWithNeighbourDecorator = editorProvidersDecorator({
+    allItems: [sampleNextActionItem, sameDayNeighbour],
+    items: [sampleNextActionItem, sameDayNeighbour],
+    people: samplePeople,
+    workContexts: sampleWorkContexts,
+    allPeople: samplePeople,
+    allWorkContexts: sampleWorkContexts,
+});
+
+/** A revisited Next Action in a section of two — the compact Position row sits on the meta line, as on the live card. */
+export const WithPositionRow: Story = {
+    decorators: [sectionWithNeighbourDecorator],
+    play: async ({ canvasElement }) => {
+        const canvas = within(canvasElement);
+        await expect(await canvas.findByTestId('nextActionPositionRow')).toBeVisible();
+    },
+};
+
+/** The tickler stage's revisit — no Position row even with a neighbour, since that stage walks by wake-up date. */
+export const TicklerStageNoPositionRow: Story = {
+    args: { hasPositionRow: false },
+    decorators: [sectionWithNeighbourDecorator],
+    play: async ({ canvasElement }) => {
+        const canvas = within(canvasElement);
+        await canvas.findByTestId('revisitDecisionCard');
+        await expect(canvas.queryByTestId('nextActionPositionRow')).toBeNull();
+    },
 };
