@@ -32,6 +32,8 @@
         /* Text */
         --color-text-primary: #16181d;
         --color-text-secondary: #5c6370;
+        /* Resting icon buttons and menu items: clearly enabled (secondary read as disabled), still a step below primary, which hover reaches. */
+        --color-text-control: #353a43;
         --color-text-disabled: #9aa0aa;
         --color-text-inverse: #ffffff;
 
@@ -185,6 +187,7 @@
 
         --color-text-primary: #eceef2;
         --color-text-secondary: #a3a9b4;
+        --color-text-control: #d2d6dd;
         --color-text-disabled: #6b717c;
         --color-text-inverse: #16181d;
 

@@ -1,6 +1,6 @@
 @layer gtd.components {
     .iconButton {
-        --icon-button-color: var(--color-text-secondary);
+        --icon-button-color: var(--color-text-control);
         --icon-button-tint: var(--color-state-hover);
 
         display: inline-flex;

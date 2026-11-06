@@ -63,7 +63,7 @@
     min-block-size: 2.25rem;
     padding: 0 var(--space-3);
     border-radius: var(--radius-md);
-    color: var(--color-text-secondary);
+    color: var(--color-text-control);
     font-size: var(--type-sm-size);
     line-height: var(--type-sm-line);
     font-weight: var(--weight-medium);
