@@ -11,6 +11,7 @@ import { __resetDefaultStoreForTests } from '../auth/rateLimitMiddleware.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
+import { userLocalDate } from '../lib/userTimezone.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { v1RoutinesRoutes } from '../routes/v1/routines.js';
 import type { ApiTokenScope, ItemInterface, RoutineInterface } from '../types/entities.js';
@@ -109,6 +110,26 @@ describe('POST /v1/routines/:id/pause', () => {
         expect(past?.status).toBe('nextAction'); // past-due open items untouched
         expect(future?.status).toBe('trash');
         expect(done?.status).toBe('done');
+    });
+
+    it('drops exceptions from today on, which the paused series no longer has, and keeps earlier ones', async () => {
+        const userId = await login();
+        const token = await tokenWith(userId, ['routines.write']);
+        const today = await userLocalDate(userId);
+        const routineExceptions: RoutineInterface['routineExceptions'] = [
+            { date: '2024-01-01', type: 'modified' },
+            { date: today, type: 'skipped' },
+            { date: '2099-01-01', type: 'modified' },
+        ];
+        await routinesDAO.insertOne(makeRoutine(userId, { routineType: 'calendar', routineExceptions }));
+
+        const res = await app.fetch(
+            new Request('http://localhost:4000/v1/routines/r-1/pause', { method: 'POST', headers: { Authorization: `Bearer ${token}` } }),
+        );
+        expect(res.status).toBe(200);
+
+        const stored = await routinesDAO.findByOwnerAndId('r-1', userId);
+        expect(stored?.routineExceptions?.map((e) => e.date)).toEqual(['2024-01-01']);
     });
 
     it('returns 404 for missing routine', async () => {

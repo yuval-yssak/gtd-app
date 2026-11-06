@@ -4,6 +4,7 @@ import itemsDAO from '../dataAccess/itemsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import type { ItemInterface, OperationInterface, RoutineInterface } from '../types/entities.js';
 import { applyAndPublishOperation, applyAndPublishOperations, type RawOperation } from './applyOperation.js';
+import { withoutExceptionsFrom } from './routineExceptionPrune.js';
 import { ensureFirstRoutineItem } from './routineItemGeneration.js';
 import { addUntilToRrule } from './routineSplitUtils.js';
 import { userLocalDate } from './userTimezone.js';
@@ -48,7 +49,9 @@ export async function pauseRoutine(ctx: CompositeContext, routineId: string): Pr
     // User-local today — "future" is judged against the user's calendar day, not the server's.
     const todayStr = await userLocalDate(ctx.userId);
     await trashFutureOpenItemsForRoutine(ctx, routineId, todayStr, now);
-    return updateRoutine(ctx, routine, { active: false }, now);
+    // The pause pushback caps the Google master at yesterday, so exceptions from today on name
+    // occurrences that no longer exist — and would wrongly apply to a resumed series on those dates.
+    return updateRoutine(ctx, withoutExceptionsFrom(routine, todayStr), { active: false }, now);
 }
 
 /**

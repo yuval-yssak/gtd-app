@@ -41,6 +41,7 @@ import { toInstant } from '../lib/isoInstant.js';
 import { htmlToMarkdown, markdownToHtml } from '../lib/markdownHtml.js';
 import { isDuplicateKeyError } from '../lib/mongoErrors.js';
 import { recordOperation } from '../lib/operationHelpers.js';
+import { exceptionsWithinSeries, withoutExceptionsPastSeriesEnd } from '../lib/routineExceptionPrune.js';
 import {
     buildCalendarInstanceEventId,
     normalizeMasterEventId,
@@ -3921,7 +3922,9 @@ async function updateRoutineFromGCal(existing: RoutineInterface, event: GCalEven
     // marker is stale and must not keep blocking the heal endpoints. Gated on `structurallyNewer` so an
     // out-of-order older payload cannot clear a marker a fresher cancellation just set.
     const merged = structurallyNewer ? clearRetirementMarker(mergedWithGCalOwned) : mergedWithGCalOwned;
-    const updated = clearOmittedGCalOwnedRoutineFields(merged, event);
+    // A Google cap deactivates the routine, and inactive routines skip exception sync — so this is
+    // the only inbound write that can shed the exceptions the capped series no longer reaches.
+    const updated = withoutExceptionsPastSeriesEnd(clearOmittedGCalOwnedRoutineFields(merged, event));
 
     // No-op guard: `structurallyNewer` uses `>=` (GCal wins ties within the same second), so an
     // *unchanged* GCal event whose `updated` equals the stored `lastSyncedFromGCalTs` still counts as
@@ -5742,7 +5745,10 @@ export async function reconcileAndApplyRoutineExceptions(routine: RoutineInterfa
 
     // Apply item side-effects in parallel — each exception targets a different date so there
     // are no write conflicts between them.
-    const updatedExceptions = reported.reduce((acc, ex) => mergeExceptions(acc, ex), afterRevival);
+    const merged = reported.reduce((acc, ex) => mergeExceptions(acc, ex), afterRevival);
+    // A capped series keeps no exceptions past its end: Google already dropped those instances,
+    // and neither reconciler above removes a stub without newTimeStart or a skipped date.
+    const updatedExceptions = exceptionsWithinSeries(routine, merged);
     await Promise.all(reported.map((ex) => applyExceptionToItems(routine, ex, ctx)));
 
     // Skip the routine write + op when the merged exception set is byte-identical to what's stored.

@@ -112,7 +112,6 @@ export function isPastSeriesEnd(routine: RoutineInterface, date: string): boolea
  * ISO datetime after which a series produces no further occurrences: the UNTIL cutoff, or the last
  * COUNT-bounded occurrence (expanded from the master's first-occurrence DTSTART). `null` means the
  * series is open-ended. An over-large COUNT is treated as open — see `MAX_EXPANDABLE_COUNT`.
- * Exported for unit testing.
  */
 export function effectiveSeriesEndIso(rruleStr: string, dtstartIso: string): string | null {
     const until = extractUntilFromRrule(rruleStr);

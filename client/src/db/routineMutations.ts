@@ -94,7 +94,19 @@ export async function pauseRoutine(db: IDBPDatabase<MyDB>, userId: string, routi
     // Trash future open items BEFORE flipping active=false so horizon-generator guards that early-
     // return on !active don't accidentally leave items behind on a different device's next sync.
     await trashFutureItemsFromDate(db, userId, routine._id, todayStr);
-    return updateRoutine(db, { ...routine, active: false });
+    return updateRoutine(db, { ...withoutExceptionsFrom(routine, todayStr), active: false });
+}
+
+/**
+ * The routine without exceptions dated on or after `date`, omitting the key when none are left.
+ * Pause and split both end the series before `date` (Google caps the master; a resume or a split
+ * tail starts afresh), so later exceptions name occurrences that no longer exist and would wrongly
+ * apply to the new series on those dates. The server's pause composite applies the same cutoff.
+ */
+export function withoutExceptionsFrom(routine: StoredRoutine, date: string): StoredRoutine {
+    const { routineExceptions, ...rest } = routine;
+    const kept = (routineExceptions ?? []).filter((exception) => exception.date < date);
+    return kept.length > 0 ? { ...rest, routineExceptions: kept } : rest;
 }
 
 /**

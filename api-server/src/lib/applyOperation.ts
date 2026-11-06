@@ -1,7 +1,7 @@
 import dayjs from 'dayjs';
 import operationsDAO from '../dataAccess/operationsDAO.js';
 import { type ValidationFailure, validateOperation } from '../schemas/operations/index.js';
-import type { EntitySnapshot, EntityType, OperationInterface, OpFailureReason, OpType, RsvpOpPayload } from '../types/entities.js';
+import type { EntitySnapshot, EntityType, OperationInterface, OpFailureReason, OpType, RoutineInterface, RsvpOpPayload } from '../types/entities.js';
 import { type ApplyEntityOpOutcome, applyEntityOp, hydrateCalendarDetachSnapshots, hydrateDeleteSnapshots } from './applyEntityOp.js';
 import { maybeScheduleInlineBriefs } from './brief/briefInlineHook.js';
 import { buildCalendarProvider } from './buildCalendarProvider.js';
@@ -10,6 +10,7 @@ import { hydrateItemCarryForwards } from './itemCarryForward.js';
 import { type NotifyChangeOptions, notifyChange, notifyChanges } from './notifyChange.js';
 import { allocateOpIdentity } from './opIdentity.js';
 import { maybeCascadeReferenceRemoval } from './referenceCascades.js';
+import { withoutExceptionsPastSeriesEnd } from './routineExceptionPrune.js';
 import { replayRsvpOp } from './rsvpReplay.js';
 
 export interface RawOperation {
@@ -164,6 +165,15 @@ function stampSnapshot(snapshot: EntitySnapshot, userId: string, stamp: OpStamp)
 }
 
 /**
+ * A capped routine sheds the exceptions past its end whichever surface (app, API, MCP) capped it,
+ * so the persisted row and the op every device pulls carry the same trimmed list.
+ */
+function withoutDeadRoutineExceptions(entityType: EntityType, snapshot: EntitySnapshot): EntitySnapshot {
+    // Cast: the op's entityType is the authority on its snapshot's shape (validation enforced it).
+    return entityType === 'routine' ? withoutExceptionsPastSeriesEnd(snapshot as RoutineInterface) : snapshot;
+}
+
+/**
  * Builds the server-authoritative op from a raw client op: server-assigned `_id` and `ts`, the
  * caller-supplied `user` stripped and re-stamped (the misroute guard in `/sync/push` rejects
  * mismatches up-front; this is defense in depth), and `updatedTs` clamped to server time.
@@ -186,7 +196,7 @@ export function toServerOperation(userId: string, raw: RawOperation, stamp: OpSt
         entityType: raw.entityType,
         entityId: raw.entityId,
         opType: raw.opType,
-        snapshot: raw.snapshot ? stampSnapshot(raw.snapshot, userId, stamp) : null,
+        snapshot: raw.snapshot ? stampSnapshot(withoutDeadRoutineExceptions(raw.entityType, raw.snapshot), userId, stamp) : null,
         ...(raw.gcalMeta ? { gcalMeta: raw.gcalMeta } : {}),
         ...(raw.rsvp ? { rsvp: raw.rsvp } : {}),
     };

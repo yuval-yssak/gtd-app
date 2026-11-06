@@ -233,6 +233,43 @@ describe('pauseRoutine', () => {
         expect(itemOps).toHaveLength(1);
         expect(itemOps[0]?.entityId).toBe('future-1');
     });
+
+    it('drops exceptions from today on — the capped series no longer has them — and keeps earlier ones', async () => {
+        const today = dayjs().format('YYYY-MM-DD');
+        const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+        const nextMonth = dayjs().add(1, 'month').format('YYYY-MM-DD');
+        const routine = await createRoutine(db, {
+            ...routineFields(),
+            routineType: 'calendar',
+            routineExceptions: [
+                { date: yesterday, type: 'modified' },
+                { date: today, type: 'skipped' },
+                { date: nextMonth, type: 'modified' },
+            ],
+        });
+        await db.clear('syncOperations');
+
+        await pauseRoutine(db, USER_ID, routine);
+
+        const stored = await db.get('routines', routine._id);
+        expect(stored?.routineExceptions?.map((e) => e.date)).toEqual([yesterday]);
+        const [routineOp] = (await db.getAll('syncOperations')).filter((o) => o.entityType === 'routine');
+        if (!routineOp) throw new Error('expected a routine update op');
+        expect((routineOp.snapshot as StoredRoutine).routineExceptions?.map((e) => e.date)).toEqual([yesterday]);
+    });
+
+    it('omits routineExceptions entirely when every exception is from today on', async () => {
+        const today = dayjs().format('YYYY-MM-DD');
+        const routine = await createRoutine(db, { ...routineFields(), routineType: 'calendar', routineExceptions: [{ date: today, type: 'skipped' }] });
+        await db.clear('syncOperations');
+
+        await pauseRoutine(db, USER_ID, routine);
+
+        expect(await db.get('routines', routine._id)).not.toHaveProperty('routineExceptions');
+        const [routineOp] = (await db.getAll('syncOperations')).filter((o) => o.entityType === 'routine');
+        if (!routineOp) throw new Error('expected a routine update op');
+        expect(routineOp.snapshot).not.toHaveProperty('routineExceptions');
+    });
 });
 
 // The routine editor's Pause works from the row in IDB, never from the editor's render snapshot:

@@ -395,6 +395,51 @@ describe('applyAndPublishOperation — routine-delete snapshot hydration', () =>
     });
 });
 
+describe('applyAndPublishOperation — routine exceptions past the series end', () => {
+    const cappedRoutine = (): RoutineInterface => ({
+        _id: 'r-capped',
+        user: userId,
+        title: 'interdental brush',
+        routineType: 'calendar',
+        rrule: 'FREQ=DAILY;UNTIL=20261106T235959Z',
+        startDate: '2026-11-01',
+        template: {},
+        active: true,
+        createdTs: '2026-10-27T10:00:00Z',
+        updatedTs: '2026-11-06T10:00:00Z',
+        routineExceptions: [
+            { date: '2026-11-05', type: 'modified', newTimeStart: '2026-11-05T21:00:00' },
+            { date: '2026-11-06', type: 'skipped' },
+            { date: '2026-11-07', type: 'modified' },
+            { date: '2027-04-20', type: 'modified' },
+        ],
+    });
+
+    it('drops them from both the stored row and the logged op, so every device converges', async () => {
+        const op = await applyAndPublishOperation(
+            userId,
+            { entityType: 'routine', opType: 'create', entityId: 'r-capped', snapshot: cappedRoutine() },
+            { deviceId: 'dev-1' },
+        );
+
+        const keptDates = ['2026-11-05', '2026-11-06'];
+        const stored = await routinesDAO.findByOwnerAndId('r-capped', userId);
+        expect(stored?.routineExceptions?.map((e) => e.date)).toEqual(keptDates);
+        const [logged] = await operationsDAO.findArray({ user: userId, entityId: 'r-capped' });
+        if (!logged) throw new Error('expected the routine op to be logged');
+        expect((logged.snapshot as RoutineInterface).routineExceptions?.map((e) => e.date)).toEqual(keptDates);
+        expect((op.snapshot as RoutineInterface).routineExceptions?.map((e) => e.date)).toEqual(keptDates);
+    });
+
+    it('keeps every exception of an open-ended routine', async () => {
+        const openEnded = { ...cappedRoutine(), rrule: 'FREQ=DAILY' };
+        await applyAndPublishOperation(userId, { entityType: 'routine', opType: 'create', entityId: 'r-capped', snapshot: openEnded }, { deviceId: 'dev-1' });
+
+        const stored = await routinesDAO.findByOwnerAndId('r-capped', userId);
+        expect(stored?.routineExceptions).toHaveLength(4);
+    });
+});
+
 describe('applyAndPublishOperation — notifyChange wiring', () => {
     // Webhook enqueue is the most observable side effect of notifyChange. If a subscription is
     // registered for `item.created`, an inbox-create op should produce a delivery row.

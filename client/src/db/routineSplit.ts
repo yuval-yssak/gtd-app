@@ -6,7 +6,7 @@ import { addUntilToRrule } from '../lib/routineSplitUtils';
 import type { MyDB, StoredRoutine } from '../types/MyDB';
 import { putRoutine } from './routineHelpers';
 import { createNextRoutineItem, deleteFutureItemsFromDate, generateCalendarItemsToHorizon, trashNativeItemsForTypeSwitch } from './routineItemHelpers';
-import { updateRoutine } from './routineMutations';
+import { updateRoutine, withoutExceptionsFrom } from './routineMutations';
 import { queueSyncOp } from './syncHelpers';
 
 dayjs.extend(utc);
@@ -31,14 +31,10 @@ export async function splitRoutine(
     // 1. Cap the original routine's rrule with UNTIL. Prune exceptions that reference dates
     //    the capped routine no longer generates — otherwise they're orphaned references to
     //    never-materialized instances and drift through sync forever.
-    const cappedRrule = addUntilToRrule(original.rrule, splitDate);
-    const { routineExceptions: existingExceptions, ...rest } = original;
-    const keptExceptions = (existingExceptions ?? []).filter((exc) => exc.date < splitDate);
     const cappedOriginal: StoredRoutine = {
-        ...rest,
-        rrule: cappedRrule,
+        ...withoutExceptionsFrom(original, splitDate),
+        rrule: addUntilToRrule(original.rrule, splitDate),
         active: false,
-        ...(keptExceptions.length > 0 ? { routineExceptions: keptExceptions } : {}),
     };
     await updateRoutine(db, cappedOriginal);
 

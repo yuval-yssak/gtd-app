@@ -1227,3 +1227,99 @@ describe('applyExceptionToItems — tiered lookup + create-on-miss', () => {
         expect(afterRepair?.lastKnownCalendarAccountEmail).toBe('other@example.com');
     });
 });
+
+// ─── Exceptions past the series end ─────────────────────────────────────────────────────────
+
+describe('routine exception sync — exceptions past the series end', () => {
+    beforeEach(() => {
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok-series-end' });
+        // A repeat sync goes incremental off the token the first one stored.
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsIncremental').mockResolvedValue({ events: [], nextSyncToken: 'tok-series-end' });
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+    });
+
+    it('drops stored exceptions the capped series no longer reaches and records the change for devices', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        const day = (offset: number) => dayjs().add(offset, 'day').format('YYYY-MM-DD');
+        // Stubs without newTimeStart and a skipped date past the end: neither removal reconciler
+        // touches them, so only the series-end prune can.
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                rrule: `FREQ=DAILY;UNTIL=${day(5).replaceAll('-', '')}T235959Z`,
+                startDate: day(-2),
+                calendarEventId: 'gcal-evt-master',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                routineExceptions: [
+                    { date: day(3), type: 'modified' },
+                    { date: day(10), type: 'modified' },
+                    { date: day(12), type: 'skipped' },
+                ],
+            }),
+        );
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const stored = await routinesDAO.findByOwnerAndId('routine-1', userId);
+        expect(stored?.routineExceptions?.map((e) => e.date)).toEqual([day(3)]);
+        const routineOps = await operationsDAO.findArray({ user: userId, entityType: 'routine', entityId: 'routine-1' });
+        expect(routineOps.some((op) => (op.snapshot as RoutineInterface).routineExceptions?.length === 1)).toBe(true);
+
+        // Converged: the next sync finds nothing to prune and records no further routine op.
+        const again = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(again.status).toBe(200);
+        expect(await operationsDAO.findArray({ user: userId, entityType: 'routine', entityId: 'routine-1' })).toHaveLength(routineOps.length);
+    });
+
+    it('drops them when Google itself caps the series, which also deactivates the routine', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        const day = (offset: number) => dayjs().add(offset, 'day').format('YYYY-MM-DD');
+        const oldTs = dayjs().subtract(1, 'hour').toISOString();
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                rrule: 'FREQ=DAILY',
+                startDate: day(-2),
+                updatedTs: oldTs,
+                calendarEventId: 'gcal-evt-master',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                routineExceptions: [
+                    { date: day(3), type: 'modified' },
+                    { date: day(10), type: 'modified' },
+                    { date: day(12), type: 'skipped' },
+                ],
+            }),
+        );
+        const masterStart = jerusalemWallTime(day(-2), '09:00');
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'gcal-evt-master',
+                    title: 'Standup',
+                    timeStart: masterStart,
+                    timeEnd: dayjs(masterStart).add(30, 'minute').format(),
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: [`RRULE:FREQ=DAILY;UNTIL=${day(5).replaceAll('-', '')}T235959Z`],
+                },
+            ],
+            nextSyncToken: 'tok-capped',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const stored = await routinesDAO.findByOwnerAndId('routine-1', userId);
+        expect(stored?.active).toBe(false);
+        expect(stored?.routineExceptions?.map((e) => e.date)).toEqual([day(3)]);
+        const routineOps = await operationsDAO.findArray({ user: userId, entityType: 'routine', entityId: 'routine-1' }, { sort: { ts: 1, _id: 1 } });
+        const lastOp = routineOps.at(-1);
+        if (!lastOp) throw new Error('expected a routine op for the cap');
+        expect((lastOp.snapshot as RoutineInterface).routineExceptions?.map((e) => e.date)).toEqual([day(3)]);
+    });
+});

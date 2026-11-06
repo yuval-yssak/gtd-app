@@ -136,3 +136,4 @@
 - [Routine push-skip leaves GCal anchors stale](project_routine_push_skip_leaves_anchors_stale.md) — routines lack carry-forward; skipped pushes no longer re-stamp lastSyncedNotes/lastPushedToGCalTs
 - [rrule series-end helper reinvented without guards](project_rrule_series_end_reinvented_without_guards.md) — bare rule.all()/no try-catch; reuse effectiveSeriesEndIso (COUNT cap + malformed→open)
 - [Routine-instance "inherits slot" skip + op-less restamp](project_routine_instance_skip_and_silent_restamp_pitfalls.md) — exceptions miss done/attendee/v1 overrides; carry-forward fills absent only
+- [stampSnapshot is not universal](project_stampsnapshot_not_universal.md) — inbound GCal writes (updateRoutineFromGCal cap) bypass it; GCal-capped routines go inactive so exception sync skips them too
