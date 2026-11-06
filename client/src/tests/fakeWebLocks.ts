@@ -40,3 +40,86 @@ export function installQueueingLocks(): string[] {
 export function uninstallLocks(): void {
     Reflect.deleteProperty(navigator, 'locks');
 }
+
+type ExclusiveLockOptions = { ifAvailable?: boolean; steal?: boolean; signal?: AbortSignal };
+type ExclusiveLockCallback = (lock: { name: string } | null) => Promise<unknown> | unknown;
+interface ExclusiveLockRequest {
+    callback: ExclusiveLockCallback;
+    resolve: (value: unknown) => void;
+    reject: (reason: unknown) => void;
+    detachAbort?: () => void;
+}
+
+/**
+ * A Web Locks stand-in for exclusive-ownership locks, with the spec behaviours a "one tab owns
+ * this" lock relies on: a plain request QUEUES behind the holder (a pre-grant `signal` abort
+ * rejects it with the signal's reason), `ifAvailable` grants `null` when the name is held, and
+ * `steal` grants at once while the previous holder's request rejects with an `AbortError` (its
+ * callback keeps running, as in the spec). Release grants the next waiter.
+ */
+export function installStealableLocks(): void {
+    const holders = new Map<string, ExclusiveLockRequest>();
+    const queues = new Map<string, ExclusiveLockRequest[]>();
+
+    const grant = (name: string, entry: ExclusiveLockRequest) => {
+        // Spec: an abort after the grant is ignored — the request is no longer waiting.
+        entry.detachAbort?.();
+        holders.set(name, entry);
+        void Promise.resolve(entry.callback({ name })).then(
+            (value) => {
+                release(name, entry);
+                entry.resolve(value);
+            },
+            (err: unknown) => {
+                release(name, entry);
+                entry.reject(err);
+            },
+        );
+    };
+    const release = (name: string, entry: ExclusiveLockRequest) => {
+        if (holders.get(name) !== entry) {
+            return; // stolen meanwhile — the thief owns the name now
+        }
+        holders.delete(name);
+        const next = queues.get(name)?.shift();
+        if (next) {
+            grant(name, next);
+        }
+    };
+    const request = (name: string, options: ExclusiveLockOptions, callback: ExclusiveLockCallback) =>
+        new Promise<unknown>((resolve, reject) => {
+            if (options.signal?.aborted) {
+                reject(options.signal.reason);
+                return;
+            }
+            const entry: ExclusiveLockRequest = { callback, resolve, reject };
+            const current = holders.get(name);
+            if (current && options.ifAvailable) {
+                void Promise.resolve(callback(null)).then(resolve, reject);
+                return;
+            }
+            if (current && options.steal) {
+                holders.delete(name);
+                current.reject(new DOMException('The lock was stolen', 'AbortError'));
+            }
+            if (!holders.has(name)) {
+                grant(name, entry);
+                return;
+            }
+            const queue = queues.get(name) ?? [];
+            queues.set(name, [...queue, entry]);
+            const signal = options.signal;
+            if (signal) {
+                const onAbort = () => {
+                    queues.set(
+                        name,
+                        (queues.get(name) ?? []).filter((waiting) => waiting !== entry),
+                    );
+                    reject(signal.reason);
+                };
+                signal.addEventListener('abort', onAbort, { once: true });
+                entry.detachAbort = () => signal.removeEventListener('abort', onAbort);
+            }
+        });
+    Object.defineProperty(navigator, 'locks', { value: { request }, configurable: true });
+}

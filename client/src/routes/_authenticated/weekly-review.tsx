@@ -3,6 +3,7 @@ import dayjs from 'dayjs';
 import { Play } from 'lucide-react';
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { AppErrorBoundary } from '../../components/AppErrorBoundary';
+import { ReviewOpenElsewhereCard } from '../../components/weeklyReview/ReviewOpenElsewhereCard';
 import {
     deleteWeeklyReviewDraft,
     getLastCompletedTs,
@@ -28,6 +29,7 @@ import { useAppData } from '../../contexts/AppDataProvider';
 import { seedDefaultReviewInboxesIfEmpty } from '../../db/reviewInboxMutations';
 import { Button, Card, Spinner, Text } from '../../designSystem';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
+import { useExclusiveTabLock } from '../../hooks/useExclusiveTabLock';
 import { getTodayIso } from '../../lib/dayClock';
 import { hasAtLeastOne, type NonEmptyArray } from '../../lib/typeUtils';
 import styles from './-weekly-review.module.css';
@@ -61,23 +63,49 @@ function WeeklyReviewPage() {
     // replacing the flow from a stale copy that never saw the first. Cleared whenever the page
     // leaves the active/celebrating phases.
     const latestFlowRef = useRef<ReviewFlowState | null>(null);
+    // One tab runs the review: every tab rewrites the WHOLE draft from its own in-memory flow, so
+    // two live tabs silently erase each other's decisions. Other tabs show "Continue here".
+    const tabLock = useExclusiveTabLock(account ? reviewTabLockName(account.id) : null);
+    // Read by commitFlow: a tab that just lost the lock (a late async decision included) must
+    // never write, complete or delete the new owner's draft — a regain re-reads it anyway.
+    const ownsReviewRef = useRef(false);
+    // Armed by "Continue here": once the lock lands, jump straight back into the saved review.
+    const resumeOnAcquireRef = useRef(false);
+    const isTabOwner = tabLock.state === 'held';
 
-    // Resume an interrupted review from the device-local draft (best-effort resumability).
     useEffect(() => {
-        if (!account) {
+        ownsReviewRef.current = isTabOwner;
+    }, [isTabOwner]);
+
+    // Resume an interrupted review from the device-local draft (best-effort resumability) —
+    // re-read on every gain of the tab lock, since another tab may have moved it meanwhile.
+    useEffect(() => {
+        if (!account || !isTabOwner || tabLock.generation === 0) {
             return;
         }
         let cancelled = false;
         void getWeeklyReviewDraft(db, account.id).then((stored) => {
-            if (!cancelled) {
-                latestFlowRef.current = null;
-                setPhase({ kind: 'idle', resumableFlow: stored ?? null });
+            if (cancelled) {
+                return;
             }
+            latestFlowRef.current = null;
+            const shouldResume = resumeOnAcquireRef.current && stored && !isFlowComplete(stored);
+            resumeOnAcquireRef.current = false;
+            if (!shouldResume) {
+                setPhase({ kind: 'idle', resumableFlow: stored ?? null });
+                return;
+            }
+            latestFlowRef.current = stored;
+            setPhase({ kind: 'active', flow: stored });
+            // This tab's ?stage may be stale (the other tab moved on); the URL → flow effect would
+            // otherwise drag the review back to it.
+            const stageId = currentStage(stored)?.id;
+            void navigate({ to: '/weekly-review', search: stageId ? { stage: stageId } : {}, replace: true });
         });
         return () => {
             cancelled = true;
         };
-    }, [db, account]);
+    }, [db, account, isTabOwner, tabLock.generation, navigate]);
 
     const activeStageId = phase.kind === 'active' ? (currentStage(phase.flow)?.id ?? null) : null;
 
@@ -91,7 +119,18 @@ function WeeklyReviewPage() {
         onFlowChange((prev) => jumpToStage(prev, stageIndexOf(urlStageId)));
     });
 
-    if (!account || phase.kind === 'loading') {
+    if (account && tabLock.state === 'heldElsewhere') {
+        return (
+            <ReviewOpenElsewhereCard
+                onContinueHere={() => {
+                    resumeOnAcquireRef.current = true;
+                    tabLock.takeOver();
+                }}
+            />
+        );
+    }
+
+    if (!account || !isTabOwner || phase.kind === 'loading') {
         return (
             <div className={styles.loadingWrapper}>
                 <Spinner size={28} label="Loading the weekly review" />
@@ -120,7 +159,7 @@ function WeeklyReviewPage() {
     }
 
     function commitFlow(flow: ReviewFlowState) {
-        if (!account) {
+        if (!account || !ownsReviewRef.current) {
             return;
         }
         latestFlowRef.current = flow;
@@ -140,7 +179,7 @@ function WeeklyReviewPage() {
             if (hasAtLeastOne(arrivals)) {
                 setPhase({ kind: 'sweep', flow, arrivals });
                 syncStageToUrl(undefined);
-                void saveWeeklyReviewDraft(db, account.id, flow).catch((err) => console.warn('[weekly-review] failed to persist progress', err));
+                persistDraft(account.id, flow);
                 return;
             }
             celebrate(flow);
@@ -148,8 +187,12 @@ function WeeklyReviewPage() {
         }
         setPhase({ kind: 'active', flow });
         syncStageToUrl(currentStage(flow)?.id);
-        // Fire-and-forget persistence — the draft is a convenience, never the source of truth.
-        void saveWeeklyReviewDraft(db, account.id, flow).catch((err) => console.warn('[weekly-review] failed to persist progress', err));
+        persistDraft(account.id, flow);
+    }
+
+    /** Fire-and-forget persistence — the draft is a convenience, never the source of truth. */
+    function persistDraft(accountId: string, flow: ReviewFlowState) {
+        void saveWeeklyReviewDraft(db, accountId, flow).catch((err) => console.warn('[weekly-review] failed to persist progress', err));
     }
 
     function celebrate(flow: ReviewFlowState) {
@@ -246,6 +289,11 @@ function WeeklyReviewPage() {
             onStartOver={() => void onStartOver()}
         />
     );
+}
+
+/** Per account: two accounts' reviews never contend, two tabs of one account always do. */
+function reviewTabLockName(accountId: string) {
+    return `gtd-weekly-review:${accountId}`;
 }
 
 interface SweepScreenProps {

@@ -92,3 +92,4 @@
 - [Inferred move direction from order](feedback_inferred_move_direction_from_order.md) — "current moved down" ≡ "leftover moved up" by order alone; swap drops dirty structural edits.
 - [Testid sweeps tag the group, not the options](feedback_testid_sweep_group_not_option.md) — ToggleGroup/RadioGroup/Tabs root gets the id, option arrays stay bare; repeated chips miss the instance attr.
 - [Lifted state loses the key-remount reset](feedback_lifted_state_loses_key_reset.md) — State hoisted out of a `key={stage.id}` child: a stageId tag still resurrects it on A→B→A; demand a render-time clear.
+- [Capability fallback misses a consumer gate](feedback_capability_fallback_misses_consumer_gate.md) — 'no API → held' sets state but not the generation/flag the page also gates on; also lock-hook name/steal/retry traps.
