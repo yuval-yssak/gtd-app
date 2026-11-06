@@ -2,7 +2,7 @@ import { type FocusEvent as ReactFocusEvent, type KeyboardEvent as ReactKeyboard
 import type { WindowVirtualizerHandle } from 'virtua';
 import type { SectionEdge } from '../lib/dragReorder';
 import { isKeyboardEntry, KEYBOARD_REGION_ATTR, skipContainerOnShiftTab } from '../lib/keyboardRegionDom';
-import { type FlatRow, flatIndexOfItem, type NextActionSection } from '../lib/nextActionSections';
+import { type FlatRow, flatIndexOfItem, type NextActionSection, type RankedRow } from '../lib/nextActionSections';
 import { type RowKeyAction, resolveRowKey } from '../lib/nextActionsKeys';
 import {
     hasFocusMovedSince,
@@ -15,19 +15,18 @@ import {
     whenRowMounted,
 } from '../lib/nextActionsRowDom';
 import { ROW_ACTION_ATTR } from '../lib/rowShortcuts';
-import type { StoredItem } from '../types/MyDB';
 
 /** A row key the page acts on (the hook keeps the focus-only keys to itself). */
 export type RowCommand = Exclude<RowKeyAction, { type: 'focusStep' } | { type: 'focusEdge' } | { type: 'enterActions' } | { type: 'rowAction' }>;
 
-interface UseNextActionsRovingFocusOptions {
+interface UseNextActionsRovingFocusOptions<T extends RankedRow> {
     /** The rows as rendered (preview order during a keyboard grab), headers included. */
-    flatRows: readonly FlatRow<StoredItem>[];
-    isGhost: (item: StoredItem) => boolean;
+    flatRows: readonly FlatRow<T>[];
+    isGhost: (item: T) => boolean;
     virtualizerRef: RefObject<WindowVirtualizerHandle | null>;
     /** True while a drag or keyboard grab is live — the grab's window listener owns the keys then. */
     isReorderActive: boolean;
-    onRowCommand: (command: RowCommand, item: StoredItem, section: NextActionSection<StoredItem>) => void;
+    onRowCommand: (command: RowCommand, item: T, section: NextActionSection<T>) => void;
     /** The list's name as a keyboard region (F6 cycles to it by this name). */
     regionLabel: string;
 }
@@ -79,14 +78,14 @@ function walkActionButtons(key: string, row: HTMLElement, button: HTMLElement): 
  * reordering. The rows and their buttons are tabIndex -1, so Tab leaves the list in one press.
  * Rows are virtualized: a row that is not mounted is scrolled into range before it is focused.
  */
-export function useNextActionsRovingFocus({
+export function useNextActionsRovingFocus<T extends RankedRow>({
     flatRows,
     isGhost,
     virtualizerRef,
     isReorderActive,
     onRowCommand,
     regionLabel,
-}: UseNextActionsRovingFocusOptions): NextActionsRovingFocusApi {
+}: UseNextActionsRovingFocusOptions<T>): NextActionsRovingFocusApi {
     const activeRowId = useRef<string | null>(null);
     // Read by event handlers, which outlive a render.
     const rowsRef = useRef(flatRows);
@@ -197,7 +196,7 @@ export function useNextActionsRovingFocus({
     );
 
     const runRowKey = useCallback(
-        (action: RowKeyAction, row: HTMLElement, flat: Extract<FlatRow<StoredItem>, { kind: 'item' }>) => {
+        (action: RowKeyAction, row: HTMLElement, flat: Extract<FlatRow<T>, { kind: 'item' }>) => {
             const itemId = flat.item._id;
             if (action.type === 'focusStep') {
                 focusStep(itemId, action.delta);

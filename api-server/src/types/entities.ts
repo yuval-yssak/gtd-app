@@ -253,6 +253,13 @@ export interface RoutineInterface {
      */
     rrule: string;
     /**
+     * Manual priority order on the /routines page, within a frequency group (daily, weekly, …): a
+     * fractional-indexing key (`lib/itemRank.ts`), compared by code unit. Client-written only; the
+     * group itself is derived from `rrule`, never stored. Unranked routines sort after ranked ones.
+     * Display-only — a rank-only change is never pushed to Google Calendar (`isRankOnlyRoutineChange`).
+     */
+    rank?: string;
+    /**
      * Only meaningful for `routineType: 'nextAction'`. Modifies what `rrule` gets written as — it
      * is NOT a separate computation path; `rrule` remains the single source of truth for actual
      * date computation (`computeNextOccurrence` never branches on this field).

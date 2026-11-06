@@ -5,8 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('#api/syncClient', async () => await import('../api/syncClient.mock.ts'));
 
 import { partitionPastItemsByDoneness } from '../db/routineItemHelpers';
-import { createRoutine, pauseRoutine, pauseRoutineById, removeRoutine, updateRoutine } from '../db/routineMutations';
+import { createRoutine, pauseRoutine, pauseRoutineById, removeRoutine, reorderRoutine, updateRoutine } from '../db/routineMutations';
 import { waitForPendingFlush } from '../db/syncHelpers';
+import { compareRank } from '../lib/itemRank';
 import type { MyDB, StoredItem, StoredRoutine } from '../types/MyDB';
 import { openTestDB } from './openTestDB';
 
@@ -256,6 +257,82 @@ describe('pauseRoutineById', () => {
         expect(await pauseRoutineById(db, routine._id)).toBeNull();
 
         expect(await db.get('routines', routine._id)).toBeUndefined();
+        expect(await db.getAll('syncOperations')).toEqual([]);
+    });
+});
+
+describe('reorderRoutine', () => {
+    it('writes the planned ranks onto the stored rows and queues one update op per changed routine', async () => {
+        const first = await createRoutine(db, { ...routineFields(), title: 'First' });
+        const second = await createRoutine(db, { ...routineFields(), title: 'Second' });
+        await db.clear('syncOperations');
+
+        const moved = await reorderRoutine(db, [first, second], { routineId: second._id, aboveId: undefined, belowId: first._id });
+
+        expect(moved).toBe(true);
+        const firstRank = (await db.get('routines', first._id))?.rank;
+        const secondRank = (await db.get('routines', second._id))?.rank;
+        if (!firstRank || !secondRank) {
+            throw new Error('expected both routines ranked');
+        }
+        expect(compareRank(secondRank, firstRank)).toBeLessThan(0);
+        const ops = await db.getAll('syncOperations');
+        expect(ops.map((op) => [op.entityType, op.opType])).toEqual([
+            ['routine', 'update'],
+            ['routine', 'update'],
+        ]);
+    });
+
+    it('writes onto the row as stored now, and never resurrects a group member deleted meanwhile', async () => {
+        const first = await createRoutine(db, { ...routineFields(), title: 'First' });
+        const second = await createRoutine(db, { ...routineFields(), title: 'Second' });
+        const deleted = await createRoutine(db, { ...routineFields(), title: 'Deleted elsewhere' });
+        await db.put('routines', { ...first, title: 'Renamed elsewhere' });
+        await db.delete('routines', deleted._id);
+        await db.clear('syncOperations');
+
+        await reorderRoutine(db, [first, second, deleted], { routineId: second._id, aboveId: undefined, belowId: first._id });
+
+        expect(await db.get('routines', first._id)).toMatchObject({ title: 'Renamed elsewhere' });
+        expect(await db.get('routines', deleted._id)).toBeUndefined();
+        expect((await db.getAll('syncOperations')).map((op) => op.entityId).sort()).toEqual([first._id, second._id].sort());
+    });
+
+    it('does nothing when the moved routine itself was deleted meanwhile', async () => {
+        const first = await createRoutine(db, { ...routineFields(), title: 'First' });
+        const gone = await createRoutine(db, { ...routineFields(), title: 'Gone' });
+        await db.delete('routines', gone._id);
+        await db.clear('syncOperations');
+
+        expect(await reorderRoutine(db, [first, gone], { routineId: gone._id, aboveId: undefined, belowId: first._id })).toBe(false);
+        expect(await db.get('routines', gone._id)).toBeUndefined();
+        expect(await db.getAll('syncOperations')).toEqual([]);
+    });
+
+    // A second key press can commit before the first move re-rendered: the caller's group is then
+    // a stale snapshot. The plan must follow the stored order, or the second move is lost.
+    it("plans from the stored order, not the caller's possibly stale group snapshot", async () => {
+        const a = await createRoutine(db, { ...routineFields(), title: 'A', rank: 'a0' });
+        const b = await createRoutine(db, { ...routineFields(), title: 'B', rank: 'a1' });
+        const c = await createRoutine(db, { ...routineFields(), title: 'C', rank: 'a2' });
+        const staleGroup = [a, b, c];
+        // The first move (C between A and B) already landed in storage: A, C, B.
+        await db.put('routines', { ...c, rank: 'a0V' });
+
+        // The second move puts C back below B — against the stale snapshot it looks like a no-op.
+        const moved = await reorderRoutine(db, staleGroup, { routineId: c._id, aboveId: b._id, belowId: undefined });
+
+        expect(moved).toBe(true);
+        const stored = await Promise.all([a, b, c].map((routine) => db.get('routines', routine._id)));
+        const order = stored.flatMap((routine) => (routine ? [routine] : [])).sort((x, y) => compareRank(x.rank ?? '', y.rank ?? ''));
+        expect(order.map((routine) => routine.title)).toEqual(['A', 'B', 'C']);
+    });
+
+    it('is a no-op (false, no ops) for a move onto its own slot', async () => {
+        const first = await createRoutine(db, routineFields());
+        await db.clear('syncOperations');
+
+        expect(await reorderRoutine(db, [first], { routineId: first._id, aboveId: undefined, belowId: undefined })).toBe(false);
         expect(await db.getAll('syncOperations')).toEqual([]);
     });
 });

@@ -1,6 +1,7 @@
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import type { IDBPDatabase } from 'idb';
+import { isSameManualOrderList } from '../lib/routineGrouping';
 import { addUntilToRrule } from '../lib/routineSplitUtils';
 import type { MyDB, StoredRoutine } from '../types/MyDB';
 import { putRoutine } from './routineHelpers';
@@ -68,6 +69,8 @@ export async function splitRoutine(
         ...(editedFields.calendarIntegrationId ? { calendarIntegrationId: editedFields.calendarIntegrationId } : {}),
         ...(editedFields.calendarSyncConfigId ? { calendarSyncConfigId: editedFields.calendarSyncConfigId } : {}),
         ...(editedFields.startDate ? { startDate: editedFields.startDate } : {}),
+        // The tail takes the routine's place in the /routines manual order — while it stays in that list.
+        ...(original.rank !== undefined && isSameManualOrderList(original, editedFields) ? { rank: original.rank } : {}),
     };
     await putRoutine(db, tail);
     await queueSyncOp(db, { opType: 'create', entityType: 'routine', entityId: tail._id, snapshot: tail, userId: tail.userId });

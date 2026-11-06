@@ -21,10 +21,9 @@ import {
     slotOfNeighbours,
     translateYOf,
 } from '../lib/dragReorder';
-import type { NextActionSection } from '../lib/nextActionSections';
+import type { NextActionSection, RankedRow } from '../lib/nextActionSections';
 import { resolveGrabKey } from '../lib/nextActionsKeys';
 import { isFocusFree, ROW_HANDLE_ATTR, ROW_ITEM_ATTR, ROW_SECTION_ATTR, rowButtonOf, rowElement, rowHandleOf, whenRowMounted } from '../lib/nextActionsRowDom';
-import type { StoredItem } from '../types/MyDB';
 
 /** Touch: the handle must be held this long before a drag starts (D4) — a shorter touch is a tap/scroll. */
 export const LONG_PRESS_MS = 250;
@@ -44,9 +43,9 @@ export interface ReorderCommit extends NeighbourIds {
     itemId: string;
 }
 
-interface UseNextActionsDragOptions {
-    sections: ReadonlyArray<NextActionSection<StoredItem>>;
-    isGhost: (item: StoredItem) => boolean;
+interface UseNextActionsDragOptions<T extends RankedRow> {
+    sections: ReadonlyArray<NextActionSection<T>>;
+    isGhost: (item: T) => boolean;
     /** Resolves true when a row was moved (false: no-op, or the row/slot no longer exists); a rejection is surfaced as "Reorder failed". */
     onCommit: (commit: ReorderCommit) => Promise<boolean>;
     /** Brings an UNMOUNTED row into virtua's range (the page maps the id to its virtualizer row index) so it can be focused. */
@@ -62,7 +61,7 @@ export interface HandleProps {
     onContextMenu: (e: React.MouseEvent<HTMLElement>) => void;
 }
 
-export interface NextActionsDragApi {
+export interface NextActionsDragApi<T extends RankedRow> {
     drag: DragState | null;
     /**
      * The grab whose preview order the page should still render: the live keyboard grab, or the
@@ -75,11 +74,11 @@ export interface NextActionsDragApi {
     /** Set when a commit rejected; the page shows it and clears it with `clearError`. */
     error: string | null;
     clearError: () => void;
-    getHandleProps: (item: StoredItem, section: NextActionSection<StoredItem>) => HandleProps;
+    getHandleProps: (item: T, section: NextActionSection<T>) => HandleProps;
     /** Space on a focused row: lifts it into keyboard grab mode (the handle's Space/Enter does the same). */
-    grab: (item: StoredItem, section: NextActionSection<StoredItem>) => void;
+    grab: (item: T, section: NextActionSection<T>) => void;
     /** Commits one keyboard step immediately, no grab (D6): Alt+↑/↓ one slot, Alt+Shift+↑/↓ to the section edge. */
-    commitStep: (item: StoredItem, section: NextActionSection<StoredItem>, step: RowStep) => void;
+    commitStep: (item: T, section: NextActionSection<T>, step: RowStep) => void;
     /** Vertical displacement for a NON-dragged row while a drag is live (0 when idle). The dragged row is moved imperatively. */
     shiftFor: (itemId: string) => number;
     /** Commits a reorder from outside the hook (the "Move to…" sheet) through the same queue, announcement and error path. */
@@ -87,7 +86,7 @@ export interface NextActionsDragApi {
 }
 
 /** Live (non-ghost) item ids of a section, in display order. */
-function liveIdsOf(section: NextActionSection<StoredItem>, isGhost: (item: StoredItem) => boolean): string[] {
+function liveIdsOf<T extends RankedRow>(section: NextActionSection<T>, isGhost: (item: T) => boolean): string[] {
     return section.items.filter((item) => !isGhost(item)).map((item) => item._id);
 }
 
@@ -162,8 +161,8 @@ interface PlannedCommit {
  */
 const RENDER_SETTLE_TIMEOUT_MS = 4000;
 
-interface RenderWaiter {
-    isSettled: (sections: ReadonlyArray<NextActionSection<StoredItem>>) => boolean;
+interface RenderWaiter<T extends RankedRow> {
+    isSettled: (sections: ReadonlyArray<NextActionSection<T>>) => boolean;
     resolve: () => void;
 }
 
@@ -189,7 +188,12 @@ interface PendingLongPress {
  * capture), a touch lift fires from a timer, and a grab-mode handle can lose focus. Proven by
  * Playwright (`e2e/next-actions-reorder*.spec.ts`), not by unit tests — there is no jsdom here.
  */
-export function useNextActionsDrag({ sections, isGhost, onCommit, scrollRowIntoView }: UseNextActionsDragOptions): NextActionsDragApi {
+export function useNextActionsDrag<T extends RankedRow>({
+    sections,
+    isGhost,
+    onCommit,
+    scrollRowIntoView,
+}: UseNextActionsDragOptions<T>): NextActionsDragApi<T> {
     const [drag, setDrag] = useState<DragState | null>(null);
     const [settlingGrab, setSettlingGrab] = useState<DragState | null>(null);
     const [liveText, setLiveText] = useState('');
@@ -198,7 +202,7 @@ export function useNextActionsDrag({ sections, isGhost, onCommit, scrollRowIntoV
     const dragRef = useRef<DragState | null>(null);
     const sectionsRef = useRef(sections);
     // Commits waiting for their move to show in the rendered sections (see `waitForRender`).
-    const renderWaiters = useRef<RenderWaiter[]>([]);
+    const renderWaiters = useRef<RenderWaiter<T>[]>([]);
     useLayoutEffect(() => {
         sectionsRef.current = sections;
         const settled = new Set(renderWaiters.current.filter((waiter) => waiter.isSettled(sections)));
@@ -214,7 +218,7 @@ export function useNextActionsDrag({ sections, isGhost, onCommit, scrollRowIntoV
      * renders later, and a large account's IDB read takes longer than a frame.
      */
     const waitForRender = useCallback(
-        (isSettled: RenderWaiter['isSettled']) =>
+        (isSettled: RenderWaiter<T>['isSettled']) =>
             new Promise<void>((resolve) => {
                 if (isSettled(sectionsRef.current)) {
                     resolve();
@@ -547,7 +551,7 @@ export function useNextActionsDrag({ sections, isGhost, onCommit, scrollRowIntoV
     );
 
     const lift = useCallback(
-        (item: StoredItem, section: NextActionSection<StoredItem>, pointer: { clientY: number } | null) => {
+        (item: T, section: NextActionSection<T>, pointer: { clientY: number } | null) => {
             if (dragRef.current || pendingCommits.current > 0) {
                 return;
             }
@@ -612,7 +616,7 @@ export function useNextActionsDrag({ sections, isGhost, onCommit, scrollRowIntoV
     }, [sections, isGhost, dispatch]);
 
     const getHandleProps = useCallback(
-        (item: StoredItem, section: NextActionSection<StoredItem>): HandleProps => ({
+        (item: T, section: NextActionSection<T>): HandleProps => ({
             onPointerDown: (e) => {
                 if (e.button !== 0 || dragRef.current || pendingCommits.current > 0) {
                     return;
@@ -660,7 +664,7 @@ export function useNextActionsDrag({ sections, isGhost, onCommit, scrollRowIntoV
     );
 
     const grab = useCallback(
-        (item: StoredItem, section: NextActionSection<StoredItem>) => {
+        (item: T, section: NextActionSection<T>) => {
             if (!dragRef.current) {
                 lift(item, section, null);
             }
@@ -671,7 +675,7 @@ export function useNextActionsDrag({ sections, isGhost, onCommit, scrollRowIntoV
     // Committed keyboard steps queue behind each other and plan against the rows CURRENT when they
     // run, so three quick Alt+↑ presses climb three slots. (Key repeat is filtered by the resolver.)
     const commitStep = useCallback(
-        (item: StoredItem, section: NextActionSection<StoredItem>, step: RowStep) => {
+        (item: T, section: NextActionSection<T>, step: RowStep) => {
             if (dragRef.current) {
                 return;
             }

@@ -12,3 +12,5 @@ When a new optional field lands on a shared immutable state object (e.g. `droppe
 **How to apply:** grep for every `export function` in the state module that returns the type, and classify each as spread-based or literal-based. Every literal-based one is a suspect. Then demand at least one unit test that composes two different reducers in sequence (`drop → complete → reconcile`), because single-reducer tests can never catch it. Same reasoning applies to persistence: check whether the draft read path (`flowFromDraft`-style rebuilds) also reconstructs a literal and drops the field — that may be intentional, but it must be stated.
 
 Related: [[feedback_new_synced_entity_misses_lifecycle_sites]], [[feedback_two_effects_one_flow_replacement]].
+
+Same class beyond reducers: entity constructors that build an explicit literal "to avoid carrying over fields" (`splitRoutine`'s tail) drop a newly added ordering field like `rank`. The successor then leaves its manual position. Grep the explicit builders whenever a Stored* entity gains a field.

@@ -1,9 +1,8 @@
 import { GripVertical } from 'lucide-react';
 import { IconButton } from '../../designSystem';
 import type { RankedListApi } from '../../hooks/useRankedList';
-import type { NextActionSection } from '../../lib/nextActionSections';
+import type { NextActionSection, RankedRow } from '../../lib/nextActionSections';
 import { ROW_HANDLE_ATTR } from '../../lib/nextActionsRowDom';
-import type { StoredItem } from '../../types/MyDB';
 import styles from './RankedList.module.css';
 
 /** A contextmenu raised by a touch long press (Chrome/Android dispatch it as a PointerEvent); a mouse right-click is not. */
@@ -11,10 +10,10 @@ function isTouchContextMenu(event: Event): boolean {
     return 'pointerType' in event && event.pointerType === 'touch';
 }
 
-interface Props {
-    ranked: RankedListApi;
-    item: StoredItem;
-    section: NextActionSection<StoredItem>;
+interface Props<T extends RankedRow> {
+    ranked: RankedListApi<T>;
+    item: T;
+    section: NextActionSection<T>;
     testId: string;
 }
 
@@ -23,7 +22,7 @@ interface Props {
  * content is invalid ARIA, and the row's click would fire on every drop. Pages render none for a
  * ghost (a row fading out of the list is not a drag source).
  */
-export function RankedRowHandle({ ranked, item, section, testId }: Props) {
+export function RankedRowHandle<T extends RankedRow>({ ranked, item, section, testId }: Props<T>) {
     return (
         <IconButton
             size="sm"

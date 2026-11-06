@@ -965,6 +965,26 @@ describe('calendar push-back — routines', () => {
         expect(updated!.lastPushedToGCalTs).toBeTruthy();
     });
 
+    // Reordering routines on the /routines page re-keys their `rank` — a client-only display
+    // order Google never sees. Pushing the whole series per re-key would be N pointless updates.
+    it('skips the GCal push when only rank (and updatedTs) changed since the prior op', async () => {
+        const { userId, routine } = await seedLinkedRoutineWithPriorOp({ rank: 'a0' });
+        const updateSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateRecurringEvent').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { _id: 'op-rank', entityType: 'routine', entityId: routine._id, snapshot: routine }), mockBuildProvider());
+
+        expect(updateSpy).not.toHaveBeenCalled();
+    });
+
+    it('still pushes when a rank change rides along with a real series change', async () => {
+        const { userId, routine } = await seedLinkedRoutineWithPriorOp({ rank: 'a0', title: 'Old title' });
+        const updateSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateRecurringEvent').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { _id: 'op-rank-title', entityType: 'routine', entityId: routine._id, snapshot: routine }), mockBuildProvider());
+
+        expect(updateSpy).toHaveBeenCalledOnce();
+    });
+
     it('creates GCal recurring event for a new calendar routine', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
@@ -2013,3 +2033,31 @@ describe('POST /calendar/items/:itemId/rsvp', () => {
         expect(aliceItem?.responseStatus).toBe('needsAction');
     });
 });
+
+/**
+ * A GCal-linked routine (rank `a1`) plus the op that preceded the one under test — the prior
+ * snapshot is the routine with `priorOverrides` applied, a minute earlier.
+ */
+async function seedLinkedRoutineWithPriorOp(priorOverrides: Partial<RoutineInterface>) {
+    const sessionCookie = await loginAsAlice();
+    const userId = await getUserId(sessionCookie);
+    await insertIntegrationWithConfig(userId);
+    const routine = makeRoutine(userId, {
+        calendarEventId: 'gcal-recurring-1',
+        calendarIntegrationId: 'int-1',
+        calendarSyncConfigId: 'sync-config-1',
+        rank: 'a1',
+    });
+    await routinesDAO.insertOne(routine);
+    const priorTs = dayjs().subtract(1, 'minute').toISOString();
+    await operationsDAO.insertOne(
+        makeOp(userId, {
+            _id: 'op-prior',
+            ts: priorTs,
+            entityType: 'routine',
+            entityId: routine._id,
+            snapshot: { ...routine, ...priorOverrides, updatedTs: priorTs },
+        }),
+    );
+    return { userId, routine };
+}

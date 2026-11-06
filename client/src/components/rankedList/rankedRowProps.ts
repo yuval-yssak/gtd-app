@@ -1,12 +1,12 @@
 import { clsx } from 'clsx';
 import type { RankedListApi } from '../../hooks/useRankedList';
-import type { FlatRow, NextActionSection } from '../../lib/nextActionSections';
+import type { FlatRow, NextActionSection, RankedRow } from '../../lib/nextActionSections';
 import { ROW_BUTTON_ATTR, ROW_ITEM_ATTR, ROW_SECTION_ATTR } from '../../lib/nextActionsRowDom';
 import type { StoredItem } from '../../types/MyDB';
 import styles from './RankedList.module.css';
 
 /** One item row of a ranked list's flattened rows (headers excluded). */
-export type ItemRow = Extract<FlatRow<StoredItem>, { kind: 'item' }>;
+export type ItemRow<T extends RankedRow = StoredItem> = Extract<FlatRow<T>, { kind: 'item' }>;
 
 /**
  * Props for a ranked row's outer element: the drag state flags, the measured displacement, and the data
@@ -16,7 +16,7 @@ export type ItemRow = Extract<FlatRow<StoredItem>, { kind: 'item' }>;
  * so React leaves its variable alone. The literal is `DRAG_SHIFT_VAR` (typed through
  * `types/cssCustomProperties.d.ts`); keep the two in step.
  */
-export function rankedRowProps(ranked: RankedListApi, row: ItemRow, className?: string) {
+export function rankedRowProps<T extends RankedRow>(ranked: RankedListApi<T>, row: ItemRow<T>, className?: string) {
     const { item, section } = row;
     const { drag } = ranked;
     const isDragged = drag.drag?.itemId === item._id;
@@ -33,12 +33,12 @@ export function rankedRowProps(ranked: RankedListApi, row: ItemRow, className?: 
 }
 
 /** Props for a ranked row's button (its ListRowButton body): its roving-focus wiring and its short screen-reader hint. */
-export function rankedRowButtonProps(ranked: RankedListApi) {
+export function rankedRowButtonProps<T extends RankedRow>(ranked: RankedListApi<T>) {
     return { 'aria-describedby': ranked.hintIds.row, [ROW_BUTTON_ATTR]: '', ...ranked.roving.rowButtonProps };
 }
 
 /** Props for a section header row: flagged when overdue, dimmed while a drag is live in another section. */
-export function rankedHeaderProps(ranked: RankedListApi, section: NextActionSection<StoredItem>) {
+export function rankedHeaderProps<T extends RankedRow>(ranked: RankedListApi<T>, section: NextActionSection<T>) {
     return {
         className: styles.sectionHeader,
         'data-overdue': section.isOverdue || undefined,
@@ -47,6 +47,6 @@ export function rankedHeaderProps(ranked: RankedListApi, section: NextActionSect
 }
 
 /** A drag is live in another section — the section wall dims this one. */
-function isOutsideActiveSection({ drag }: RankedListApi, section: NextActionSection<StoredItem>) {
+function isOutsideActiveSection<T extends RankedRow>({ drag }: RankedListApi<T>, section: NextActionSection<T>) {
     return drag.drag !== null && drag.drag.sectionKey !== section.key;
 }

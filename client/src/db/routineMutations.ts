@@ -1,5 +1,7 @@
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
+import { sortByManualOrder } from '../lib/routineGrouping';
+import { planRoutineReorder, type RoutineMove } from '../lib/routineReorder';
 import type { MyDB, StoredRoutine } from '../types/MyDB';
 import { deleteRoutineById, putRoutine } from './routineHelpers';
 import {
@@ -102,4 +104,24 @@ export async function pauseRoutine(db: IDBPDatabase<MyDB>, userId: string, routi
 export async function pauseRoutineById(db: IDBPDatabase<MyDB>, routineId: string): Promise<StoredRoutine | null> {
     const stored = await db.get('routines', routineId);
     return stored ? pauseRoutine(db, stored.userId, stored) : null;
+}
+
+/**
+ * Persists a /routines reorder within one frequency group (`group`: the whole group's members,
+ * hidden-by-search ones included). Each planned rank is written onto the row as stored NOW — a remote edit made meanwhile
+ * is kept, a routine deleted meanwhile is skipped (never resurrected). Rank-only writes are not
+ * pushed to Google Calendar (server: `isRankOnlyRoutineChange`). True when anything was written.
+ */
+export async function reorderRoutine(db: IDBPDatabase<MyDB>, group: readonly StoredRoutine[], move: RoutineMove): Promise<boolean> {
+    // `group` names the members; their order and keys come from storage — a commit queued behind
+    // the previous move can run before that move re-rendered, with a stale snapshot in hand.
+    const stored = await Promise.all(group.map((routine) => db.get('routines', routine._id)));
+    const planned = planRoutineReorder(sortByManualOrder(stored.flatMap((routine) => (routine ? [routine] : []))), move);
+    const written = await Promise.all(planned.map(({ routineId, rank }) => writeRoutineRank(db, routineId, rank)));
+    return written.some(Boolean);
+}
+
+async function writeRoutineRank(db: IDBPDatabase<MyDB>, routineId: string, rank: string) {
+    const stored = await db.get('routines', routineId);
+    return stored ? updateRoutine(db, { ...stored, rank }) : null;
 }

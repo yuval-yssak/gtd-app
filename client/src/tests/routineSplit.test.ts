@@ -104,6 +104,50 @@ describe('deleteFutureItemsFromDate', () => {
 // ── splitRoutine ─────────────────────────────────────────────────────────────
 
 describe('splitRoutine', () => {
+    // An ordinary schedule edit on a routine with history splits it: the tail takes the routine's
+    // place in the /routines manual order (the capped head goes to Paused).
+    it("gives the tail the original routine's manual-order rank while it stays in the same group", async () => {
+        const original = buildRoutine({ rank: 'a5' });
+        await db.put('routines', original);
+
+        const tail = await splitRoutine(
+            db,
+            USER_ID,
+            original,
+            {
+                routineType: 'calendar',
+                title: 'Daily standup',
+                rrule: 'FREQ=DAILY;INTERVAL=1',
+                template: {},
+                calendarItemTemplate: { timeOfDay: '10:00', duration: 30 },
+            },
+            '2025-06-01',
+        );
+
+        expect(tail.rank).toBe('a5');
+    });
+
+    it('leaves the tail unranked when the split moves it to another frequency group', async () => {
+        const original = buildRoutine({ rank: 'a5' });
+        await db.put('routines', original);
+
+        const tail = await splitRoutine(
+            db,
+            USER_ID,
+            original,
+            {
+                routineType: 'calendar',
+                title: 'Weekly standup',
+                rrule: 'FREQ=WEEKLY;BYDAY=MO',
+                template: {},
+                calendarItemTemplate: { timeOfDay: '10:00', duration: 30 },
+            },
+            '2025-06-01',
+        );
+
+        expect(tail).not.toHaveProperty('rank');
+    });
+
     it('caps the original routine with UNTIL and creates a new tail routine', async () => {
         const original = buildRoutine();
         await db.put('routines', original);

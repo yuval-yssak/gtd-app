@@ -1,6 +1,7 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
+import { clsx } from 'clsx';
 import dayjs from 'dayjs';
-import { CalendarDays, ChevronDown, ChevronUp, List, Pause, Pencil, Play, Plus, Trash2 } from 'lucide-react';
+import { CalendarDays, ChevronDown, ChevronUp, EllipsisVertical, List, Pause, Pencil, Play, Plus, Trash2 } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
 import { WindowVirtualizer } from 'virtua';
 import { AccountChip } from '../../components/AccountChip';
@@ -8,9 +9,13 @@ import { AccountSyncChip } from '../../components/AccountSyncChip';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { ListEmptyMessage } from '../../components/ListEmptyMessage';
 import { ListPageHeader } from '../../components/ListPageHeader';
+import { ListRowShell } from '../../components/ListRowShell';
 import { ListSkeleton } from '../../components/ListSkeleton';
 import { ListRow, ListRowButton, ListRowText } from '../../components/listRow/ListRow';
 import { RowActionButton } from '../../components/RowActionButton';
+import { RankedListChrome } from '../../components/rankedList/RankedListChrome';
+import { RankedRowHandle } from '../../components/rankedList/RankedRowHandle';
+import { type ItemRow, rankedHeaderProps, rankedRowButtonProps, rankedRowProps } from '../../components/rankedList/rankedRowProps';
 import { useRoutineEditor } from '../../components/routineEditor/useRoutineEditor';
 import { PauseRoutineConfirmDialog } from '../../components/routines/PauseRoutineConfirmDialog';
 import { RoutineWeekGrid } from '../../components/routines/RoutineWeekGrid';
@@ -35,10 +40,13 @@ import { useAutoFocus } from '../../hooks/useAutoFocus';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import { useListSearch } from '../../hooks/useListSearch';
+import type { RankedListApi } from '../../hooks/useRankedList';
+import { useRankedRoutines } from '../../hooks/useRankedRoutines';
+import type { NextActionSection } from '../../lib/nextActionSections';
 import { filterRoutinesByTitle, groupRoutinesByFrequency, splitActivePaused } from '../../lib/routineGrouping';
 import { buildRoutineNextItemIndex, describeNextItemDate } from '../../lib/routineNextItem';
 import { parseRoutinesSearch, type RoutinesTab, type RoutinesView } from '../../lib/routinesUrlParams';
-import { SHORTCUT_ROW_PROPS } from '../../lib/rowShortcuts';
+import { RANKED_LIST_ROW_ACTIONS, SHORTCUT_ROW_PROPS } from '../../lib/rowShortcuts';
 import { formatRoutineSchedule } from '../../lib/rruleUtils';
 import type { StoredRoutine } from '../../types/MyDB';
 import styles from './-routines.module.css';
@@ -88,6 +96,13 @@ function RoutinesPage() {
     const calendarCount = unpausedFiltered.length - nextActionCount;
     const { active, paused } = useMemo(() => splitActivePaused(filtered.filter((routine) => routine.routineType === activeTab)), [filtered, activeTab]);
     const buckets = useMemo(() => groupRoutinesByFrequency(active), [active]);
+    // The tab's groups without the search filter: a move re-keys its whole group, and routines a
+    // search hides must keep their place in it.
+    const allBuckets = useMemo(
+        () => groupRoutinesByFrequency(splitActivePaused(routines.filter((routine) => routine.routineType === activeTab)).active),
+        [routines, activeTab],
+    );
+    const ranked = useRankedRoutines({ db, visibleGroups: buckets, allGroups: allBuckets, refreshRoutines });
     // "now" freezes until routines/items change — a tab left open past an occurrence's end keeps
     // showing it as next until the next sync tick refreshes `items`. Accepted staleness.
     const nextItemByRoutine = useMemo(() => buildRoutineNextItemIndex(active, items, dayjs()), [active, items]);
@@ -147,66 +162,133 @@ function RoutinesPage() {
         return nextLabel ? `${schedule} · next ${nextLabel}` : schedule;
     }
 
-    function renderRoutineRow(routine: StoredRoutine, isDivided: boolean) {
+    /** Copy id, Pause / Resume, Edit, Delete — `buttonProps` puts them on a ranked row's arrow-key walk. */
+    function renderRowActions(routine: StoredRoutine, buttonProps: Partial<RankedListApi<StoredRoutine>['roving']['actionButtonProps']>) {
         return (
-            <ListRow
-                {...SHORTCUT_ROW_PROPS}
-                isDivided={isDivided}
-                actions={
-                    <>
-                        <CopyIdButton isRowAction id={routine._id} testId="routineRowCopyIdButton" />
-                        {routine.active ? (
-                            <Tooltip title="Pause">
-                                <IconButton size="sm" aria-label="Pause" onClick={() => setRoutineToPause(routine)} data-testid="routineRowPauseButton">
-                                    <Pause />
-                                </IconButton>
-                            </Tooltip>
-                        ) : (
-                            <Tooltip title="Resume — opens editor to set a new start date">
-                                <IconButton
-                                    size="sm"
-                                    tone="success"
-                                    aria-label="Resume"
-                                    onClick={(e) => editor.openEditor({ routine, event: e })}
-                                    data-testid="routineRowResumeButton"
-                                >
-                                    <Play />
-                                </IconButton>
-                            </Tooltip>
-                        )}
-                        <RowActionButton
-                            rowAction="edit"
-                            label="Edit"
-                            icon={<Pencil />}
+            <>
+                <CopyIdButton isRowAction id={routine._id} testId="routineRowCopyIdButton" buttonProps={buttonProps} />
+                {routine.active ? (
+                    <Tooltip title="Pause">
+                        <IconButton
+                            size="sm"
+                            aria-label="Pause"
+                            onClick={() => setRoutineToPause(routine)}
+                            data-testid="routineRowPauseButton"
+                            {...buttonProps}
+                        >
+                            <Pause />
+                        </IconButton>
+                    </Tooltip>
+                ) : (
+                    <Tooltip title="Resume — opens editor to set a new start date">
+                        <IconButton
+                            size="sm"
+                            tone="success"
+                            aria-label="Resume"
                             onClick={(e) => editor.openEditor({ routine, event: e })}
-                            data-testid="routineRowEditButton"
-                        />
-                        <Tooltip title="Delete">
-                            <IconButton
-                                size="sm"
-                                tone="danger"
-                                aria-label="Delete"
-                                onClick={() => setRoutineToDelete(routine)}
-                                data-testid="routineRowDeleteButton"
-                            >
-                                <Trash2 />
-                            </IconButton>
-                        </Tooltip>
+                            data-testid="routineRowResumeButton"
+                            {...buttonProps}
+                        >
+                            <Play />
+                        </IconButton>
+                    </Tooltip>
+                )}
+                <RowActionButton
+                    rowAction="edit"
+                    label="Edit"
+                    icon={<Pencil />}
+                    onClick={(e) => editor.openEditor({ routine, event: e })}
+                    data-testid="routineRowEditButton"
+                    {...buttonProps}
+                />
+                <Tooltip title="Delete">
+                    <IconButton
+                        size="sm"
+                        tone="danger"
+                        aria-label="Delete"
+                        onClick={() => setRoutineToDelete(routine)}
+                        data-testid="routineRowDeleteButton"
+                        {...buttonProps}
+                    >
+                        <Trash2 />
+                    </IconButton>
+                </Tooltip>
+            </>
+        );
+    }
+
+    function renderRowText(routine: StoredRoutine) {
+        return (
+            <ListRowText
+                primary={
+                    <>
+                        <span>{routine.title}</span>
+                        <AccountChip userId={routine.userId} />
                     </>
                 }
-            >
+                secondary={routineSecondaryLabel(routine)}
+            />
+        );
+    }
+
+    /** A paused routine's row — paused routines sit outside the manual order. */
+    function renderRoutineRow(routine: StoredRoutine, isDivided: boolean) {
+        return (
+            <ListRow {...SHORTCUT_ROW_PROPS} isDivided={isDivided} actions={renderRowActions(routine, {})}>
                 <ListRowButton onActivate={(e) => editor.openEditor({ routine, event: e })} data-testid="routineRow">
-                    <ListRowText
-                        primary={
-                            <>
-                                <span>{routine.title}</span>
-                                <AccountChip userId={routine.userId} />
-                            </>
-                        }
-                        secondary={routineSecondaryLabel(routine)}
-                    />
+                    {renderRowText(routine)}
                 </ListRowButton>
             </ListRow>
+        );
+    }
+
+    /** A frequency group's label — dimmed, like any ranked section header, while a drag is live in another group. */
+    function renderGroupHeader(section: NextActionSection<StoredRoutine>) {
+        const { className, ...headerProps } = rankedHeaderProps(ranked, section);
+        return (
+            <Text
+                key={`bucket-${section.key}`}
+                as="div"
+                variant="overline"
+                tone="secondary"
+                {...headerProps}
+                className={clsx(className, styles.bucketLabel)}
+                data-testid="routineFrequencyBucket"
+            >
+                {section.label}
+            </Text>
+        );
+    }
+
+    /** An active routine's row in its frequency group's manual order: drag handle, keyboard reorder, "Move to…". */
+    function renderRankedRoutineRow(row: ItemRow<StoredRoutine>) {
+        const { item: routine, section, isLastInSection } = row;
+        return (
+            <ListRowShell key={routine._id} itemId={routine._id}>
+                <ListRow
+                    {...SHORTCUT_ROW_PROPS}
+                    {...rankedRowProps(ranked, row)}
+                    isDivided={!isLastInSection}
+                    actions={
+                        <>
+                            <RowActionButton
+                                rowAction="moveTo"
+                                label="Move to…"
+                                icon={<EllipsisVertical />}
+                                onClick={() => ranked.openMoveTo(routine, section)}
+                                data-testid="routineRowMoveToButton"
+                                {...ranked.roving.actionButtonProps}
+                            />
+                            {renderRowActions(routine, ranked.roving.actionButtonProps)}
+                        </>
+                    }
+                >
+                    <RankedRowHandle ranked={ranked} item={routine} section={section} testId="routineDragHandle" />
+                    <ListRowButton onActivate={(e) => editor.openEditor({ routine, event: e })} data-testid="routineRow" {...rankedRowButtonProps(ranked)}>
+                        {renderRowText(routine)}
+                    </ListRowButton>
+                </ListRow>
+            </ListRowShell>
         );
     }
 
@@ -262,31 +344,21 @@ function RoutinesPage() {
         return (
             <>
                 {buckets.length > 0 && (
-                    // Buckets flattened into one windowed sequence (labels and rows are each a
-                    // measured child) — only elements near the viewport mount, so a large routine
-                    // collection doesn't block the main thread on navigation.
-                    <div className={styles.list}>
-                        <WindowVirtualizer>
-                            {buckets.flatMap((group) => [
-                                <Text
-                                    key={`bucket-${group.bucket}`}
-                                    as="div"
-                                    variant="overline"
-                                    tone="secondary"
-                                    className={styles.bucketLabel}
-                                    data-testid="routineFrequencyBucket"
-                                >
-                                    {group.bucket}
-                                </Text>,
-                                ...group.routines.map((routine, idx) => (
-                                    // data-list-item-id: scroll-restoration anchor (see useListScrollRestoration)
-                                    <div key={routine._id} data-list-item-id={routine._id}>
-                                        {renderRoutineRow(routine, idx < group.routines.length - 1)}
-                                    </div>
-                                )),
-                            ])}
+                    // Groups flattened into one windowed sequence (labels and rows are each a measured
+                    // child) — only elements near the viewport mount, so a large routine collection
+                    // doesn't block the main thread on navigation. The named section is the list's one
+                    // tab stop; each frequency group is its own manual order (see useRankedRoutines).
+                    <section
+                        className={styles.list}
+                        aria-label="Routines"
+                        aria-describedby={ranked.hintIds.list}
+                        data-testid="routinesList"
+                        {...ranked.roving.listProps}
+                    >
+                        <WindowVirtualizer ref={ranked.virtualizerRef}>
+                            {ranked.flatRows.map((row) => (row.kind === 'header' ? renderGroupHeader(row.section) : renderRankedRoutineRow(row)))}
                         </WindowVirtualizer>
-                    </div>
+                    </section>
                 )}
                 {renderPausedSection()}
             </>
@@ -378,6 +450,8 @@ function RoutinesPage() {
                 </DialogActions>
             </AlertDialog>
             <PauseRoutineConfirmDialog routine={routineToPause} onCancel={() => setRoutineToPause(null)} onConfirm={() => void onConfirmPause()} />
+            {/* Keyboard hints, the reorder announcer, the failure toast and the Move to sheet. */}
+            <RankedListChrome ranked={ranked} actions={RANKED_LIST_ROW_ACTIONS} sectionNoun="group" liveTestId="routinesReorderLive" />
         </div>
     );
 }

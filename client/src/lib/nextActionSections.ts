@@ -2,6 +2,12 @@ import dayjs from 'dayjs';
 import type { StoredItem } from '../types/MyDB';
 import { expectedDayKey } from './compareNextActions';
 
+/** What a manually ordered list needs of its rows: an identity, and a title to name the row by (announcements, the Move to sheet). */
+export interface RankedRow {
+    _id: string;
+    title: string;
+}
+
 /** One expected-day group of the Next Actions list. `dayKey` is null for the trailing "No date". */
 export interface NextActionSection<T> {
     dayKey: string | null;

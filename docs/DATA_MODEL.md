@@ -347,6 +347,7 @@ interface RoutineInterface {
     title: string;
     routineType: 'nextAction' | 'calendar';
     rrule: string;                   // RFC 5545 RRULE (required for all routines)
+    rank?: string;                   // /routines manual order within a frequency group (fractional-indexing key); unranked sort after ranked; never pushed to GCal
     recurrenceAnchor?: 'floating' | 'fixed'; // nextAction only — how rrule is written, not a second computation path
     calendarEventId?: string;        // Google Calendar recurring event series ID (BARE id, even for split tails)
     calendarRebasedEventId?: string; // raw `<bareId>_R<anchor>` id when this routine is a "this and following" split tail

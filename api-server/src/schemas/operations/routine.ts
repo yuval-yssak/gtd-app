@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isValidRank } from '../../lib/itemRank.js';
 import {
     energySchema,
     floatingDateTime,
@@ -86,6 +87,8 @@ export const RoutineSnapshotSchema = z
         title: z.string(),
         routineType: z.enum(['nextAction', 'calendar']),
         rrule: rruleSchema,
+        // The /routines manual order within a frequency group — see entities.ts.
+        rank: nonEmptyString.refine(isValidRank, 'rank must be a valid fractional-indexing key').optional(),
         recurrenceAnchor: z.enum(['floating', 'fixed']).optional(),
         triggerMode: z.enum(['afterCompletion', 'fixedSchedule']).optional(),
         afterCompletionDelayDays: z.number().nonnegative().optional(),

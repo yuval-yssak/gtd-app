@@ -1,13 +1,14 @@
 import { useMemo } from 'react';
 import { Toast } from '../../designSystem';
 import type { RankedListApi } from '../../hooks/useRankedList';
+import type { RankedRow } from '../../lib/nextActionSections';
 import { isApplePlatform } from '../../lib/platformKeys';
 import type { RowActionName } from '../../lib/rowShortcuts';
 import { MoveToSheet } from '../nextActions/MoveToSheet';
 import { reorderHintText } from './rankedListHint';
 
-interface Props {
-    ranked: RankedListApi;
+interface Props<T extends RankedRow> {
+    ranked: RankedListApi<T>;
     /** The row letters this list answers to (named in the screen-reader hint). */
     actions: readonly RowActionName[];
     /** One section of the list, as the hint names it: "day" (dated lists) or "list". */
@@ -17,7 +18,7 @@ interface Props {
 }
 
 /** The parts of a ranked list that are not rows: its keyboard hints, the reorder announcer, the failure toast and the Move to sheet. */
-export function RankedListChrome({ ranked, actions, sectionNoun, liveTestId }: Props) {
+export function RankedListChrome<T extends RankedRow>({ ranked, actions, sectionNoun, liveTestId }: Props<T>) {
     const isApple = useMemo(isApplePlatform, []);
     const { key, ...sheet } = ranked.moveToSheet;
     return (

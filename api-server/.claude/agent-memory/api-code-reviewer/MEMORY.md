@@ -133,3 +133,4 @@
 - [Carry-forward hydrator skips creates + calendar.ts revives](feedback_carry_forward_hydrator_skips_creates.md) — field invariants hooked into hydrateItemCarryForwards miss create ops and direct-DAO GCal revives
 - [v1 routes ignore apply outcome](project_v1_routes_ignore_apply_outcome.md) — /v1 writes return 200 on skipped_missing/stale ops; multi-row re-key flows need a per-user KeyedMutex.
 - [App-parity claims: check client source](feedback_app_parity_claims_check_client_source.md) — "mirrors the app" server orders drifted on nav order, tickler, calendar instants
+- [Routine push-skip leaves GCal anchors stale](project_routine_push_skip_leaves_anchors_stale.md) — routines lack carry-forward; skipped pushes no longer re-stamp lastSyncedNotes/lastPushedToGCalTs

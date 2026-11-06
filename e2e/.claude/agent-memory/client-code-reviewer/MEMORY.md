@@ -94,3 +94,4 @@
 - [Lifted state loses the key-remount reset](feedback_lifted_state_loses_key_reset.md) — State hoisted out of a `key={stage.id}` child: a stageId tag still resurrects it on A→B→A; demand a render-time clear.
 - [Capability fallback misses a consumer gate](feedback_capability_fallback_misses_consumer_gate.md) — 'no API → held' sets state but not the generation/flag the page also gates on; also lock-hook name/steal/retry traps.
 - [Secondary editor action, own transition](feedback_secondary_editor_action_own_transition.md) — added Pause/etc. in an editor child leaves Save enabled mid-write; `db.get ?? prop` resurrects deletes.
+- [Ranked adapter closes over render state](feedback_ranked_adapter_closes_over_render_state.md) — New `useRankedRows` writers ignore fresh `sectionRows` and plan from a closure; quick Alt+Up/Down drops the move.

@@ -1,17 +1,17 @@
 import { useMemo, useState } from 'react';
 import { Button, Drawer, Text, TextField } from '../../designSystem';
 import type { NeighbourIds } from '../../lib/dragReorder';
+import type { RankedRow } from '../../lib/nextActionSections';
 import { hasAtLeastOne } from '../../lib/typeUtils';
-import type { StoredItem } from '../../types/MyDB';
 import styles from './MoveToSheet.module.css';
 
 type Placement = 'above' | 'below';
 
-interface MoveToSheetProps {
+interface MoveToSheetProps<T extends RankedRow> {
     /** The item being moved, or null when the sheet is closed. */
-    item: StoredItem | null;
+    item: T | null;
     /** The item's section — LIVE rows in display order (the item itself included). */
-    sectionItems: readonly StoredItem[];
+    sectionItems: readonly T[];
     sectionLabel: string;
     onClose: () => void;
     /** The visible neighbours the item lands between, by id — resolved against live rows at commit time. */
@@ -38,7 +38,7 @@ export function edgeNeighbours(others: readonly { _id: string }[], edge: 'top' |
  * section", and "Above… / Below…" with a searchable picker limited to the same section. Never
  * offers a date change — the section is fixed, like a drag.
  */
-export function MoveToSheet({ item, sectionItems, sectionLabel, onClose, onMove }: MoveToSheetProps) {
+export function MoveToSheet<T extends RankedRow>({ item, sectionItems, sectionLabel, onClose, onMove }: MoveToSheetProps<T>) {
     const [placement, setPlacement] = useState<Placement | null>(null);
     const [query, setQuery] = useState('');
     const others = useMemo(() => sectionItems.filter((row) => row._id !== item?._id), [sectionItems, item]);

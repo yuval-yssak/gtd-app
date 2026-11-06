@@ -347,6 +347,29 @@ describe('POST /sync/push — strict-mode validation', () => {
         expect(stored?.lastSyncedFromGCalTs).toBe('2026-05-26T12:18:35.284Z');
     });
 
+    it('200 + persists a routine update op carrying a rank (the /routines manual order)', async () => {
+        const { sessionCookie } = await oauthLogin(app, 'google');
+        const snapshot = nextActionRoutineSnapshot(await getUserId(sessionCookie!));
+        await db.collection('routines').insertOne(snapshot as never);
+
+        const res = await push(sessionCookie!, 'dev-1', [
+            makeClientOp('routine', snapshot._id, 'update', { ...snapshot, rank: 'a0V', updatedTs: '2026-06-02T09:00:00.000Z' }),
+        ]);
+
+        expect(res.status).toBe(200);
+        const stored = await db.collection<{ rank: string }>('routines').findOne({ _id: snapshot._id } as never);
+        expect(stored?.rank).toBe('a0V');
+    });
+
+    it('400s a routine op whose rank is not a fractional-indexing key', async () => {
+        const { sessionCookie } = await oauthLogin(app, 'google');
+        const snapshot = { ...nextActionRoutineSnapshot(await getUserId(sessionCookie!)), rank: 'not a key!' };
+
+        const res = await push(sessionCookie!, 'dev-1', [makeClientOp('routine', snapshot._id, 'create', snapshot)]);
+
+        expect(res.status).toBe(400);
+    });
+
     it('200 + persists when an all-day routine update op carries calendarItemTemplate { allDay: true }', async () => {
         // All-day routines (e.g. yearly birthdays) carry `{ allDay: true }` instead of `{ timeOfDay,
         // duration }`. The strict calendarItemTemplate schema must accept that shape, else every all-day
@@ -545,3 +568,18 @@ describe('POST /sync/push — archived value validation', () => {
         expect(stored).toBeNull();
     });
 });
+
+/** A minimal valid next-action routine snapshot for push-validation tests. */
+function nextActionRoutineSnapshot(userId: string) {
+    return {
+        _id: crypto.randomUUID(),
+        user: userId,
+        title: 'Water plants',
+        routineType: 'nextAction',
+        rrule: 'FREQ=DAILY',
+        active: true,
+        template: {},
+        createdTs: '2026-05-01T08:00:00.000Z',
+        updatedTs: '2026-05-01T08:00:00.000Z',
+    };
+}

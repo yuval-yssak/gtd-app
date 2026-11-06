@@ -1,5 +1,6 @@
 import { RRule } from 'rrule';
 import type { StoredRoutine } from '../types/MyDB';
+import { compareRank } from './itemRank';
 import { hasAtLeastOne } from './typeUtils';
 
 export const FREQUENCY_BUCKETS = ['Daily', 'Weekly', 'Monthly', 'Quarterly', 'Annual'] as const;
@@ -60,19 +61,32 @@ export interface RoutineBucketGroup {
     routines: StoredRoutine[];
 }
 
-function sortByIntervalThenTitle(routines: StoredRoutine[]): StoredRoutine[] {
+function sortByIntervalThenTitle(routines: readonly StoredRoutine[]): StoredRoutine[] {
     return [...routines].sort((a, b) => approxIntervalDays(a.rrule) - approxIntervalDays(b.rrule) || a.title.localeCompare(b.title));
 }
 
 /**
- * Group routines for one /routines tab into frequency buckets sorted daily → annual.
- * Empty buckets are omitted.
+ * A group's display order: the user's manual order (ranked, by code unit) first, then routines
+ * never reordered in the interval-then-title order — an untouched list looks as it always did.
+ */
+export function sortByManualOrder(routines: readonly StoredRoutine[]): StoredRoutine[] {
+    // Ties (keys from two accounts' key spaces, or a resumed routine's old key) break by title then
+    // id, so the order is stable across renders.
+    const ranked = routines
+        .filter((routine) => routine.rank !== undefined)
+        .sort((a, b) => compareRank(a.rank ?? '', b.rank ?? '') || a.title.localeCompare(b.title) || compareRank(a._id, b._id));
+    const unranked = sortByIntervalThenTitle(routines.filter((routine) => routine.rank === undefined));
+    return [...ranked, ...unranked];
+}
+
+/**
+ * Group routines for one /routines tab into frequency buckets sorted daily → annual, each in its
+ * manual order. Empty buckets are omitted.
  */
 export function groupRoutinesByFrequency(routines: StoredRoutine[]): RoutineBucketGroup[] {
-    const sorted = sortByIntervalThenTitle(routines);
     return FREQUENCY_BUCKETS.map((bucket) => ({
         bucket,
-        routines: sorted.filter((routine) => frequencyBucket(approxIntervalDays(routine.rrule)) === bucket),
+        routines: sortByManualOrder(routines.filter((routine) => frequencyBucket(approxIntervalDays(routine.rrule)) === bucket)),
     })).filter((group) => group.routines.length > 0);
 }
 
@@ -95,4 +109,12 @@ export function filterRoutinesByTitle(routines: StoredRoutine[], query: string |
         return routines;
     }
     return routines.filter((routine) => routine.title.toLowerCase().includes(needle));
+}
+
+/**
+ * Whether two versions of a routine sit in the same /routines manual-order list — same tab (type)
+ * and same frequency group. A rank only means something inside its own list.
+ */
+export function isSameManualOrderList(a: Pick<StoredRoutine, 'routineType' | 'rrule'>, b: Pick<StoredRoutine, 'routineType' | 'rrule'>) {
+    return a.routineType === b.routineType && frequencyBucket(approxIntervalDays(a.rrule)) === frequencyBucket(approxIntervalDays(b.rrule));
 }

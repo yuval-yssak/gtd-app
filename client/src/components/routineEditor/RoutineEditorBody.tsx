@@ -32,6 +32,7 @@ import { useUnsavedChangesGuard } from '../../hooks/useUnsavedChangesGuard';
 import { omitArchived } from '../../lib/entityUsage';
 import { isBrowserOffline } from '../../lib/onlineStatus';
 import { scopeOptionsToOwner } from '../../lib/ownerScopedPickerOptions';
+import { isSameManualOrderList } from '../../lib/routineGrouping';
 import { computeSplitDate, routineHasPastItems } from '../../lib/routineSplitUtils';
 import { RruleExhaustedError } from '../../lib/rruleUtils';
 import { collapseToSingleLine } from '../../lib/singleLineText';
@@ -228,6 +229,10 @@ export function buildUpdatedRoutine(routine: StoredRoutine, ctx: SaveContext, ac
     }
     if (ctx.routineType !== 'nextAction') {
         delete updated.recurrenceAnchor;
+    }
+    if (!isSameManualOrderList(routine, updated)) {
+        // A rank orders a routine within its tab's frequency group — meaningless in another one.
+        delete updated.rank;
     }
     if (ctx.routineType !== routine.routineType) {
         // Type switch drops the disconnect-with-keep markers: a later reconnect's strong-key

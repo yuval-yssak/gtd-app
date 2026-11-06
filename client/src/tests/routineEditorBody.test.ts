@@ -65,6 +65,27 @@ const BASE_CTX = {
 // handling is the trickiest piece: an empty form value MUST clear a previously-set startDate
 // on the routine, not silently preserve it.
 describe('buildUpdatedRoutine', () => {
+    // `rank` orders a routine within its /routines frequency group and tab; a key from another
+    // group's key space would land it at an arbitrary place (ranked routines sort first).
+    it('keeps the manual-order rank while the routine stays in its frequency group and type', () => {
+        const updated = buildUpdatedRoutine({ ...BASE_ROUTINE, rank: 'a3' }, { ...BASE_CTX, finalRrule: 'FREQ=DAILY;INTERVAL=1' }, undefined);
+        expect(updated.rank).toBe('a3');
+    });
+
+    it('drops the rank when the schedule moves the routine to another frequency group', () => {
+        const updated = buildUpdatedRoutine({ ...BASE_ROUTINE, rank: 'a3' }, BASE_CTX, undefined); // daily → weekly
+        expect(updated).not.toHaveProperty('rank');
+    });
+
+    it('drops the rank on a type switch (the other tab is another list)', () => {
+        const updated = buildUpdatedRoutine(
+            { ...BASE_ROUTINE, rank: 'a3' },
+            { ...BASE_CTX, finalRrule: 'FREQ=DAILY', routineType: 'calendar', calendarItemTemplate: { timeOfDay: '09:00', duration: 30 } },
+            undefined,
+        );
+        expect(updated).not.toHaveProperty('rank');
+    });
+
     it('overlays title / rrule / routineType / template onto the existing routine', () => {
         const updated = buildUpdatedRoutine(BASE_ROUTINE, BASE_CTX, undefined);
         expect(updated).toMatchObject({

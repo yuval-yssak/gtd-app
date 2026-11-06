@@ -25,6 +25,7 @@ import { isDuplicateKeyError } from './mongoErrors.js';
 import { recordOperation } from './operationHelpers.js';
 import { markOpFailed } from './opFailure.js';
 import { buildCalendarInstanceEventId, normalizeMasterEventId, regenerateFutureRoutineItems } from './routineItemRegeneration.js';
+import { isRankOnlyRoutineChange } from './routineRankChange.js';
 import { extractUntilFromRrule } from './rruleHelpers.js';
 import { hasAtLeastOne } from './typeUtils.js';
 
@@ -936,8 +937,8 @@ async function handleRoutinePush(
     // identical snapshots) must not see each other as "prior" — the second one would then think
     // there's no active transition and skip the cap, leaving the first pause un-capped in GCal if
     // it also raced on the same lookup.
-    const priorActive = await readPriorActiveFlag(snapshot._id, userId, currentOpId, currentOpTs);
-    const activeTransitioned = priorActive !== null && priorActive !== snapshot.active;
+    const prior = await readPriorRoutineSnapshot(snapshot._id, userId, currentOpId, currentOpTs);
+    const activeTransitioned = prior !== null && prior.active !== snapshot.active;
     if (activeTransitioned && !snapshot.active) {
         return await captureFailedOutcome(`pause cap for routine ${snapshot._id}`, () => pushRoutinePause(snapshot, userId, buildProvider));
     }
@@ -945,6 +946,11 @@ async function handleRoutinePush(
         // Resume captures its own GCal failure internally so local item regeneration still runs
         // after a failed series push; the captured outcome propagates here for surfacing.
         return await pushRoutineResume(snapshot, userId, buildProvider);
+    }
+    // A /routines reorder only re-keys `rank` — display order Google never sees. Pushing the whole
+    // series for it would send one pointless update per re-keyed routine.
+    if (prior && isRankOnlyRoutineChange(prior, snapshot)) {
+        return undefined;
     }
     // Steady-state update (or first-ever push): no active transition — skip GCal mutation entirely
     // if the routine is paused to avoid resurrecting a capped series.
@@ -960,7 +966,8 @@ async function handleRoutinePush(
 }
 
 /**
- * Reads the routine's `active` value as of the operation immediately preceding the current push.
+ * Reads the routine's snapshot as of the operation immediately preceding the current push (its
+ * `active` flag detects pause/resume; the whole row detects a rank-only reorder).
  * "Preceding" means strictly earlier in (ts, _id) lex order — ops with `ts < currentOpTs`, or the
  * same `ts` but an `_id` that sorts before the current op's `_id`. This ordering:
  *  - makes same-updatedTs collisions from two devices deterministic (the op with the smaller `_id`
@@ -970,7 +977,7 @@ async function handleRoutinePush(
  *    op and fires the cap exactly once.
  * Returns null if this is the routine's first op (no prior op exists).
  */
-async function readPriorActiveFlag(routineId: string, userId: string, currentOpId: string, currentOpTs: string): Promise<boolean | null> {
+async function readPriorRoutineSnapshot(routineId: string, userId: string, currentOpId: string, currentOpTs: string): Promise<RoutineInterface | null> {
     const [latest] = await operationsDAO.findArray(
         {
             user: userId,
@@ -983,8 +990,7 @@ async function readPriorActiveFlag(routineId: string, userId: string, currentOpI
     if (!latest) {
         return null;
     }
-    const snapshot = latest.snapshot as RoutineInterface | null;
-    return snapshot ? snapshot.active : null;
+    return latest.snapshot as RoutineInterface | null;
 }
 
 /**

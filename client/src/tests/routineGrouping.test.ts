@@ -86,6 +86,43 @@ describe('groupRoutinesByFrequency', () => {
     });
 });
 
+// The /routines manual order: within a frequency group, ranked routines come first in rank order
+// (code-unit comparison, like item ranks); routines never reordered keep the old interval-then-title
+// order after them, so existing lists look unchanged until the user first drags.
+describe('groupRoutinesByFrequency — manual order', () => {
+    it('orders a group by rank, ignoring interval and title', () => {
+        const everyOtherDay = makeRoutine({ _id: 'slow', title: 'A every other day', rrule: 'FREQ=DAILY;INTERVAL=2', rank: 'a0' });
+        const daily = makeRoutine({ _id: 'fast', title: 'Z daily', rrule: 'FREQ=DAILY', rank: 'a1' });
+        const [group] = groupRoutinesByFrequency([daily, everyOtherDay]);
+        expect(group?.routines.map((r) => r._id)).toEqual(['slow', 'fast']);
+    });
+
+    it('compares ranks by code unit, not locale (digits < uppercase < lowercase)', () => {
+        const lower = makeRoutine({ _id: 'lower', title: 'x', rrule: 'FREQ=DAILY', rank: 'a0' });
+        const upper = makeRoutine({ _id: 'upper', title: 'y', rrule: 'FREQ=DAILY', rank: 'Zz' });
+        const [group] = groupRoutinesByFrequency([lower, upper]);
+        expect(group?.routines.map((r) => r._id)).toEqual(['upper', 'lower']);
+    });
+
+    // Equal keys happen (two accounts' key spaces, a resumed routine's old key): the order must not flicker.
+    it('breaks equal ranks by title, then by id', () => {
+        const b = makeRoutine({ _id: 'id-1', title: 'B', rrule: 'FREQ=DAILY', rank: 'a0' });
+        const a = makeRoutine({ _id: 'id-2', title: 'A', rrule: 'FREQ=DAILY', rank: 'a0' });
+        const twinLater = makeRoutine({ _id: 'id-9', title: 'Twin', rrule: 'FREQ=DAILY', rank: 'a1' });
+        const twinEarlier = makeRoutine({ _id: 'id-3', title: 'Twin', rrule: 'FREQ=DAILY', rank: 'a1' });
+        const [group] = groupRoutinesByFrequency([twinLater, b, twinEarlier, a]);
+        expect(group?.routines.map((r) => r._id)).toEqual(['id-2', 'id-1', 'id-3', 'id-9']);
+    });
+
+    it('puts unranked routines after the ranked ones, in interval-then-title order', () => {
+        const ranked = makeRoutine({ _id: 'ranked', title: 'Z', rrule: 'FREQ=DAILY;INTERVAL=2', rank: 'a0' });
+        const b = makeRoutine({ _id: 'rb', title: 'B daily', rrule: 'FREQ=DAILY' });
+        const a = makeRoutine({ _id: 'ra', title: 'A daily', rrule: 'FREQ=DAILY' });
+        const [group] = groupRoutinesByFrequency([b, a, ranked]);
+        expect(group?.routines.map((r) => r._id)).toEqual(['ranked', 'ra', 'rb']);
+    });
+});
+
 describe('splitActivePaused', () => {
     it('separates paused routines and keeps them interval-then-title sorted', () => {
         const activeDaily = makeRoutine({ _id: 'a1', title: 'Water plants', rrule: 'FREQ=DAILY' });

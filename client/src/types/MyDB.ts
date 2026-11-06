@@ -132,6 +132,8 @@ export interface StoredRoutine {
     routineType: 'nextAction' | 'calendar';
     /** RFC 5545 RRULE string. Required for all routines. */
     rrule: string;
+    /** Manual order on /routines within a frequency group (fractional-indexing key). Unranked sort after ranked. See `lib/routineReorder.ts`. */
+    rank?: string;
     /**
      * Only meaningful for `routineType: 'nextAction'`. Modifies what `rrule` gets written as — not
      * a separate computation path; `rrule` remains the single source of truth. 'floating': `rrule`
