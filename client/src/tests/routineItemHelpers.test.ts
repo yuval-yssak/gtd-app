@@ -3,14 +3,15 @@ import type { IDBPDatabase } from 'idb';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
     createNextRoutineItem,
-    deleteAndRegenerateFutureItems,
     generateCalendarItemsToHorizon,
     getCalendarCompletionTiming,
+    planScheduleReconcile,
     RruleExhaustedError,
+    reconcileFutureItemsWithSchedule,
     regenerateFutureItemContent,
 } from '../db/routineItemHelpers';
 import { hasAtLeastOne } from '../lib/typeUtils';
-import type { MyDB, StoredRoutine } from '../types/MyDB';
+import type { MyDB, StoredItem, StoredRoutine } from '../types/MyDB';
 import { openTestDB } from './openTestDB';
 
 vi.mock('../lib/calendarHorizon', () => ({
@@ -515,34 +516,188 @@ describe('generateCalendarItemsToHorizon', () => {
     });
 });
 
-// ── deleteAndRegenerateFutureItems ──────────────────────────────────────────
+// ── planScheduleReconcile / reconcileFutureItemsWithSchedule ───────────────
 
-describe('deleteAndRegenerateFutureItems', () => {
+// Mid-afternoon UTC keeps "today" the same calendar day from UTC-10 to UTC+14, so these tests read
+// the same in every timezone. Assertions look at dates after today only: whether today's 00:00Z
+// occurrence falls inside the generator's local-midnight window depends on the offset.
+const NOW = '2026-11-06T15:00:00Z';
+
+function dailyRoutine(overrides: Partial<StoredRoutine> = {}): StoredRoutine {
+    return buildCalendarRoutine({
+        _id: 'daily-1',
+        title: 'Floss',
+        rrule: 'FREQ=DAILY',
+        startDate: '2026-11-01',
+        template: { notes: 'between all teeth' },
+        calendarItemTemplate: { timeOfDay: '22:00', duration: 5 },
+        ...overrides,
+    });
+}
+
+/** A Google-linked future occurrence of the daily routine, as generated before the edit. */
+function linkedItem(date: string, overrides: Partial<StoredItem> = {}): StoredItem {
+    return {
+        _id: `item-${date}`,
+        userId: USER_ID,
+        status: 'calendar',
+        title: 'Floss',
+        notes: 'between all teeth',
+        routineId: 'daily-1',
+        timeStart: `${date}T22:00:00`,
+        timeEnd: `${date}T22:05:00`,
+        calendarInstanceEventId: `master_${date.replace(/-/g, '')}T200000Z`,
+        createdTs: '2026-10-27T00:00:00.000Z',
+        updatedTs: '2026-10-27T00:00:00.000Z',
+        ...overrides,
+    };
+}
+
+const datesOf = (items: StoredItem[]) => items.map((i) => (i.timeStart ?? '').slice(0, 10)).sort();
+
+describe('planScheduleReconcile', () => {
+    beforeEach(() => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(new Date(NOW));
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    const week = ['2026-11-07', '2026-11-08', '2026-11-09', '2026-11-10', '2026-11-11', '2026-11-12'];
+
+    it('ending after N occurrences counts from the series start and deletes only the dates past the end', () => {
+        const plan = planScheduleReconcile(
+            dailyRoutine({ rrule: 'FREQ=DAILY;COUNT=10' }),
+            week.map((d) => linkedItem(d)),
+        );
+
+        expect(datesOf(plan.deletes)).toEqual(['2026-11-11', '2026-11-12']);
+        expect(plan.updates).toEqual([]);
+    });
+
+    it('a time change rewrites each kept item once, in place', () => {
+        const plan = planScheduleReconcile(
+            dailyRoutine({ calendarItemTemplate: { timeOfDay: '21:30', duration: 10 } }),
+            week.map((d) => linkedItem(d)),
+        );
+
+        expect(plan.deletes).toEqual([]);
+        expect(plan.updates).toHaveLength(week.length);
+        const [first] = plan.updates;
+        if (!first) throw new Error('expected an update');
+        expect(first).toMatchObject({ _id: 'item-2026-11-07', timeStart: '2026-11-07T21:30:00', timeEnd: '2026-11-07T21:40:00' });
+        expect(first.calendarInstanceEventId).toBe('master_20261107T200000Z');
+    });
+
+    it('a combined title and time edit is still one update per item', () => {
+        const plan = planScheduleReconcile(
+            dailyRoutine({ title: 'Floss + brush', calendarItemTemplate: { timeOfDay: '21:30', duration: 10 } }),
+            week.map((d) => linkedItem(d)),
+        );
+
+        expect(plan.updates).toHaveLength(week.length);
+        expect(plan.updates.every((i) => i.title === 'Floss + brush' && i.timeStart?.endsWith('T21:30:00'))).toBe(true);
+    });
+
+    it('keeps the time of an occurrence moved within its day in Google, across a COUNT edit and a time edit', () => {
+        // Google-made moves arrive without an itemId — the pin is the verbatim new start time.
+        const moved = linkedItem('2026-11-08', { timeStart: '2026-11-08T20:00:00', timeEnd: '2026-11-08T20:05:00' });
+        const exceptions = [{ date: '2026-11-08', type: 'modified' as const, newTimeStart: '2026-11-08T20:00:00', newTimeEnd: '2026-11-08T20:05:00' }];
+
+        const countEdit = planScheduleReconcile(dailyRoutine({ rrule: 'FREQ=DAILY;COUNT=10', routineExceptions: exceptions }), [moved]);
+        const timeEdit = planScheduleReconcile(dailyRoutine({ calendarItemTemplate: { timeOfDay: '21:30', duration: 10 }, routineExceptions: exceptions }), [
+            moved,
+        ]);
+
+        expect(countEdit).toEqual({ deletes: [], updates: [] });
+        expect(timeEdit).toEqual({ deletes: [], updates: [] });
+    });
+
+    it('keeps an occurrence moved to another day in Google while its original date is still on the rule', () => {
+        const moved = linkedItem('2026-11-09', { timeStart: '2026-11-11T08:00:00', timeEnd: '2026-11-11T08:05:00' });
+        const exceptions = [{ date: '2026-11-09', type: 'modified' as const, newTimeStart: '2026-11-11T08:00:00' }];
+
+        // Monday 9 Nov stays on a Mondays-only rule; the landing day (Wednesday) does not.
+        const plan = planScheduleReconcile(dailyRoutine({ rrule: 'FREQ=WEEKLY;BYDAY=MO', routineExceptions: exceptions }), [moved]);
+
+        expect(plan).toEqual({ deletes: [], updates: [] });
+    });
+
+    it('keeps a future item whose occurrence was moved from a date before today', () => {
+        const moved = linkedItem('2026-11-04', { _id: 'moved-from-past', timeStart: '2026-11-09T08:00:00', timeEnd: '2026-11-09T08:05:00' });
+        const exceptions = [{ date: '2026-11-04', type: 'modified' as const, itemId: 'moved-from-past', newTimeStart: '2026-11-09T08:00:00' }];
+
+        const plan = planScheduleReconcile(dailyRoutine({ rrule: 'FREQ=DAILY;COUNT=10', routineExceptions: exceptions }), [moved]);
+
+        expect(plan).toEqual({ deletes: [], updates: [] });
+    });
+
+    it('re-times in place across an all-day switch, both ways', () => {
+        const toAllDay = planScheduleReconcile(dailyRoutine({ calendarItemTemplate: { allDay: true } }), [linkedItem('2026-11-07')]);
+        expect(toAllDay.updates).toEqual([expect.objectContaining({ timeStart: '2026-11-07', timeEnd: '2026-11-08', allDay: true })]);
+
+        const allDayItem = linkedItem('2026-11-07', { timeStart: '2026-11-07', timeEnd: '2026-11-08', allDay: true });
+        const toTimed = planScheduleReconcile(dailyRoutine(), [allDayItem]);
+        const [timed] = toTimed.updates;
+        if (!timed) throw new Error('expected an update');
+        expect(timed).toMatchObject({ timeStart: '2026-11-07T22:00:00', timeEnd: '2026-11-07T22:05:00' });
+        expect(timed.allDay).toBeUndefined();
+    });
+});
+
+describe('reconcileFutureItemsWithSchedule', () => {
     let db: IDBPDatabase<MyDB>;
 
     beforeEach(async () => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(new Date(NOW));
         db = await openTestDB();
     });
 
     afterEach(() => {
         db.close();
+        vi.useRealTimers();
     });
 
-    it('deletes future items and regenerates from new rrule', async () => {
-        const routine = buildCalendarRoutine();
-        await generateCalendarItemsToHorizon(db, USER_ID, routine);
+    async function seed(items: StoredItem[]) {
+        await Promise.all(items.map((i) => db.put('items', i)));
+    }
 
-        const beforeItems = (await db.getAllFromIndex('items', 'userId', USER_ID)).filter((i) => i.routineId === 'cal-routine-1');
-        expect(beforeItems.length).toBeGreaterThan(0);
+    async function itemOps() {
+        return (await db.getAll('syncOperations')).filter((op) => op.entityType === 'item');
+    }
 
-        // Change rrule from weekly to biweekly
-        const updatedRoutine = { ...routine, rrule: 'FREQ=WEEKLY;INTERVAL=2;BYDAY=MO' };
-        await deleteAndRegenerateFutureItems(db, USER_ID, updatedRoutine);
+    it('applies the plan and creates only the dates the rule adds', async () => {
+        await seed(['2026-11-07', '2026-11-09', '2026-11-12'].map((d) => linkedItem(d)));
 
-        const afterItems = (await db.getAllFromIndex('items', 'userId', USER_ID)).filter((i) => i.routineId === 'cal-routine-1' && i.status === 'calendar');
-        // Biweekly should have roughly half the items
-        expect(afterItems.length).toBeLessThan(beforeItems.length);
-        expect(afterItems.length).toBeGreaterThan(0);
+        await reconcileFutureItemsWithSchedule(db, USER_ID, dailyRoutine({ rrule: 'FREQ=DAILY;COUNT=10' }));
+
+        const ops = await itemOps();
+        expect(ops.filter((op) => op.opType === 'delete').map((op) => op.entityId)).toEqual(['item-2026-11-12']);
+        const created = ops.filter((op) => op.opType === 'create').map((op) => (op.snapshot && 'timeStart' in op.snapshot ? op.snapshot.timeStart : ''));
+        expect(created.filter((t) => (t ?? '') > '2026-11-07').sort()).toEqual(['2026-11-08T22:00:00', '2026-11-10T22:00:00']);
+        expect(await db.get('items', 'item-2026-11-07')).toMatchObject({ calendarInstanceEventId: 'master_20261107T200000Z' });
+    });
+
+    it('does not recreate a skipped date whose item was trashed', async () => {
+        await seed([linkedItem('2026-11-07'), linkedItem('2026-11-08', { status: 'trash' })]);
+        const routine = dailyRoutine({ rrule: 'FREQ=DAILY;COUNT=10', routineExceptions: [{ date: '2026-11-08', type: 'skipped' }] });
+
+        await reconcileFutureItemsWithSchedule(db, USER_ID, routine);
+
+        const touched = (await itemOps()).filter((op) => (op.snapshot && 'timeStart' in op.snapshot ? op.snapshot.timeStart : '')?.startsWith('2026-11-08'));
+        expect(touched).toEqual([]);
+        expect((await db.get('items', 'item-2026-11-08'))?.status).toBe('trash');
+    });
+
+    it('rejects a timed template missing its time before writing anything', async () => {
+        await seed([linkedItem('2026-11-12')]);
+        const broken = dailyRoutine({ rrule: 'FREQ=DAILY;COUNT=10', calendarItemTemplate: { duration: 5 } });
+
+        await expect(reconcileFutureItemsWithSchedule(db, USER_ID, broken)).rejects.toThrow(/missing timeOfDay/);
+        expect(await itemOps()).toEqual([]);
     });
 });
 

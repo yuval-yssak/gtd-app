@@ -11,3 +11,5 @@
 - [Cookie call skips session pin](feedback_cookie_call_skips_session_pin.md) — New cookie-authed component fetches (delete/export) skip withActiveAccountSession; drifted cookie hits the wrong account.
 - [Tab-sticky account vs IDB pointer](project_tab_sticky_account_vs_idb_pointer.md) — db-layer wasActive reads IDB; a second tab whose boot account was removed refreshes in place instead of reloading.
 - [In-flight flag over promise chain](feedback_inflight_flag_over_promise_chain.md) — Boolean isCommitting ref reset by the first queued link's finally; use a counter.
+- [GCal exception without itemId](feedback_gcal_exception_without_itemid.md) — Inbound `modified` exceptions lack itemId; matching moved items by itemId alone re-times/deletes Google moves.
+- [Linked routine bulk item ops](feedback_linked_routine_bulk_item_ops.md) — Client per-item update/delete ops on a linked routine = one Google call each + instance forks; server regen suppresses.

@@ -134,3 +134,5 @@
 - [v1 routes ignore apply outcome](project_v1_routes_ignore_apply_outcome.md) — /v1 writes return 200 on skipped_missing/stale ops; multi-row re-key flows need a per-user KeyedMutex.
 - [App-parity claims: check client source](feedback_app_parity_claims_check_client_source.md) — "mirrors the app" server orders drifted on nav order, tickler, calendar instants
 - [Routine push-skip leaves GCal anchors stale](project_routine_push_skip_leaves_anchors_stale.md) — routines lack carry-forward; skipped pushes no longer re-stamp lastSyncedNotes/lastPushedToGCalTs
+- [rrule series-end helper reinvented without guards](project_rrule_series_end_reinvented_without_guards.md) — bare rule.all()/no try-catch; reuse effectiveSeriesEndIso (COUNT cap + malformed→open)
+- [Routine-instance "inherits slot" skip + op-less restamp](project_routine_instance_skip_and_silent_restamp_pitfalls.md) — exceptions miss done/attendee/v1 overrides; carry-forward fills absent only

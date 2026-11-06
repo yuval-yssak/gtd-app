@@ -97,6 +97,18 @@ function parseCountClause(rruleStr: string): number | null {
 }
 
 /**
+ * True when `date` (a `YYYY-MM-DD`) falls after the routine's last occurrence — past its UNTIL, or
+ * past the COUNT-th occurrence counted from the series start. Google drops those occurrences from
+ * the master, so any per-instance PATCH for them is a permanent 400. Day granularity: an UNTIL
+ * counts its own day as inside the series. Malformed or over-large rules read as open-ended.
+ */
+export function isPastSeriesEnd(routine: RoutineInterface, date: string): boolean {
+    const anchor = (routine.startDate ?? routine.createdTs).slice(0, 10);
+    const endIso = effectiveSeriesEndIso(routine.rrule, anchor);
+    return endIso !== null && dayjs.utc(date).isAfter(dayjs.utc(endIso), 'day');
+}
+
+/**
  * ISO datetime after which a series produces no further occurrences: the UNTIL cutoff, or the last
  * COUNT-bounded occurrence (expanded from the master's first-occurrence DTSTART). `null` means the
  * series is open-ended. An over-large COUNT is treated as open — see `MAX_EXPANDABLE_COUNT`.

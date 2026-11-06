@@ -285,8 +285,8 @@ When items change in the app, `notifyChange` fires `maybePushToGCal` (`src/lib/c
 | Edit `calendar` item | Update Google event (title/time/description/attendees; `colorId: null` clears a prior done colour) |
 | Complete standalone `calendar` item | Event **kept**, title prefixed `✓ `, `colorId` set to sage (`DONE_COLOR_ID`, `src/lib/doneMarker.ts`). The stored title stays clean. Reopen reverts both |
 | Trash standalone `calendar` item | Delete Google event (`events.delete` with no `sendUpdates` parameter — Google's default applies) |
-| Complete routine-generated item | Per-instance override on the series: `✓ ` title + sage colour on that occurrence only. Never touches the master. Skipped when the occurrence lies beyond the master's `UNTIL` cap |
-| Trash routine-generated item | Cancel that single occurrence (`status: 'cancelled'` on the instance, always `sendUpdates: 'none'`). Skipped when the routine is inactive or the occurrence lies beyond the master's `UNTIL` cap |
+| Complete routine-generated item | Per-instance override on the series: `✓ ` title + sage colour on that occurrence only. Never touches the master. Skipped when the occurrence lies past the series end (`UNTIL` or `COUNT`) |
+| Trash routine-generated item | Cancel that single occurrence (`status: 'cancelled'` on the instance, always `sendUpdates: 'none'`). Skipped when the routine is inactive or its current rule no longer produces the occurrence (past `UNTIL`/`COUNT`, or off-pattern after a rule edit) |
 | `calendar` → `inbox`/`nextAction`/`waitingFor`/`somedayMaybe` | Event deleted (or occurrence cancelled) using the op's `detachedCalendar` sidecar — the client strips the link fields off the snapshot, so `hydrateCalendarDetachSnapshots` captures the pre-update row onto the op before `applyEntityOp` overwrites it |
 | Create / edit / pause / resume `calendar` routine | Create or patch the recurring series (RRULE); pause caps the master with `UNTIL`, resume clears it. An edit while the routine is inactive is a no-op |
 | Delete `calendar` routine | Trash the generated items, then delete the whole series (`deleteRecurringEvent`) |

@@ -7,7 +7,6 @@ import { usePendingReassign } from '../../contexts/PendingReassignProvider';
 import { offlineReassignMessage } from '../../db/reassignMutations';
 import {
     createFirstRoutineItem,
-    deleteAndRegenerateFutureItems,
     generateCalendarItemsToHorizon,
     hardDeletePastItems,
     hasOpenNonCalendarRoutineItem,
@@ -16,6 +15,7 @@ import {
     type OpenItemSyncResult,
     partitionPastItemsByDoneness,
     persistRoutineTextEdit,
+    reconcileFutureItemsWithSchedule,
     regenerateFutureItemContent,
     restoreTrashedRoutineItem,
     syncOpenItemAfterNextActionEdit,
@@ -316,7 +316,7 @@ export async function saveEditWithStartDateChange(db: IDBPDatabase<MyDB>, routin
  */
 async function seedAfterStartDateChange(db: IDBPDatabase<MyDB>, edit: RoutineEditPair, ctx: SaveContext): Promise<OpenItemSyncResult | null> {
     if (ctx.routineType === 'calendar') {
-        await deleteAndRegenerateFutureItems(db, edit.next.userId, edit.next);
+        await reconcileScheduleDeactivatingOnExhaustion(db, edit.next);
         return null;
     }
     const result = await syncOpenItemAfterNextActionEdit(db, { ...edit, scheduleChanged: true });
@@ -408,8 +408,17 @@ export async function transitionRoutineType(db: IDBPDatabase<MyDB>, previous: St
 /** Calendar analog of `seedFirstItemDeactivatingOnExhaustion`: an exhausted rrule (no occurrence
  *  before the horizon) deactivates the routine instead of failing the save. */
 async function generateHorizonDeactivatingOnExhaustion(db: IDBPDatabase<MyDB>, routine: StoredRoutine): Promise<void> {
+    await deactivatingOnExhaustion(db, routine, () => generateCalendarItemsToHorizon(db, routine.userId, routine));
+}
+
+/** Schedule-edit counterpart: e.g. a COUNT that leaves no future occurrence ends the routine, not the save. */
+async function reconcileScheduleDeactivatingOnExhaustion(db: IDBPDatabase<MyDB>, routine: StoredRoutine): Promise<void> {
+    await deactivatingOnExhaustion(db, routine, () => reconcileFutureItemsWithSchedule(db, routine.userId, routine));
+}
+
+async function deactivatingOnExhaustion(db: IDBPDatabase<MyDB>, routine: StoredRoutine, generate: () => Promise<void>): Promise<void> {
     try {
-        await generateCalendarItemsToHorizon(db, routine.userId, routine);
+        await generate();
     } catch (err) {
         if (!(err instanceof RruleExhaustedError)) {
             throw err;
@@ -465,7 +474,7 @@ function buildEditIntentFromContext(ctx: SaveContext) {
  */
 async function regenerateCalendarItemsForSameTypeEdit(db: IDBPDatabase<MyDB>, updatedRoutine: StoredRoutine, decision: EditDecision): Promise<void> {
     if (decision.scheduleChanged || decision.resumeOnSave) {
-        await deleteAndRegenerateFutureItems(db, updatedRoutine.userId, updatedRoutine);
+        await reconcileScheduleDeactivatingOnExhaustion(db, updatedRoutine);
         return;
     }
     await regenerateFutureItemContent(db, updatedRoutine.userId, updatedRoutine);

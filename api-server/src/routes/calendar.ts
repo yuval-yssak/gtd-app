@@ -5604,8 +5604,9 @@ async function reviveTrashedRoutineItemInPlace(
  * `cancelRecurringInstance` to GCal (`pushRoutineInstanceCancellation`), so a `skipped` exception
  * inside the recurrence corresponds to a real GCal tombstone regardless of whether the user deleted
  * in-app or in GCal, and the tombstone vanishing is the authoritative "back" signal. The one carve-out:
- * the pushback skips occurrences beyond the routine's UNTIL cap (`isBeyondUntilCap` — the capped
- * master already dropped them), so a beyond-cap `skipped` exception has NO tombstone. That is exactly
+ * the pushback skips occurrences the routine's rule no longer produces — past its UNTIL/COUNT end
+ * (`isPastSeriesEnd`) or off-pattern after a rule edit (`isDroppedFromSchedule`); the updated master
+ * already dropped them — so such a `skipped` exception has NO tombstone. That is exactly
  * why the `routineGeneratesOccurrenceOnDate` guard below is load-bearing, not belt-and-braces: it is
  * what keeps those tombstone-less dates from being revived as phantoms. Do not relax it.
  *

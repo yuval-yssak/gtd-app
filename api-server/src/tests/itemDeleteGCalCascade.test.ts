@@ -218,9 +218,188 @@ describe('item-delete cascades to GCal via maybePushToGCal', () => {
         expect(cancelInstance).toHaveBeenCalledTimes(1);
     });
 
-    it('still cancels a far-future occurrence when the routine rrule carries no UNTIL', async () => {
-        // Pins the guard's null branch: an uncapped rrule must never trigger the skip, however
-        // far out the occurrence is — only an explicit UNTIL proves the master dropped it.
+    it('skips instance cancellation past the last COUNT occurrence, still cancels the last one', async () => {
+        // Shortening a series to "after N occurrences" rewrites the GCal master with COUNT, which
+        // drops every later occurrence exactly like UNTIL does — cancelling one 400s, and a client
+        // trimming months of items used to fire one doomed call per day (a rate-limit storm).
+        await seedCalendarIntegration();
+        const routine: RoutineInterface = {
+            _id: 'routine-counted',
+            user: userId,
+            title: 'Daily check',
+            routineType: 'calendar',
+            rrule: 'FREQ=DAILY;COUNT=10',
+            startDate: '2026-11-01',
+            template: {},
+            active: true,
+            createdTs: '2026-10-27T00:00:00Z',
+            updatedTs: '2026-10-27T00:00:00Z',
+            calendarEventId: 'gcal-master-counted',
+            calendarIntegrationId: integrationId,
+            calendarSyncConfigId: configId,
+        } as RoutineInterface;
+        await routinesDAO.insertOne(routine);
+        const pastLast: ItemInterface = {
+            _id: 'item-past-count',
+            user: userId,
+            status: 'calendar',
+            title: 'Daily check',
+            routineId: 'routine-counted',
+            timeStart: '2026-11-11T22:00:00',
+            timeEnd: '2026-11-11T22:05:00',
+            createdTs: '2026-10-27T00:00:00Z',
+            updatedTs: '2026-10-27T00:00:00Z',
+        };
+        const last: ItemInterface = { ...pastLast, _id: 'item-last-count', timeStart: '2026-11-10T22:00:00', timeEnd: '2026-11-10T22:05:00' };
+        await itemsDAO.insertOne(pastLast);
+        await itemsDAO.insertOne(last);
+        const cancelInstance = vi.fn().mockResolvedValue(undefined);
+        const buildProvider = () => fakeProviderWithCancelInstance(cancelInstance);
+
+        const pastOp = await applyAndPublishOperation(
+            userId,
+            { entityType: 'item', opType: 'delete', entityId: 'item-past-count', snapshot: null },
+            { deviceId: 'api:tok-1' },
+        );
+        await calendarPushback.maybePushToGCal(pastOp, buildProvider);
+        expect(cancelInstance).not.toHaveBeenCalled();
+
+        const lastOp = await applyAndPublishOperation(
+            userId,
+            { entityType: 'item', opType: 'delete', entityId: 'item-last-count', snapshot: null },
+            { deviceId: 'api:tok-1' },
+        );
+        await calendarPushback.maybePushToGCal(lastOp, buildProvider);
+        expect(cancelInstance).toHaveBeenCalledTimes(1);
+    });
+
+    it('skips instance cancellation for a date the edited rule no longer produces', async () => {
+        // DAILY → weekly-on-Monday drops every other weekday from the master: the client deletes
+        // those items, and cancelling each one would be a doomed call against a missing instance.
+        await seedCalendarIntegration();
+        await routinesDAO.insertOne({
+            _id: 'routine-weekly',
+            user: userId,
+            title: 'Daily check',
+            routineType: 'calendar',
+            rrule: 'FREQ=WEEKLY;BYDAY=MO',
+            startDate: '2026-11-02',
+            template: {},
+            active: true,
+            createdTs: '2026-10-27T00:00:00Z',
+            updatedTs: '2026-10-27T00:00:00Z',
+            calendarEventId: 'gcal-master-weekly',
+            calendarIntegrationId: integrationId,
+            calendarSyncConfigId: configId,
+        } as RoutineInterface);
+        const tuesday: ItemInterface = {
+            _id: 'item-dropped-tuesday',
+            user: userId,
+            status: 'calendar',
+            title: 'Daily check',
+            routineId: 'routine-weekly',
+            timeStart: '2026-11-10T09:00:00',
+            timeEnd: '2026-11-10T09:10:00',
+            createdTs: '2026-10-27T00:00:00Z',
+            updatedTs: '2026-10-27T00:00:00Z',
+        };
+        await itemsDAO.insertOne(tuesday);
+        await itemsDAO.insertOne({ ...tuesday, _id: 'item-kept-monday', timeStart: '2026-11-09T09:00:00', timeEnd: '2026-11-09T09:10:00' });
+        const cancelInstance = vi.fn().mockResolvedValue(undefined);
+        const buildProvider = () => fakeProviderWithCancelInstance(cancelInstance);
+
+        for (const entityId of ['item-dropped-tuesday', 'item-kept-monday']) {
+            const op = await applyAndPublishOperation(userId, { entityType: 'item', opType: 'delete', entityId, snapshot: null }, { deviceId: 'api:tok-1' });
+            await calendarPushback.maybePushToGCal(op, buildProvider);
+        }
+        expect(cancelInstance).toHaveBeenCalledTimes(1);
+        expect(cancelInstance.mock.calls[0]?.[1]).toBe('2026-11-09');
+    });
+
+    it('cancels an occurrence moved in Google by its original date, even when the landing day is off-pattern', async () => {
+        // Google-made moves arrive without an itemId; the exception is matched by its new start time.
+        await seedCalendarIntegration();
+        await routinesDAO.insertOne({
+            _id: 'routine-moved-in-google',
+            user: userId,
+            title: 'Daily check',
+            routineType: 'calendar',
+            rrule: 'FREQ=WEEKLY;BYDAY=MO',
+            startDate: '2026-11-02',
+            template: {},
+            active: true,
+            createdTs: '2026-10-27T00:00:00Z',
+            updatedTs: '2026-10-27T00:00:00Z',
+            calendarEventId: 'gcal-master-moved',
+            calendarIntegrationId: integrationId,
+            calendarSyncConfigId: configId,
+            routineExceptions: [{ date: '2026-11-09', type: 'modified', newTimeStart: '2026-11-10T09:00:00' }],
+        } as RoutineInterface);
+        await itemsDAO.insertOne({
+            _id: 'item-moved-to-tuesday',
+            user: userId,
+            status: 'calendar',
+            title: 'Daily check',
+            routineId: 'routine-moved-in-google',
+            timeStart: '2026-11-10T09:00:00',
+            timeEnd: '2026-11-10T09:10:00',
+            createdTs: '2026-10-27T00:00:00Z',
+            updatedTs: '2026-10-27T00:00:00Z',
+        });
+        const cancelInstance = vi.fn().mockResolvedValue(undefined);
+
+        const op = await applyAndPublishOperation(
+            userId,
+            { entityType: 'item', opType: 'delete', entityId: 'item-moved-to-tuesday', snapshot: null },
+            { deviceId: 'api:tok-1' },
+        );
+        await calendarPushback.maybePushToGCal(op, () => fakeProviderWithCancelInstance(cancelInstance));
+        expect(cancelInstance).toHaveBeenCalledTimes(1);
+        expect(cancelInstance.mock.calls[0]?.[1]).toBe('2026-11-09');
+    });
+
+    it('still cancels an off-pattern date when the routine has no startDate to anchor its rule', async () => {
+        // A createdTs anchor can sit on another weekday than Google's DTSTART, so it proves nothing.
+        await seedCalendarIntegration();
+        await routinesDAO.insertOne({
+            _id: 'routine-unanchored',
+            user: userId,
+            title: 'Daily check',
+            routineType: 'calendar',
+            rrule: 'FREQ=WEEKLY',
+            template: {},
+            active: true,
+            createdTs: '2026-11-02T00:00:00Z',
+            updatedTs: '2026-11-02T00:00:00Z',
+            calendarEventId: 'gcal-master-unanchored',
+            calendarIntegrationId: integrationId,
+            calendarSyncConfigId: configId,
+        } as RoutineInterface);
+        await itemsDAO.insertOne({
+            _id: 'item-unanchored-tuesday',
+            user: userId,
+            status: 'calendar',
+            title: 'Daily check',
+            routineId: 'routine-unanchored',
+            timeStart: '2026-11-10T09:00:00',
+            timeEnd: '2026-11-10T09:10:00',
+            createdTs: '2026-11-02T00:00:00Z',
+            updatedTs: '2026-11-02T00:00:00Z',
+        });
+        const cancelInstance = vi.fn().mockResolvedValue(undefined);
+
+        const op = await applyAndPublishOperation(
+            userId,
+            { entityType: 'item', opType: 'delete', entityId: 'item-unanchored-tuesday', snapshot: null },
+            { deviceId: 'api:tok-1' },
+        );
+        await calendarPushback.maybePushToGCal(op, () => fakeProviderWithCancelInstance(cancelInstance));
+        expect(cancelInstance).toHaveBeenCalledTimes(1);
+    });
+
+    it('still cancels a far-future occurrence when the routine rrule has no UNTIL or COUNT', async () => {
+        // Pins the guard's null branch: an open-ended rrule must never trigger the series-end skip,
+        // however far out the occurrence is — only an UNTIL or COUNT proves the master dropped it.
         await seedCalendarIntegration();
         const routine: RoutineInterface = {
             _id: 'routine-uncapped',

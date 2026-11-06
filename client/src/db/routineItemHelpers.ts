@@ -355,43 +355,35 @@ function buildCalendarItem(
     // RFC 5545 attendee/organizer/etc. inheritance — exception (if any) overrides master per key.
     const gcalOwned = mergeGCalOwnedForOccurrence(routine, contentException);
 
-    if (template.allDay === true) {
-        const timeEnd = dayjs(dateStr).add(1, 'day').format('YYYY-MM-DD');
-        return {
-            _id: crypto.randomUUID(),
-            userId,
-            status: 'calendar' as const,
-            title,
-            routineId: routine._id,
-            timeStart: dateStr,
-            timeEnd,
-            allDay: true,
-            ...(notes ? { notes } : {}),
-            ...gcalOwned,
-            createdTs: now,
-            updatedTs: now,
-        };
-    }
-
-    const { timeOfDay, duration } = template;
-    if (timeOfDay === undefined || duration === undefined) {
-        throw new Error(`[routine] calendar routine ${routine._id} template missing timeOfDay/duration for a timed routine`);
-    }
-    const timeStart = `${dateStr}T${timeOfDay}:00`;
-    const timeEnd = dayjs(timeStart).add(duration, 'minute').format('YYYY-MM-DDTHH:mm:ss');
     return {
         _id: crypto.randomUUID(),
         userId,
         status: 'calendar' as const,
         title,
         routineId: routine._id,
-        timeStart,
-        timeEnd,
+        ...templateTimesForDate(routine._id, template, dateStr),
         ...(notes ? { notes } : {}),
         ...gcalOwned,
         createdTs: now,
         updatedTs: now,
     };
+}
+
+/** The start/end (and all-day flag) a routine's template gives an occurrence on `dateStr`. */
+function templateTimesForDate(
+    routineId: string,
+    template: NonNullable<StoredRoutine['calendarItemTemplate']>,
+    dateStr: string,
+): { timeStart: string; timeEnd: string; allDay?: true } {
+    if (template.allDay === true) {
+        return { timeStart: dateStr, timeEnd: dayjs(dateStr).add(1, 'day').format('YYYY-MM-DD'), allDay: true };
+    }
+    const { timeOfDay, duration } = template;
+    if (timeOfDay === undefined || duration === undefined) {
+        throw new Error(`[routine] calendar routine ${routineId} template missing timeOfDay/duration for a timed routine`);
+    }
+    const timeStart = `${dateStr}T${timeOfDay}:00`;
+    return { timeStart, timeEnd: dayjs(timeStart).add(duration, 'minute').format('YYYY-MM-DDTHH:mm:ss') };
 }
 
 /**
@@ -468,6 +460,21 @@ export async function isCalendarRoutineExhausted(db: IDBPDatabase<MyDB>, userId:
 }
 
 /**
+ * The routine's calendar template, validated up front so a misconfigured timed routine fails before
+ * any item is written rather than mid-loop. All-day templates only need the `allDay: true` flag.
+ */
+function requireCompleteCalendarTemplate(routine: StoredRoutine): NonNullable<StoredRoutine['calendarItemTemplate']> {
+    const template = routine.calendarItemTemplate;
+    if (!template) {
+        throw new Error(`[routine] calendar routine ${routine._id} is missing calendarItemTemplate`);
+    }
+    if (template.allDay !== true && (template.timeOfDay === undefined || template.duration === undefined)) {
+        throw new Error(`[routine] calendar routine ${routine._id} template missing timeOfDay/duration for a timed routine`);
+    }
+    return template;
+}
+
+/**
  * Generate calendar items for all rrule occurrences from now until the user's horizon.
  * Skips exception dates and dates that already have items, then persists and queues sync ops.
  */
@@ -477,18 +484,7 @@ export async function generateCalendarItemsToHorizon(db: IDBPDatabase<MyDB>, use
     if (!routine.active) {
         return;
     }
-    const { calendarItemTemplate } = routine;
-    if (!calendarItemTemplate) {
-        throw new Error(`[routine] calendar routine ${routine._id} is missing calendarItemTemplate`);
-    }
-    // Validate the template up front so a misconfigured timed routine fails fast instead of
-    // mid-loop. All-day templates only need the `allDay: true` flag — no further validation.
-    if (calendarItemTemplate.allDay !== true) {
-        const { timeOfDay, duration } = calendarItemTemplate;
-        if (timeOfDay === undefined || duration === undefined) {
-            throw new Error(`[routine] calendar routine ${routine._id} template missing timeOfDay/duration for a timed routine`);
-        }
-    }
+    const calendarItemTemplate = requireCompleteCalendarTemplate(routine);
 
     const validOccurrences = getValidFutureOccurrences(routine);
     // Dedupe against any item tied to this routine regardless of status — a `done`/`trash` item on
@@ -697,21 +693,104 @@ export async function materializePendingNextActionRoutines(db: IDBPDatabase<MyDB
 }
 
 /**
- * Delete all future calendar items for a routine and regenerate up to the horizon.
- * Called when the rrule changes so items reflect the new schedule.
+ * Brings a routine's future calendar items in line with an edited routine without recreating them
+ * (see `planScheduleReconcile`), then generates only the dates the new rule adds. Deleting and
+ * recreating every item used to fire one Google call per item and race the server's relink of the
+ * same occurrences into duplicates. Throws `RruleExhaustedError` like the generator.
  */
-export async function deleteAndRegenerateFutureItems(db: IDBPDatabase<MyDB>, userId: string, routine: StoredRoutine): Promise<void> {
-    const now = dayjs().startOf('day').format('YYYY-MM-DD');
+export async function reconcileFutureItemsWithSchedule(db: IDBPDatabase<MyDB>, userId: string, routine: StoredRoutine): Promise<void> {
+    requireCompleteCalendarTemplate(routine);
+    const todayStr = dayjs().startOf('day').format('YYYY-MM-DD');
     const allItems = await db.getAllFromIndex('items', 'userId', userId);
-    const futureItems = allItems.filter((i) => i.routineId === routine._id && i.status === 'calendar' && (i.timeStart ?? '') >= now);
-
-    for (const item of futureItems) {
+    const futureItems = allItems.filter((i) => i.routineId === routine._id && i.status === 'calendar' && (i.timeStart ?? '') >= todayStr);
+    const plan = planScheduleReconcile(routine, futureItems);
+    for (const item of plan.deletes) {
         await queueDeleteThenRemove(db, { opType: 'delete', entityType: 'item', entityId: item._id, snapshot: null, userId: item.userId }, () =>
             db.delete('items', item._id),
         );
     }
-
+    for (const item of plan.updates) {
+        await putItem(db, item);
+        await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: item._id, snapshot: item, userId: item.userId });
+    }
     await generateCalendarItemsToHorizon(db, userId, routine);
+}
+
+/** What a routine edit does to its existing future items: the rows to delete and the rewritten rows. */
+export interface ScheduleReconcilePlan {
+    deletes: StoredItem[];
+    updates: StoredItem[];
+}
+
+/**
+ * Pure plan for `reconcileFutureItemsWithSchedule`. An item whose occurrence the edited rule still
+ * produces keeps its id and Google link and is rewritten — in one update — to the routine's current
+ * time, title and notes; an occurrence moved in Google (pinned by a `modified` exception) keeps the
+ * time the user gave it. An item whose occurrence the rule no longer produces is deleted.
+ */
+export function planScheduleReconcile(routine: StoredRoutine, futureItems: StoredItem[]): ScheduleReconcilePlan {
+    const producesDate = buildDateProducedCheck(routine);
+    const updatedTs = dayjs().toISOString();
+    const outcomes = futureItems.map((item) => {
+        const pin = findPinningException(routine, item);
+        const occurrenceDate = pin?.date ?? (item.timeStart ?? '').slice(0, 10);
+        if (!producesDate(occurrenceDate)) {
+            return { item, rewritten: null, isDeleted: true };
+        }
+        return { item, rewritten: rewriteToRoutine(routine, item, { occurrenceDate, isPinned: pin !== undefined, updatedTs }), isDeleted: false };
+    });
+    return {
+        deletes: outcomes.filter((o) => o.isDeleted).map((o) => o.item),
+        updates: outcomes.flatMap((o) => (o.rewritten ? [o.rewritten] : [])),
+    };
+}
+
+/**
+ * The `modified` exception an item stands for when its occurrence was moved. In-app moves carry the
+ * item's id; moves made in Google never do, so those are matched by their verbatim new start time —
+ * the same pinning rule the server's regeneration applies.
+ */
+function findPinningException(routine: StoredRoutine, item: StoredItem) {
+    return (routine.routineExceptions ?? []).find(
+        (e) => e.type === 'modified' && (e.itemId === item._id || (typeof e.newTimeStart === 'string' && e.newTimeStart === item.timeStart)),
+    );
+}
+
+/** Per-date "does the rule produce this day" check — exceptions ignored, any date (past ones too). */
+function buildDateProducedCheck(routine: StoredRoutine): (dateStr: string) => boolean {
+    const rule = buildCalendarRule(routine.rrule, parseAnchorToUtcDate(routine.startDate ?? routine.createdTs));
+    return (dateStr) => rule.between(dayjs.utc(dateStr).toDate(), dayjs.utc(dateStr).endOf('day').toDate(), true).length > 0;
+}
+
+/** Where a kept item's occurrence sits, and whether a Google/in-app move pinned its time. */
+interface KeptOccurrence {
+    occurrenceDate: string;
+    isPinned: boolean;
+    updatedTs: string;
+}
+
+/** The item rewritten to the routine's time, title and notes for its occurrence, or null when nothing changed. */
+function rewriteToRoutine(routine: StoredRoutine, item: StoredItem, occurrence: KeptOccurrence): StoredItem | null {
+    const contentOverride = (routine.routineExceptions ?? []).find((e) => e.type === 'modified' && e.date === occurrence.occurrenceDate);
+    const title = contentOverride?.title ?? routine.title;
+    const notes = contentOverride?.notes ?? routine.template.notes;
+    const { allDay: _previousAllDay, notes: _previousNotes, ...rest } = item;
+    // A pinned occurrence keeps its own timing (still on `rest`, plus its all-day flag).
+    const timing = occurrence.isPinned
+        ? { ...(item.allDay ? { allDay: item.allDay } : {}) }
+        : templateTimesForDate(routine._id, requireCompleteCalendarTemplate(routine), occurrence.occurrenceDate);
+    const rewritten: StoredItem = { ...rest, ...timing, title, ...(notes ? { notes } : {}) };
+    return isSameOccurrenceContent(item, rewritten) ? null : { ...rewritten, updatedTs: occurrence.updatedTs };
+}
+
+function isSameOccurrenceContent(a: StoredItem, b: StoredItem): boolean {
+    return (
+        a.timeStart === b.timeStart &&
+        a.timeEnd === b.timeEnd &&
+        (a.allDay ?? false) === (b.allDay ?? false) &&
+        a.title === b.title &&
+        (a.notes ?? '') === (b.notes ?? '')
+    );
 }
 
 /**

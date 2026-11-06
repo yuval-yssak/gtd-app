@@ -24,9 +24,14 @@ import { markdownToHtml } from './markdownHtml.js';
 import { isDuplicateKeyError } from './mongoErrors.js';
 import { recordOperation } from './operationHelpers.js';
 import { markOpFailed } from './opFailure.js';
-import { buildCalendarInstanceEventId, normalizeMasterEventId, regenerateFutureRoutineItems } from './routineItemRegeneration.js';
+import {
+    buildCalendarInstanceEventId,
+    normalizeMasterEventId,
+    regenerateFutureRoutineItems,
+    routineGeneratesOccurrenceOnDate,
+} from './routineItemRegeneration.js';
 import { isRankOnlyRoutineChange } from './routineRankChange.js';
-import { extractUntilFromRrule } from './rruleHelpers.js';
+import { isPastSeriesEnd } from './splitChainResolution.js';
 import { hasAtLeastOne } from './typeUtils.js';
 
 type ProviderFactory = (integration: CalendarIntegrationInterface, userId: string) => CalendarProvider;
@@ -327,8 +332,8 @@ async function pushRoutineInstanceOverride(
         return;
     }
     const originalDate = resolveOriginalDate(routine, snapshot);
-    if (isBeyondUntilCap(routine, originalDate)) {
-        console.log('[gcal-pushback] skipping instance override beyond UNTIL cap', { routineId: routine._id, originalDate });
+    if (isPastSeriesEnd(routine, originalDate)) {
+        console.log('[gcal-pushback] skipping instance override past series end', { routineId: routine._id, originalDate });
         return;
     }
     const link: CalendarLink = { integrationId: routine.calendarIntegrationId, configId: routine.calendarSyncConfigId };
@@ -416,8 +421,8 @@ async function pushRoutineInstanceCancellation(
         return;
     }
     const originalDate = resolveOriginalDate(routine, snapshot);
-    if (isBeyondUntilCap(routine, originalDate)) {
-        console.log(`[gcal-pushback] skipping instance cancellation beyond UNTIL cap | routineId=${routine._id} originalDate=${originalDate}`);
+    if (isDroppedFromSchedule(routine, originalDate)) {
+        console.log('[gcal-pushback] skipping instance cancellation for a date the schedule no longer produces', { routineId: routine._id, originalDate });
         return;
     }
     const link: CalendarLink = { integrationId: routine.calendarIntegrationId, configId: routine.calendarSyncConfigId };
@@ -450,28 +455,42 @@ async function pushRoutineInstanceCancellation(
 }
 
 /**
- * True when the occurrence falls past the routine's rrule UNTIL cap. Same rationale as the
- * paused-routine skip in `pushRoutineInstanceCancellation`, for the UNTIL-cap-via-edit path:
- * capping the routine's rrule (locally, or by the organizer in Google) leaves the GCal master
- * with an UNTIL that removes every occurrence past the cap — Google answers any instance
- * PATCH for such an occurrence (cancellation or done-marker override) with a permanent 400.
- * Day-granularity comparison is deliberately conservative: a mid-day UNTIL with a same-day
- * occurrence still pushes and surfaces as terminal rather than being skipped.
+ * True when the routine's current rule no longer produces an occurrence on `date` — past its end,
+ * or off-pattern after a rule edit (DAILY → weekly). Google has no such instance on the updated
+ * master, so a cancellation would be a doomed call; a schedule edit drops many dates at once.
+ * A malformed rule, a routine without a startDate, or a date before it reads as "still produced"
+ * so the push goes ahead as before.
  */
-function isBeyondUntilCap(routine: RoutineInterface, originalDate: string): boolean {
-    const untilIso = extractUntilFromRrule(routine.rrule);
-    return untilIso !== null && dayjs.utc(originalDate).isAfter(dayjs.utc(untilIso), 'day');
+function isDroppedFromSchedule(routine: RoutineInterface, date: string): boolean {
+    if (isPastSeriesEnd(routine, date)) {
+        return true;
+    }
+    // Only an explicit startDate anchors the rule the way Google's DTSTART does. A createdTs anchor
+    // can postdate the series' real start, or sit on another weekday than a BYDAY-less weekly
+    // master — trusting it would skip cancellations Google still needs. Same before the anchor.
+    if (!routine.startDate || date < routine.startDate) {
+        return false;
+    }
+    try {
+        return !routineGeneratesOccurrenceOnDate(routine, date);
+    } catch {
+        return false;
+    }
 }
 
 /**
  * Returns the rrule occurrence date this item was originally generated for.
  * For an un-moved item, `timeStart` still matches the rrule date — use that.
  * For an already-moved item, `timeStart` is the *new* date, so the rrule date only lives
- * on the routine's `modified` exception. Look it up by `itemId` and fall back to `timeStart`
- * if no exception exists yet (first-ever override).
+ * on the routine's `modified` exception. Look it up by `itemId` or by its moved start time, and
+ * fall back to `timeStart` if no exception exists yet (first-ever override).
  */
 function resolveOriginalDate(routine: RoutineInterface, snapshot: ItemInterface): string {
-    const existing = routine.routineExceptions?.find((e) => e.type === 'modified' && e.itemId === snapshot._id);
+    // In-app moves carry the item id and win; moves made in Google never do, so those are matched by
+    // their verbatim new start time — the same pin the regeneration and the client planner use.
+    const modified = (routine.routineExceptions ?? []).filter((e) => e.type === 'modified');
+    const existing =
+        modified.find((e) => e.itemId === snapshot._id) ?? modified.find((e) => typeof e.newTimeStart === 'string' && e.newTimeStart === snapshot.timeStart);
     if (existing) {
         return existing.date;
     }

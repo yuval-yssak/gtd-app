@@ -39,7 +39,7 @@ import { reassignEntity } from './reassignMutations';
 import { getReviewInboxesByUser } from './reviewInboxHelpers';
 import { createReviewInbox, removeReviewInbox, seedDefaultReviewInboxesIfEmpty, updateReviewInbox } from './reviewInboxMutations';
 import { getRoutinesByUser } from './routineHelpers';
-import { deleteAndRegenerateFutureItems, generateCalendarItemsToHorizon, materializePendingNextActionRoutines } from './routineItemHelpers';
+import { generateCalendarItemsToHorizon, materializePendingNextActionRoutines, reconcileFutureItemsWithSchedule } from './routineItemHelpers';
 import type { NewRoutineFields } from './routineMutations';
 import { createRoutine, pauseRoutine, removeRoutine, updateRoutine } from './routineMutations';
 import { closeSseConnections, getConnectedSseUserIds, getOpenSseUserIds } from './sseClient';
@@ -166,13 +166,13 @@ export function mountDevTools(db: IDBPDatabase<MyDB>): void {
                 }
                 await generateCalendarItemsToHorizon(db, uid, routine);
             }),
-        deleteAndRegenerateFutureItems: (routineId: string) =>
+        reconcileFutureItemsWithSchedule: (routineId: string) =>
             resolveUserId(db).then(async (uid) => {
                 const routine = await db.get('routines', routineId);
                 if (!routine) {
                     throw new Error(`Routine ${routineId} not found`);
                 }
-                await deleteAndRegenerateFutureItems(db, uid, routine);
+                await reconcileFutureItemsWithSchedule(db, uid, routine);
             }),
 
         // ── Sync controls ────────────────────────────────────────────────────

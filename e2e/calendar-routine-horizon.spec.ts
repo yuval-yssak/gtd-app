@@ -113,7 +113,7 @@ test.describe('calendar routine horizon', () => {
                 rrule: 'FREQ=WEEKLY;INTERVAL=2;BYDAY=TH',
                 calendarItemTemplate: { timeOfDay: '11:00', duration: 45 },
             });
-            await gtd.deleteAndRegenerateFutureItems(page, updated._id);
+            await gtd.reconcileFutureItemsWithSchedule(page, updated._id);
             await gtd.flush(page);
 
             // Verify: fewer items, now on Thursdays at 11:00
@@ -134,6 +134,50 @@ test.describe('calendar routine horizon', () => {
             // Server should have no Tuesday items left
             const tuesdayItems = serverItems.filter((i) => dayjs(i.timeStart).day() === 2);
             expect(tuesdayItems).toHaveLength(0);
+        });
+    });
+
+    test('ending a daily routine after N occurrences in the editor keeps the surviving items and drops the rest', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `cal-horizon-count-${uniqueStamp()}@example.com`, async (page) => {
+            // Starts tomorrow so "today" never sits on the generator's timezone-dependent window edge.
+            const startDate = dayjs().add(1, 'day').format('YYYY-MM-DD');
+            const routine = await gtd.createRoutine(page, {
+                title: 'Floss nightly',
+                routineType: 'calendar',
+                rrule: 'FREQ=DAILY',
+                template: {},
+                calendarItemTemplate: { timeOfDay: '22:00', duration: 5 },
+                active: true,
+                startDate,
+            });
+            await gtd.generateCalendarItemsToHorizon(page, routine._id);
+            await gtd.flush(page);
+            const idsBefore = new Map((await gtd.listCalendar(page)).filter((i) => i.routineId === routine._id).map((i) => [i.timeStart, i._id]));
+
+            await page.goto('/routines?tab=calendar');
+            await page.getByTestId('routineRow').filter({ hasText: 'Floss nightly' }).click();
+            const editor = page.getByTestId('routinePageWrapper');
+            await editor.getByTestId('routineEndsAfterN').click();
+            await editor.getByTestId('routineEndsCountInput').fill('3');
+            await editor.getByTestId('routineEditorSaveButton').click();
+            await expect(editor).toBeHidden();
+            await gtd.flush(page);
+
+            // COUNT counts from the start date, and the surviving occurrences are the same items —
+            // not recreated copies — so their Google links survive the edit.
+            const expectedStarts = [0, 1, 2].map((offset) => `${dayjs(startDate).add(offset, 'day').format('YYYY-MM-DD')}T22:00:00`);
+            await expect
+                .poll(async () =>
+                    (await gtd.fetchBootstrap(page)).items
+                        .filter((i) => i.routineId === routine._id && i.status === 'calendar')
+                        .map((i) => i.timeStart)
+                        .sort(),
+                )
+                .toEqual(expectedStarts);
+            const serverItems = (await gtd.fetchBootstrap(page)).items.filter((i) => i.routineId === routine._id && i.status === 'calendar');
+            for (const item of serverItems) {
+                expect(item._id).toBe(idsBefore.get(item.timeStart));
+            }
         });
     });
 

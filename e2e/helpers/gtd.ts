@@ -299,14 +299,14 @@ const gtdImpl = {
             routineId,
         ),
 
-    deleteAndRegenerateFutureItems: (page: Page, routineId: string): Promise<void> =>
+    reconcileFutureItemsWithSchedule: (page: Page, routineId: string): Promise<void> =>
         page.evaluate(
             (id) =>
                 (
                     window as unknown as {
-                        __gtd: { deleteAndRegenerateFutureItems(id: string): Promise<void> };
+                        __gtd: { reconcileFutureItemsWithSchedule(id: string): Promise<void> };
                     }
-                ).__gtd.deleteAndRegenerateFutureItems(id),
+                ).__gtd.reconcileFutureItemsWithSchedule(id),
             routineId,
         ),
 
