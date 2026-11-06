@@ -1,11 +1,13 @@
 import type { IDBPDatabase } from 'idb';
-import { useRef, useState } from 'react';
+import { useRef } from 'react';
 import type { MyDB } from '../../types/MyDB';
 import {
+    clampRevisitOffset,
     completeEntry,
     dropCurrentItem,
     type RevisitResume,
-    type StageDecisionUndo,
+    revisitedDecisionOrdinal,
+    type StageDecision,
     type StageQueue,
     shouldResumeRevisit,
     skipCurrentItem,
@@ -20,7 +22,21 @@ interface StageDecisionNavigationHost {
     onQueueChange: (updateQueue: (queue: StageQueue) => StageQueue) => void;
     /** Undo restore failed — nothing changed; the stage surfaces this through its snackbar. */
     onUndoFailed: (message: string) => void;
+    /** Owned by the wizard so its header counter can follow the ◀ revisit walk. */
+    revisit: StageRevisitPosition;
 }
+
+/**
+ * How far back the user is looking through the stage's decisions: 0 = the live queue, n = the
+ * n-th most recent decision.
+ */
+export interface StageRevisitPosition {
+    offset: number;
+    onOffsetChange: (offset: number) => void;
+}
+
+/** What a decision records besides its entry id — armed before a save, attached once it commits. */
+export type DecisionRecord = Omit<StageDecision, 'itemId'>;
 
 /**
  * Everything the two solo stages (clarify + focus) share about deciding, deferring, and
@@ -29,18 +45,18 @@ interface StageDecisionNavigationHost {
  * props. The stages keep only their genuinely different parts — the decision buttons and their
  * mutations.
  */
-export function useStageDecisionNavigation({ db, queue, onQueueChange, onUndoFailed }: StageDecisionNavigationHost) {
+export function useStageDecisionNavigation({ db, queue, onQueueChange, onUndoFailed, revisit }: StageDecisionNavigationHost) {
     // Whether the CURRENT item committed an EXPLICIT save (onSaveCommitted). ItemEditorBody fires
     // onClose from the save path, from Escape, and from its reassign-in-flight branch —
     // only an explicit save is a review decision. Deliberately NOT set from onSaved: a debounced
     // text-autosave commit (which can land after advancing, via the unmount flush) also fires
     // onSaved, and inferring "saved" from it would turn a later Escape into a phantom decision.
     const savedRef = useRef(false);
-    // Undo payload captured when "Save & next" is clicked, consumed by the post-save onClose so
-    // the recorded decision can restore what the item looked like before the save.
-    const pendingSaveUndoRef = useRef<StageDecisionUndo | undefined>(undefined);
-    // How far back the user is looking: 0 = live queue, n = the n-th most recent decision.
-    const [backOffset, setBackOffset] = useState(0);
+    // Decision record (undo payload, routine occurrence) captured when "Save & next" is clicked,
+    // consumed by the post-save onClose so the recorded decision can restore what the item looked
+    // like before the save.
+    const pendingSaveRecordRef = useRef<DecisionRecord>({});
+    const setBackOffset = revisit.onOffsetChange;
     // Armed when Undo exits to the live queue (the requeued item must render live to be
     // re-decided): re-deciding THAT item returns the walk to the same chronological revisit
     // position — same "p of N" label, ◀ continues into older decisions — instead of forgetting
@@ -58,11 +74,11 @@ export function useStageDecisionNavigation({ db, queue, onQueueChange, onUndoFai
     });
 
     /**
-     * Records a decision on `entryId` — resolved by the caller when the user ACTED, because the
-     * write being recorded can drop that entry from the queue before this runs. `undo` absent =
-     * not reversible (see StageDecision).
+     * Records a decision on `decision.itemId` — resolved by the caller when the user ACTED, because
+     * the write being recorded can drop that entry from the queue before this runs. `undo` absent
+     * = not reversible (see StageDecision).
      */
-    const recordDecision = (entryId: string, undo?: StageDecisionUndo) => {
+    const recordDecision = (decision: StageDecision) => {
         const resume = resumeRevisitRef.current;
         resumeRevisitRef.current = null;
         // `let` + resolve-inside-the-updater: the render-captured `queue` can be several async
@@ -73,7 +89,7 @@ export function useStageDecisionNavigation({ db, queue, onQueueChange, onUndoFai
         let didResume = false;
         onQueueChange((liveQueue) => {
             didResume = shouldResumeRevisit(resume, liveQueue);
-            return completeEntry(liveQueue, entryId, undo);
+            return completeEntry(liveQueue, decision);
         });
         // The re-decided entry re-enters the history at its END, so the stored offset now points
         // at the old position's chronological successor — exactly the same "p of N" slot.
@@ -103,14 +119,14 @@ export function useStageDecisionNavigation({ db, queue, onQueueChange, onUndoFai
     const backLabel = queue.cursor > 0 ? 'Back to the skipped item' : 'Revisit previous decision';
 
     // Clamp against the live history — an undo may have shrunk it below the stored offset.
-    const revisitOffset = Math.min(backOffset, queue.decisions.length);
+    const revisitOffset = clampRevisitOffset(queue, revisit.offset);
     const revisited = revisitOffset > 0 ? queue.decisions[queue.decisions.length - revisitOffset] : undefined;
 
     /** Props for RevisitDecisionCard while looking backward; null on the live queue. */
     const revisitProps = revisited
         ? {
               decision: revisited,
-              position: { index: queue.decisions.length - revisitOffset + 1, total: queue.decisions.length },
+              position: { index: revisitedDecisionOrdinal(queue, revisitOffset), total: queue.decisions.length },
               canGoBack: revisitOffset < queue.decisions.length,
               onGoBack: () => setBackOffset(revisitOffset + 1),
               onGoForward: () => setBackOffset(revisitOffset - 1),
@@ -125,8 +141,8 @@ export function useStageDecisionNavigation({ db, queue, onQueueChange, onUndoFai
         : null;
 
     /** Arm the explicit-save decision handshake, then hand control to the editor's save path. */
-    function armExplicitSave(undo: StageDecisionUndo | undefined, triggerSave: () => void) {
-        pendingSaveUndoRef.current = undo;
+    function armExplicitSave(record: DecisionRecord, triggerSave: () => void) {
+        pendingSaveRecordRef.current = record;
         triggerSave();
     }
 
@@ -145,9 +161,9 @@ export function useStageDecisionNavigation({ db, queue, onQueueChange, onUndoFai
     function closeAsDecisionOrSkip(entryId: string) {
         if (savedRef.current) {
             savedRef.current = false;
-            const undo = pendingSaveUndoRef.current;
-            pendingSaveUndoRef.current = undefined;
-            recordDecision(entryId, undo);
+            const record = pendingSaveRecordRef.current;
+            pendingSaveRecordRef.current = {};
+            recordDecision({ itemId: entryId, ...record });
             return;
         }
         skip();

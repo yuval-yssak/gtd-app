@@ -91,7 +91,12 @@ export function RoutineReviewCard({ routine, db, nav, travel, onOccurrenceReview
      */
     function decideEntry(undo?: StageDecisionUndo) {
         retireShownOccurrence();
-        nav.recordDecision(entryId, undo);
+        nav.recordDecision({ itemId: entryId, ...(undo ? { undo } : {}), ...shownOccurrenceRecord() });
+    }
+
+    /** The decision remembers the occurrence on screen, so its revisit reopens that same row. */
+    function shownOccurrenceRecord() {
+        return occurrence ? { occurrenceId: occurrence._id } : {};
     }
 
     /**
@@ -107,7 +112,7 @@ export function RoutineReviewCard({ routine, db, nav, travel, onOccurrenceReview
     /** Save & next: retire the occurrence, then hand off to the editor's save, whose post-save close decides the entry. */
     function saveAndDecide(api: ItemEditorActionsApi) {
         retireShownOccurrence();
-        nav.armExplicitSave(undefined, api.triggerSave);
+        nav.armExplicitSave(shownOccurrenceRecord(), api.triggerSave);
     }
 
     async function onPauseConfirmed() {

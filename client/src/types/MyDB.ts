@@ -340,7 +340,7 @@ export interface StoredWeeklyReviewDraft {
                 {
                     pending: string[];
                     cursor?: number;
-                    decisions?: Array<{ itemId: string; undo?: { snapshot?: StoredItem }; undoSnapshot?: StoredItem }>;
+                    decisions?: Array<{ itemId: string; undo?: { snapshot?: StoredItem }; undoSnapshot?: StoredItem; occurrenceId?: string }>;
                     processedIds?: string[];
                 }
             >

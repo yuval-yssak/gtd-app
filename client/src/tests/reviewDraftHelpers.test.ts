@@ -32,7 +32,12 @@ describe('weekly review draft persistence', () => {
             pending: ['a', 'b'],
             cursor: 1,
             // All three undo shapes: snapshot restore, requeue-only, and not-undoable.
-            decisions: [{ itemId: 'x', undo: { snapshot: undoSnapshot } }, { itemId: 'y', undo: {} }, { itemId: 'z' }],
+            decisions: [
+                { itemId: 'x', undo: { snapshot: undoSnapshot } },
+                { itemId: 'y', undo: {} },
+                { itemId: 'z' },
+                { itemId: 'routine:r1', occurrenceId: 'occ1' },
+            ],
         };
         flow = withStageQueue({ ...flow, stageIndex: 2, tickedInboxIds: ['system', 'ri-1'] }, 'clarify', savedQueue);
 

@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { collapsedOccurrences, remainingOccurrencesLabel, reviewedOccurrence, sortAnchorOccurrence } from '../components/weeklyReview/routineReviewCardLogic';
+import {
+    collapsedOccurrences,
+    remainingOccurrencesLabel,
+    reviewedOccurrence,
+    revisitedOccurrence,
+    sortAnchorOccurrence,
+} from '../components/weeklyReview/routineReviewCardLogic';
 import type { StoredItem, StoredRoutine } from '../types/MyDB';
 
 // The RoutineReviewCard's pure derivations: which items a collapsed routine entry stands for, and
@@ -88,6 +94,30 @@ describe('reviewedOccurrence', () => {
 
     it('is undefined for a series with nothing generated yet', () => {
         expect(reviewedOccurrence(routine, [], undefined)).toBeUndefined();
+    });
+});
+
+// The revisit view of a decided routine entry reopens the editor on the occurrence the decision
+// was made over — completed or not — so the card looks like it did before the decision.
+describe('revisitedOccurrence', () => {
+    const routine = makeRoutine({ _id: 'r1' });
+
+    it('returns the recorded occurrence even after the decision completed it', () => {
+        const done = makeItem({ _id: 'done', routineId: 'r1', status: 'done', timeStart: '2026-08-27T18:00:00.000Z' });
+        const open = makeItem({ _id: 'open', routineId: 'r1', timeStart: '2026-09-03T18:00:00.000Z' });
+        expect(revisitedOccurrence(routine, [open, done], 'done')).toBe(done);
+    });
+
+    it('falls back to the first open occurrence when the decision recorded none (older drafts)', () => {
+        const open = makeItem({ _id: 'open', routineId: 'r1', timeStart: '2026-09-03T18:00:00.000Z' });
+        expect(revisitedOccurrence(routine, [open], undefined)).toBe(open);
+    });
+
+    it('ignores a recorded id that is no longer this routine’s row', () => {
+        const foreign = makeItem({ _id: 'foreign', routineId: 'other' });
+        const open = makeItem({ _id: 'open', routineId: 'r1', timeStart: '2026-09-03T18:00:00.000Z' });
+        expect(revisitedOccurrence(routine, [foreign, open], 'foreign')).toBe(open);
+        expect(revisitedOccurrence(routine, [], 'gone')).toBeUndefined();
     });
 });
 

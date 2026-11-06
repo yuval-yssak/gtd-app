@@ -59,9 +59,55 @@ export const Undoing: Story = {
     args: { isUndoing: true },
 };
 
-/** A collapsed calendar-routine entry — a read-only summary with its schedule. */
-export const RoutineEntry: Story = {
+/** A collapsed recurring event with no occurrence left on this device — a read-only summary with its schedule. */
+export const RoutineEntryWithoutOccurrence: Story = {
     args: { decision: { itemId: routineEntryId(sampleCalendarRoutine._id), undo: {} } },
+};
+
+/** The occurrence a recurring-event decision was made over — completed by that decision. */
+const decidedOccurrence = {
+    ...sampleNextActionItem,
+    _id: 'item-standup-occ',
+    title: sampleCalendarRoutine.title,
+    status: 'done' as const,
+    routineId: sampleCalendarRoutine._id,
+    timeStart: '2026-11-05T09:00:00',
+    timeEnd: '2026-11-05T09:15:00',
+};
+const routineOccurrenceDecorator = editorProvidersDecorator({
+    allItems: [decidedOccurrence],
+    items: [decidedOccurrence],
+    routines: [sampleCalendarRoutine],
+    allRoutines: [sampleCalendarRoutine],
+    people: samplePeople,
+    workContexts: sampleWorkContexts,
+    allPeople: samplePeople,
+    allWorkContexts: sampleWorkContexts,
+});
+
+/**
+ * A recurring event marked Done — the same full editor and routine banner as its live card, on
+ * the occurrence it completed. Undo is disabled with the reason (Done advanced the series).
+ */
+export const RoutineEntryDone: Story = {
+    args: { decision: { itemId: routineEntryId(sampleCalendarRoutine._id), occurrenceId: decidedOccurrence._id } },
+    decorators: [routineOccurrenceDecorator],
+    play: async ({ canvasElement }) => {
+        const canvas = within(canvasElement);
+        await expect(await canvas.findByTestId('reviewRoutineBanner')).toBeVisible();
+        await expect(await canvas.findByRole('textbox', { name: 'Title' })).toHaveValue(sampleCalendarRoutine.title);
+        await expect(await canvas.findByTestId('revisitUndoDecision')).toBeDisabled();
+    },
+};
+
+/** A recurring event that got "Looks good" — the same editor, and Undo is a bare requeue. */
+export const RoutineEntryLooksGood: Story = {
+    args: { decision: { itemId: routineEntryId(sampleCalendarRoutine._id), undo: {}, occurrenceId: decidedOccurrence._id } },
+    decorators: [routineOccurrenceDecorator],
+    play: async ({ canvasElement }) => {
+        const canvas = within(canvasElement);
+        await expect(await canvas.findByTestId('revisitUndoDecision')).toBeEnabled();
+    },
 };
 
 /** The decided item was hard-deleted since — a notice, with the arrows still in the bar. */

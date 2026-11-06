@@ -35,6 +35,16 @@ export function reviewedOccurrence(routine: StoredRoutine, allItems: ReadonlyArr
 }
 
 /**
+ * The occurrence a revisited routine decision reopens the editor on: the one it was decided over
+ * (`occurrenceId`), whatever its status now — a Done decision shows the completed row. Decisions
+ * that recorded none (older drafts) fall back to the live card's choice, the first undone one.
+ */
+export function revisitedOccurrence(routine: StoredRoutine, allItems: ReadonlyArray<StoredItem>, occurrenceId: string | undefined): StoredItem | undefined {
+    const recorded = allItems.find((item) => item._id === occurrenceId && item.routineId === routine._id);
+    return recorded ?? reviewedOccurrence(routine, allItems, undefined);
+}
+
+/**
  * The series tail in the routine banner, e.g. "41 more after this one"; empty when the shown
  * occurrence is the last. Counted by id, not `length - 1`: an edit can turn the shown occurrence
  * into an exception, which drops it from `occurrences` while the card still shows it.

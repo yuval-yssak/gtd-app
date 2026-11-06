@@ -94,9 +94,10 @@ function coerceDraftDecisions(queue: StoredDraftQueue): StageDecision[] {
     if (!queue.decisions) {
         return (queue.processedIds ?? []).map((itemId) => ({ itemId }));
     }
-    return queue.decisions.map(({ itemId, undo, undoSnapshot }) => ({
+    return queue.decisions.map(({ itemId, undo, undoSnapshot, occurrenceId }) => ({
         itemId,
         ...(undo ? { undo } : undoSnapshot ? { undo: { snapshot: undoSnapshot } } : {}),
+        ...(occurrenceId ? { occurrenceId } : {}),
     }));
 }
 

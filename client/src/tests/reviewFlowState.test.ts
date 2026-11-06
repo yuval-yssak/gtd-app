@@ -35,6 +35,7 @@ import {
     stepBack,
     toggleInboxTick,
     undoDecision,
+    undoUnavailableReason,
     unreviewedStageArrivals,
     walkedEntryCount,
     withStageQueue,
@@ -197,7 +198,7 @@ describe('stage queue', () => {
         const reconciledAway = reconcileQueue(queue, ['pool', 'exception']);
         expect(currentQueueItemId(reconciledAway)).toBe('pool');
 
-        const decided = completeEntry(reconciledAway, 'gym');
+        const decided = completeEntry(reconciledAway, { itemId: 'gym' });
 
         expect(decidedItemIds(decided)).toEqual(['gym']);
         expect(decided.pending).toEqual(['pool', 'exception']);
@@ -206,16 +207,23 @@ describe('stage queue', () => {
 
     it('completeEntry removes a still-pending entry and keeps the cursor on the same next entry', () => {
         const midWalk = skipCurrentItem(buildStageQueue(['a', 'b', 'c'])); // cursor on 'b'
-        expect(completeEntry(midWalk, 'b', {})).toEqual({ pending: ['a', 'c'], cursor: 1, decisions: [{ itemId: 'b', undo: {} }] });
+        expect(completeEntry(midWalk, { itemId: 'b', undo: {} })).toEqual({ pending: ['a', 'c'], cursor: 1, decisions: [{ itemId: 'b', undo: {} }] });
         // Deciding an entry BEFORE the cursor shifts the cursor down so it still points at 'b'.
-        const decidedEarlier = completeEntry(midWalk, 'a');
+        const decidedEarlier = completeEntry(midWalk, { itemId: 'a' });
         expect(decidedEarlier.pending).toEqual(['b', 'c']);
         expect(currentQueueItemId(decidedEarlier)).toBe('b');
     });
 
     it('completeEntry is a no-op for an entry already decided', () => {
-        const decided = completeEntry(buildStageQueue(['a', 'b']), 'a');
-        expect(completeEntry(decided, 'a')).toBe(decided);
+        const decided = completeEntry(buildStageQueue(['a', 'b']), { itemId: 'a' });
+        expect(completeEntry(decided, { itemId: 'a' })).toBe(decided);
+    });
+
+    // A routine card decides its `routine:` entry while showing ONE occurrence — the revisit view
+    // reopens the editor on that same occurrence, so the decision must remember which one it was.
+    it('completeEntry keeps the occurrence a routine decision was made over', () => {
+        const decided = completeEntry(buildStageQueue([routineEntryId('r1')]), { itemId: routineEntryId('r1'), occurrenceId: 'occ1' });
+        expect(decided.decisions).toEqual([{ itemId: routineEntryId('r1'), occurrenceId: 'occ1' }]);
     });
 
     it('skip advances the cursor without reordering, and the walk ENDS past the last item (no cycling)', () => {
@@ -261,6 +269,40 @@ describe('stage queue', () => {
         it('is null for a missing or empty queue — nothing to count', () => {
             expect(stageItemProgress(undefined)).toBeNull();
             expect(stageItemProgress(buildStageQueue([]))).toBeNull();
+        });
+
+        // ◀ into the decision history must move the header counter with the card: the n-th
+        // decision is the n-th entry walked, so revisiting it reads "n of total".
+        it('numbers a revisited decision by its place in the walk; the bar keeps tracking entries walked past', () => {
+            const decidedTwo = completeCurrentItem(completeCurrentItem(buildStageQueue(['a', 'b', 'c'])));
+            expect(stageItemProgress(decidedTwo, 1)).toEqual({ position: 2, total: 3, percent: 67 });
+            expect(stageItemProgress(decidedTwo, 2)).toEqual({ position: 1, total: 3, percent: 67 });
+        });
+
+        it('clamps a revisit offset past the oldest decision (an undo shrank the history) to the first one', () => {
+            const decidedOne = completeCurrentItem(buildStageQueue(['a', 'b']));
+            expect(stageItemProgress(decidedOne, 5)).toEqual({ position: 1, total: 2, percent: 50 });
+        });
+
+        it('a revisit from the stage-end card still has an ordinal', () => {
+            const allDecided = completeCurrentItem(buildStageQueue(['a']));
+            expect(stageItemProgress(allDecided, 1)).toEqual({ position: 1, total: 1, percent: 100 });
+        });
+    });
+
+    describe('undoUnavailableReason', () => {
+        it('is null for a reversible decision', () => {
+            expect(undoUnavailableReason({ itemId: 'a', undo: {} })).toBeNull();
+        });
+
+        it('explains a routine entry decision — completing, pausing or editing advanced the series', () => {
+            expect(undoUnavailableReason({ itemId: routineEntryId('r1') })).toBe(
+                'Completing, pausing or editing a recurring event can’t be undone from the review',
+            );
+        });
+
+        it('falls back to the generic reason for any other undo-less decision', () => {
+            expect(undoUnavailableReason({ itemId: 'a' })).toBe('This decision changed more than a snapshot can restore');
         });
     });
 
@@ -987,8 +1029,8 @@ describe('normalizeCalendarQueue', () => {
         const normalized = normalizeCalendarQueue(persisted, allItems, [routine]);
         // occ1's decision stands for the whole routine now; its single-item snapshot undo is
         // dropped (routine entries are undo-less), and the still-pending occurrences leave the walk.
-        expect(decidedItemIds(normalized)).toEqual([routineEntryId('r1')]);
-        expect(normalized.decisions[0]?.undo).toBeUndefined();
+        // The raw id is kept as the decision's occurrence, so a revisit reopens that very row.
+        expect(normalized.decisions).toEqual([{ itemId: routineEntryId('r1'), occurrenceId: 'occ1' }]);
         expect(normalized.pending).toEqual(['solo']);
     });
 

@@ -231,6 +231,11 @@ export interface StageDecision {
      * the routine), and for decisions coerced from legacy drafts.
      */
     undo?: StageDecisionUndo;
+    /**
+     * The occurrence a calendar-routine entry (`routine:<id>`) was decided over — the revisit view
+     * reopens its editor on that row, done or not. Absent for plain items and older decisions.
+     */
+    occurrenceId?: string;
 }
 
 export interface StageQueue {
@@ -289,8 +294,10 @@ export function walkedEntryCount(queue: StageQueue): number {
  * The header's stage progress: `position` is the 1-based ordinal of the item on screen ("1 of 1"
  * on a single-item stage), null on the stage-end card — that card is not an item, so it never
  * takes an ordinal of its own. `percent` is the share walked past, reaching 100 only at the end.
+ * `revisitOffset` > 0 means the card on screen is the n-th most recent decision (◀ revisit): it
+ * takes that decision's place in the walk instead, while the bar keeps the share walked past.
  */
-export function stageItemProgress(queue: StageQueue | undefined) {
+export function stageItemProgress(queue: StageQueue | undefined, revisitOffset = 0) {
     if (!queue) {
         return null;
     }
@@ -300,7 +307,36 @@ export function stageItemProgress(queue: StageQueue | undefined) {
     }
     const walked = walkedEntryCount(queue);
     // Whole percent: the bar announces this as aria-valuenow, and "66.666…" reads as noise.
-    return { position: currentQueueItemId(queue) === null ? null : walked + 1, total, percent: Math.round((walked / total) * 100) };
+    return { position: onScreenPosition(queue, revisitOffset), total, percent: Math.round((walked / total) * 100) };
+}
+
+/** 1-based ordinal of the card on screen — a revisited decision, the live item, or null for the stage-end card. */
+function onScreenPosition(queue: StageQueue, revisitOffset: number) {
+    const offset = clampRevisitOffset(queue, revisitOffset);
+    if (offset > 0) {
+        return revisitedDecisionOrdinal(queue, offset);
+    }
+    return currentQueueItemId(queue) === null ? null : walkedEntryCount(queue) + 1;
+}
+
+/** 1-based chronological place of the decision `offset` steps back — shared by the header counter and the revisit card's label. */
+export function revisitedDecisionOrdinal(queue: StageQueue, offset: number) {
+    return queue.decisions.length - offset + 1;
+}
+
+/** A stored revisit offset can outlive part of the history it pointed into (an undo shrinks it). */
+export function clampRevisitOffset(queue: StageQueue, revisitOffset: number): number {
+    return Math.min(revisitOffset, queue.decisions.length);
+}
+
+/** Why a revisited decision offers no undo — the disabled button's tooltip; null when it can be undone. */
+export function undoUnavailableReason(decision: StageDecision): string | null {
+    if (decision.undo) {
+        return null;
+    }
+    return routineIdOfEntry(decision.itemId)
+        ? 'Completing, pausing or editing a recurring event can’t be undone from the review'
+        : 'This decision changed more than a snapshot can restore';
 }
 
 /**
@@ -309,14 +345,15 @@ export function stageItemProgress(queue: StageQueue | undefined) {
  */
 export function completeCurrentItem(queue: StageQueue, undo?: StageDecisionUndo): StageQueue {
     const current = currentQueueItemId(queue);
-    return current === null ? queue : completeEntry(queue, current, undo);
+    return current === null ? queue : completeEntry(queue, { itemId: current, ...(undo ? { undo } : {}) });
 }
 
 /**
- * A decision was made on `entryId` — the entry the user acted on, resolved when they acted, not
- * when the decision lands. It leaves the queue for good (unless undone).
+ * A decision was made on `decision.itemId` — the entry the user acted on, resolved when they
+ * acted, not when the decision lands. It leaves the queue for good (unless undone).
  */
-export function completeEntry(queue: StageQueue, entryId: string, undo?: StageDecisionUndo): StageQueue {
+export function completeEntry(queue: StageQueue, decision: StageDecision): StageQueue {
+    const entryId = decision.itemId;
     if (decidedItemIds(queue).includes(entryId)) {
         return queue;
     }
@@ -328,7 +365,7 @@ export function completeEntry(queue: StageQueue, entryId: string, undo?: StageDe
         ...queue,
         pending: index === -1 ? queue.pending : queue.pending.filter((id) => id !== entryId),
         cursor: index !== -1 && index < queue.cursor ? queue.cursor - 1 : queue.cursor,
-        decisions: [...queue.decisions, { itemId: entryId, ...(undo ? { undo } : {}) }],
+        decisions: [...queue.decisions, decision],
     };
 }
 
@@ -616,7 +653,8 @@ function normalizeDecisions(decisions: ReadonlyArray<StageDecision>, canonicalOf
             return [];
         }
         seenIds.add(itemId);
-        return [itemId === decision.itemId ? decision : { itemId }];
+        // The folded raw id IS the occurrence the decision was made over.
+        return [itemId === decision.itemId ? decision : { itemId, occurrenceId: decision.itemId }];
     });
 }
 

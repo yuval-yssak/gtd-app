@@ -16,7 +16,6 @@ import {
     type ReviewStageDefinition,
     retireReviewedOccurrence,
     routineIdOfEntry,
-    type StageDecisionUndo,
     type StageQueue,
     stageEndTitle,
     yieldSlotOnDownMove,
@@ -26,7 +25,7 @@ import { StageCardScroller } from './StageCardScroller';
 import { StageEmptyCard } from './StageEmptyCard';
 import { StageNavButtons } from './StageNavButtons';
 import styles from './stageLayout.module.css';
-import { useStageDecisionNavigation } from './useStageDecisionNavigation';
+import { type DecisionRecord, type StageRevisitPosition, useStageDecisionNavigation } from './useStageDecisionNavigation';
 import { StageToast, useStageToast } from './useStageToast';
 
 interface FocusStageProps {
@@ -37,6 +36,7 @@ interface FocusStageProps {
     onQueueChange: (updateQueue: (queue: StageQueue) => StageQueue) => void;
     onStageFinished: () => void;
     travel: StageTravel;
+    revisit: StageRevisitPosition;
 }
 
 /**
@@ -47,7 +47,7 @@ interface FocusStageProps {
  * the item (the walk is linear and ENDS at the stage-end card — no cycling); the ◀ arrow steps
  * back to skipped items and then revisits past decisions (with one-click undo).
  */
-export function FocusStage({ stage, queue, db, onQueueChange, onStageFinished, travel }: FocusStageProps) {
+export function FocusStage({ stage, queue, db, onQueueChange, onStageFinished, travel, revisit }: FocusStageProps) {
     // `routines` (visible accounts), not `allRoutines`: the wizard QUEUES entries from the visible
     // set, so the stage must resolve them from the same set — an allRoutines lookup could render a
     // card for an entry the reconcile is about to drop.
@@ -63,13 +63,21 @@ export function FocusStage({ stage, queue, db, onQueueChange, onStageFinished, t
     // the edit would silently drop — same rule as the revisit card's item arrows.
     const [isEditorLocked, setIsEditorLocked] = useState(false);
     const lockedTravel = isEditorLocked ? { ...travel, prevDisabled: true, nextDisabled: true } : travel;
-    const nav = useStageDecisionNavigation({ db, queue, onQueueChange, onUndoFailed: stageToast.showError });
+    const nav = useStageDecisionNavigation({ db, queue, onQueueChange, onUndoFailed: stageToast.showError, revisit });
     // The tickler walks by wake-up date, not rank — a Position row there would move the item in a
     // list the user is not looking at. One gate for the live card and the revisit card alike.
     const hasPositionRow = stage.id !== 'tickler';
 
     if (nav.revisitProps) {
-        return <RevisitDecisionCard db={db} {...nav.revisitProps} travel={travel} hasPositionRow={hasPositionRow} />;
+        return (
+            <RevisitDecisionCard
+                db={db}
+                {...nav.revisitProps}
+                travel={travel}
+                hasPositionRow={hasPositionRow}
+                onRoutineOccurrenceSaved={(occurrenceId) => onQueueChange((liveQueue) => retireReviewedOccurrence(liveQueue, occurrenceId))}
+            />
+        );
     }
 
     const currentId = currentQueueItemId(queue);
@@ -128,16 +136,16 @@ export function FocusStage({ stage, queue, db, onQueueChange, onStageFinished, t
     // Undo policy: routine-generated items get none — their disposal already advanced the
     // routine's series, and a snapshot restore would double-book it. A no-write decision
     // ("Looks good") is undone by a bare requeue, so it carries an empty undo.
-    const captureUndo = (): StageDecisionUndo | undefined => (currentItem.routineId ? undefined : { snapshot: currentItem });
-    const captureNoWriteUndo = (): StageDecisionUndo | undefined => (currentItem.routineId ? undefined : {});
+    const captureUndo = (): DecisionRecord => (currentItem.routineId ? {} : { undo: { snapshot: currentItem } });
+    const captureNoWriteUndo = (): DecisionRecord => (currentItem.routineId ? {} : { undo: {} });
 
     async function decideWith(mutation: () => Promise<unknown>) {
-        const undo = captureUndo();
+        const record = captureUndo();
         await mutation();
         await refreshItems();
         // Keyed by the item acted on: the refresh can let the wizard's reconcile drop it from the
         // queue first, and deciding "current" would then decide its successor instead.
-        nav.recordDecision(currentEntryId, undo);
+        nav.recordDecision({ itemId: currentEntryId, ...record });
     }
 
     const onDone = (target: StoredItem) =>
@@ -172,8 +180,8 @@ export function FocusStage({ stage, queue, db, onQueueChange, onStageFinished, t
                 disabled={api.isDirty ? api.saveDisabled : api.isSaving}
                 onClick={
                     api.isDirty
-                        ? () => nav.armExplicitSave(api.isRoutineDestination ? undefined : captureUndo(), api.triggerSave)
-                        : () => nav.recordDecision(currentEntryId, captureNoWriteUndo())
+                        ? () => nav.armExplicitSave(api.isRoutineDestination ? {} : captureUndo(), api.triggerSave)
+                        : () => nav.recordDecision({ itemId: currentEntryId, ...captureNoWriteUndo() })
                 }
                 data-testid="focusKeep"
             >

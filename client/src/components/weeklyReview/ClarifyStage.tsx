@@ -7,13 +7,13 @@ import { Button, Card } from '../../designSystem';
 import type { MyDB } from '../../types/MyDB';
 import { type ItemEditorActionsApi, ItemEditorBody } from '../itemEditor/ItemEditorBody';
 import { RevisitDecisionCard } from './RevisitDecisionCard';
-import { currentQueueItemId, type StageDecisionUndo, type StageQueue, stageEndTitle, yieldSlotOnDownMove } from './reviewFlowState';
+import { currentQueueItemId, type StageQueue, stageEndTitle, yieldSlotOnDownMove } from './reviewFlowState';
 import { StageActionBar, type StageTravel } from './StageActionBar';
 import { StageCardScroller } from './StageCardScroller';
 import { StageEmptyCard } from './StageEmptyCard';
 import { StageNavButtons } from './StageNavButtons';
 import styles from './stageLayout.module.css';
-import { useStageDecisionNavigation } from './useStageDecisionNavigation';
+import { type DecisionRecord, type StageRevisitPosition, useStageDecisionNavigation } from './useStageDecisionNavigation';
 import { StageToast, useStageToast } from './useStageToast';
 
 interface ClarifyStageProps {
@@ -23,6 +23,7 @@ interface ClarifyStageProps {
     onQueueChange: (updateQueue: (queue: StageQueue) => StageQueue) => void;
     onStageFinished: () => void;
     travel: StageTravel;
+    revisit: StageRevisitPosition;
 }
 
 /**
@@ -31,7 +32,7 @@ interface ClarifyStageProps {
  * stage-end card — no cycling); the ◀ arrow steps back to skipped items and then revisits past
  * clarifications (with one-click undo back to inbox).
  */
-export function ClarifyStage({ queue, db, onQueueChange, onStageFinished, travel }: ClarifyStageProps) {
+export function ClarifyStage({ queue, db, onQueueChange, onStageFinished, travel, revisit }: ClarifyStageProps) {
     const { allItems, people, workContexts, refreshItems } = useAppData();
     const { isPending } = usePendingReassign();
     const stageToast = useStageToast();
@@ -43,7 +44,7 @@ export function ClarifyStage({ queue, db, onQueueChange, onStageFinished, travel
     // the edit would silently drop — same rule as the revisit card's item arrows.
     const [isEditorLocked, setIsEditorLocked] = useState(false);
     const lockedTravel = isEditorLocked ? { ...travel, prevDisabled: true, nextDisabled: true } : travel;
-    const nav = useStageDecisionNavigation({ db, queue, onQueueChange, onUndoFailed: stageToast.showError });
+    const nav = useStageDecisionNavigation({ db, queue, onQueueChange, onUndoFailed: stageToast.showError, revisit });
 
     if (nav.revisitProps) {
         return <RevisitDecisionCard db={db} {...nav.revisitProps} travel={travel} hasPositionRow />;
@@ -69,7 +70,7 @@ export function ClarifyStage({ queue, db, onQueueChange, onStageFinished, travel
     // stages anyway. The routine DESTINATION is excluded at the save click (isRoutineDestination):
     // clarify-to-routine is a compound write (routine + seeded items + item trash) that a bare
     // snapshot restore would leave orphaned.
-    const captureUndo = (): StageDecisionUndo | undefined => (currentItem.routineId ? undefined : { snapshot: currentItem });
+    const captureUndo = (): DecisionRecord => (currentItem.routineId ? {} : { undo: { snapshot: currentItem } });
 
     return (
         <div className={styles.stageRoot} data-testid="clarifyStage">
@@ -97,7 +98,7 @@ export function ClarifyStage({ queue, db, onQueueChange, onStageFinished, travel
                                 <Button
                                     variant="solid"
                                     disabled={api.saveDisabled}
-                                    onClick={() => nav.armExplicitSave(api.isRoutineDestination ? undefined : captureUndo(), api.triggerSave)}
+                                    onClick={() => nav.armExplicitSave(api.isRoutineDestination ? {} : captureUndo(), api.triggerSave)}
                                     data-testid="clarifySaveNext"
                                 >
                                     Save & next

@@ -63,6 +63,16 @@ export function WeeklyReviewWizard({ db, flow, onFlowChange }: WeeklyReviewWizar
     // strip. The toggle is STICKY: expanding keeps the full header across items and stages until
     // the user collapses it again (and vice versa).
     const [isHeaderExpandedByUser, setIsHeaderExpandedByUser] = useState(false);
+    // The stage's ◀ revisit position lives here, not in the stage, so the header counter follows
+    // it. Tagged with its stage and cleared DURING RENDER once that stage is off screen — the
+    // reset the stage's key remount used to give: X → Y → X lands on the live queue, and a late
+    // setter from X (a post-save resume, an undo) can't revive an offset after a jump. Render
+    // time, not an effect, so no frame mounts a stale revisit card first.
+    const [revisitPosition, setRevisitPosition] = useState<{ stageId: ReviewStageId; offset: number } | null>(null);
+    if (revisitPosition && revisitPosition.stageId !== stage?.id) {
+        setRevisitPosition(null);
+    }
+    const revisitOffset = stage && revisitPosition?.stageId === stage.id ? revisitPosition.offset : 0;
     const hasStageActivity = queue !== undefined && walkedEntryCount(queue) > 0;
     const isHeaderCollapsed = stage !== null && stage.kind !== 'checklist' && !isHeaderExpandedByUser;
     const inboxIds = allReviewInboxes.filter((inbox) => inbox.userId === accountId).map((inbox) => inbox._id);
@@ -152,6 +162,7 @@ export function WeeklyReviewWizard({ db, flow, onFlowChange }: WeeklyReviewWizar
     // skip marks), resolved against the latest flow so a rapid double-click moves two stages, not
     // one twice. Forward is disabled on the last stage: finishing the review (celebration, draft
     // deletion) stays behind an explicit Continue.
+    const revisit = { offset: revisitOffset, onOffsetChange: (offset: number) => setRevisitPosition({ stageId: stage.id, offset }) };
     const travel: StageTravel = {
         onPrevStage: () => onFlowChange((prev) => jumpToStage(prev, prev.stageIndex - 1)),
         onNextStage: () => onFlowChange((prev) => jumpToStage(prev, prev.stageIndex + 1)),
@@ -162,14 +173,19 @@ export function WeeklyReviewWizard({ db, flow, onFlowChange }: WeeklyReviewWizar
     return (
         <div className={styles.wizardRoot} ref={wizardRootRef}>
             {isHeaderCollapsed ? (
-                <CollapsedHeaderStrip stage={stage} queue={queue} stageDots={stageDots} onExpand={() => setIsHeaderExpandedByUser(true)} />
+                <CollapsedHeaderStrip
+                    stage={stage}
+                    itemProgress={stageItemProgress(queue, revisitOffset)}
+                    stageDots={stageDots}
+                    onExpand={() => setIsHeaderExpandedByUser(true)}
+                />
             ) : (
                 <>
                     <ReviewStepper flow={flow} inboxIds={inboxIds} onJump={(index) => onFlowChange((prev) => jumpToStage(prev, index))} />
                     <WizardHeader
                         flow={flow}
                         stage={stage}
-                        queue={queue}
+                        itemProgress={stageItemProgress(queue, revisitOffset)}
                         onSkipStage={() => onFlowChange(skipStage)}
                         hasStageActivity={hasStageActivity}
                         canCollapse={stage.kind !== 'checklist'}
@@ -187,10 +203,18 @@ export function WeeklyReviewWizard({ db, flow, onFlowChange }: WeeklyReviewWizar
                 />
             )}
             {/* key={stage.id}: two consecutive stages of the same kind (clarify/finalSweep, the
-                focus run) would otherwise keep one component instance, carrying its revisit
-                backOffset from one stage's history into the next. */}
+                focus run) would otherwise keep one component instance, carrying stage-local
+                state (pending save handshake, undo in flight) from one stage into the next. */}
             {stage.kind === 'clarify' && queue && (
-                <ClarifyStage key={stage.id} queue={queue} db={db} onQueueChange={onQueueChange} onStageFinished={onStageFinished} travel={travel} />
+                <ClarifyStage
+                    key={stage.id}
+                    queue={queue}
+                    db={db}
+                    onQueueChange={onQueueChange}
+                    onStageFinished={onStageFinished}
+                    travel={travel}
+                    revisit={revisit}
+                />
             )}
             {stage.kind === 'focus' && queue && (
                 <FocusStage
@@ -201,6 +225,7 @@ export function WeeklyReviewWizard({ db, flow, onFlowChange }: WeeklyReviewWizar
                     onQueueChange={onQueueChange}
                     onStageFinished={onStageFinished}
                     travel={travel}
+                    revisit={revisit}
                 />
             )}
         </div>
@@ -239,9 +264,10 @@ function isStageDone(flow: ReviewFlowState, stage: ReviewStageDefinition, inboxI
     return queue !== undefined && queue.pending.length === 0;
 }
 
+type StageItemProgress = ReturnType<typeof stageItemProgress>;
+
 /** "2 of 12" for the item on screen; null on the stage-end card, which has no ordinal. */
-const stageItemLabel = (progress: ReturnType<typeof stageItemProgress>) =>
-    progress && progress.position !== null ? `${progress.position} of ${progress.total}` : null;
+const stageItemLabel = (progress: StageItemProgress) => (progress && progress.position !== null ? `${progress.position} of ${progress.total}` : null);
 
 /** Review-wide progress percentage — the full header's bar (the strip's bar is stage-scoped). */
 const reviewProgressValue = (flow: ReviewFlowState) => Math.round((flow.stageIndex / REVIEW_STAGES.length) * 100);
@@ -254,7 +280,8 @@ interface StripStageDot {
 
 interface CollapsedHeaderStripProps {
     stage: ReviewStageDefinition;
-    queue: StageQueue | undefined;
+    /** The card on screen — a revisited decision included — and the share walked past. */
+    itemProgress: StageItemProgress;
     /** Review-wide position, precomputed by the wizard — one dot per stage. */
     stageDots: StripStageDot[];
     onExpand: () => void;
@@ -267,8 +294,7 @@ interface CollapsedHeaderStripProps {
  * same visual language as the expanded timeline. Renders instead of — never alongside — the full
  * header, so the shared testids stay unique.
  */
-function CollapsedHeaderStrip({ stage, queue, stageDots, onExpand }: CollapsedHeaderStripProps) {
-    const itemProgress = stageItemProgress(queue);
+function CollapsedHeaderStrip({ stage, itemProgress, stageDots, onExpand }: CollapsedHeaderStripProps) {
     const itemLabel = stageItemLabel(itemProgress);
     const stageNumber = stageDots.findIndex((dot) => dot.isCurrent) + 1;
     return (
@@ -306,7 +332,7 @@ function CollapsedHeaderStrip({ stage, queue, stageDots, onExpand }: CollapsedHe
 interface WizardHeaderProps {
     flow: ReviewFlowState;
     stage: ReviewStageDefinition;
-    queue: StageQueue | undefined;
+    itemProgress: StageItemProgress;
     onSkipStage: () => void;
     /** Whether the user has acted in this stage — folds the guidance line into the ⓘ tooltip. */
     hasStageActivity: boolean;
@@ -315,9 +341,9 @@ interface WizardHeaderProps {
     onCollapse: () => void;
 }
 
-function WizardHeader({ flow, stage, queue, onSkipStage, hasStageActivity, canCollapse, onCollapse }: WizardHeaderProps) {
+function WizardHeader({ flow, stage, itemProgress, onSkipStage, hasStageActivity, canCollapse, onCollapse }: WizardHeaderProps) {
     const stageNumber = flow.stageIndex + 1;
-    const itemLabel = stageItemLabel(stageItemProgress(queue));
+    const itemLabel = stageItemLabel(itemProgress);
     const isShowBriefsOn = useShowBriefs();
 
     return (

@@ -1288,6 +1288,108 @@ test.describe('weekly review', () => {
         });
     });
 
+    test('revisiting a recurring event reopens its full editor on the decided occurrence, and the header counter follows ◀ / ▶', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `wr-routine-revisit-${uniqueStamp()}@example.com`, async (page) => {
+            const { endedToday } = await seedDailyRoutineEndedToday(page, 'Water the garden');
+            // A one-off later today sorts after the routine's ended occurrence, so the walk is routine → one-off.
+            const oneOffStart = dayjs().endOf('day').subtract(30, 'minute');
+            const inbox = await gtd.collect(page, 'Dentist');
+            await gtd.clarifyToCalendar(page, inbox, {
+                timeStart: oneOffStart.format('YYYY-MM-DDTHH:mm:ss'),
+                timeEnd: oneOffStart.add(15, 'minute').format('YYYY-MM-DDTHH:mm:ss'),
+            });
+            await gtd.flush(page); // never navigate mid-flush — see CLAUDE.md § E2E
+
+            await openCalendarStage(page);
+            const counter = page.getByTestId('reviewStageCounter');
+            await expect(page.getByTestId('routineReviewCard')).toBeVisible();
+            await page.getByTestId('routineCardDone').click();
+            await expect(page.getByTestId('focusStage').getByRole('textbox', { name: 'Title' })).toHaveValue('Dentist');
+            await page.getByTestId('focusKeep').click();
+            await expect(page.getByTestId('stageEmptyCard')).toContainText('Calendar — all reviewed!');
+
+            // ◀ walks back through the decisions; the header counter names the card on screen.
+            await page.getByTestId('stageNavBack').click();
+            const revisit = page.getByTestId('revisitDecisionCard');
+            await expect(revisit.getByRole('textbox', { name: 'Title' })).toHaveValue('Dentist');
+            await expect(counter).toHaveText('2 of 2');
+            await page.getByTestId('stageNavBack').click();
+            await expect(counter).toHaveText('1 of 2');
+
+            // The recurring event looks like its live card: routine banner + the full editor, on
+            // the very occurrence Done completed (today's), not the next open one.
+            await expect(revisit.getByTestId('reviewRoutineBanner')).toBeVisible();
+            await expect(revisit.getByRole('textbox', { name: 'Title' })).toHaveValue('Water the garden');
+            // A done row shows its pre-completion slot under "Before it was done".
+            await expect(revisit.getByRole('region', { name: 'Before it was done' })).toContainText(dayjs(endedToday.timeStart).format('ddd, MMM D'));
+            await expect(revisit.getByRole('button', { name: 'Done', exact: true })).toHaveAttribute('aria-pressed', 'true');
+
+            // Done advanced the series — no undo, and the disabled button says why.
+            await expect(page.getByTestId('revisitUndoDecision')).toBeDisabled();
+            // toPass: the portaled action row can remount right after the hover (see the clarify-to-routine test).
+            await expect(async () => {
+                await page.getByTestId('revisitUndoWrapper').hover();
+                await expect(page.getByRole('tooltip')).toHaveText('Completing, pausing or editing a recurring event can’t be undone from the review', {
+                    timeout: 1500,
+                });
+            }).toPass();
+
+            await page.getByTestId('stageNavForward').click();
+            await expect(counter).toHaveText('2 of 2');
+        });
+    });
+
+    test('leaving a stage mid-revisit and coming back lands on the live queue, not the old decision', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `wr-revisit-stage-return-${uniqueStamp()}@example.com`, async (page) => {
+            await seedDailyRoutineEndedToday(page, 'Stretch');
+
+            await openCalendarStage(page);
+            await page.getByTestId('routineCardLooksGood').click();
+            await expect(page.getByTestId('stageEmptyCard')).toContainText('Calendar — all reviewed!');
+            await page.getByTestId('stageNavBack').click();
+            await expect(page.getByTestId('revisitDecisionCard')).toBeVisible();
+
+            await page.getByTestId('stageTravelNext').click();
+            await expect(page.getByTestId('reviewStageTitle')).not.toHaveText('Calendar');
+            await page.getByTestId('stageTravelPrev').click();
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Calendar');
+            await expect(page.getByTestId('stageEmptyCard')).toContainText('Calendar — all reviewed!');
+            await expect(page.getByTestId('revisitDecisionCard')).toHaveCount(0);
+        });
+    });
+
+    test('a "Looks good" recurring event revisits on the occurrence it showed; moving it there does not re-offer it', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `wr-routine-revisit-move-${uniqueStamp()}@example.com`, async (page) => {
+            const { routine, endedToday } = await seedDailyRoutineEndedToday(page, 'Journal');
+
+            await openCalendarStage(page);
+            await page.getByTestId('routineCardLooksGood').click();
+            await expect(page.getByTestId('stageEmptyCard')).toContainText('Calendar — all reviewed!');
+            // Leave and re-enter the stage first: entry clears the per-visit exclusions the
+            // decision set, so only the revisit save itself can keep the moved occurrence out.
+            await page.getByTestId('stageTravelNext').click();
+            await expect(page.getByTestId('reviewStageTitle')).not.toHaveText('Calendar');
+            await page.getByTestId('stageTravelPrev').click();
+            await expect(page.getByTestId('stageEmptyCard')).toContainText('Calendar — all reviewed!');
+            await page.getByTestId('stageNavBack').click();
+
+            // Same occurrence the live card showed (today's ended one), still open — so the Date field is there.
+            const revisit = page.getByTestId('revisitDecisionCard');
+            await expect(revisit.getByTestId('reviewRoutineBanner')).toBeVisible();
+            await expect(revisit.getByRole('textbox', { name: 'Date', exact: true })).toHaveValue(dayjs(endedToday.timeStart).format('YYYY-MM-DD'));
+            await expect(page.getByTestId('revisitUndoDecision')).toBeEnabled(); // "Looks good" is a bare requeue
+
+            // Moving it makes it a routine exception — its own calendar entry — which must not re-join the walk.
+            await revisit.getByLabel('Start time', { exact: true }).fill('16:00');
+            await revisit.getByLabel('End time', { exact: true }).fill('16:15');
+            await page.getByTestId('revisitSave').click();
+            await expect.poll(async () => (await gtd.listRoutines(page)).find((r) => r._id === routine._id)?.routineExceptions?.length ?? 0).toBeGreaterThan(0);
+            // The revisit Save closes back to the live queue — still the stage end, nothing appended.
+            await expect(page.getByTestId('stageEmptyCard')).toContainText('Calendar — all reviewed!');
+            await expect(page.getByTestId('reviewStageCounter')).toHaveCount(0);
+        });
+    });
+
     test('moving the shown occurrence in the routine card saves an exception and does not re-offer it', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `wr-routine-move-${uniqueStamp()}@example.com`, async (page) => {
             const { routine, endedToday } = await seedDailyRoutineEndedToday(page, 'Morning sync');
