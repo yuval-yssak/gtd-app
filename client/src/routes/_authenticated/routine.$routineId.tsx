@@ -131,6 +131,7 @@ function RoutinePage() {
                     routine={routine}
                     onClose={goBack}
                     onSaved={onSaved}
+                    hasPauseAction
                 />
             </Card>
         </div>

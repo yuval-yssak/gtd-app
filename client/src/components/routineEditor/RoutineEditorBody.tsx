@@ -21,7 +21,7 @@ import {
     syncOpenItemAfterNextActionEdit,
     trashNativeItemsForTypeSwitch,
 } from '../../db/routineItemHelpers';
-import { createRoutineWithFirstItems, updateRoutine } from '../../db/routineMutations';
+import { createRoutineWithFirstItems, pauseRoutineById, updateRoutine } from '../../db/routineMutations';
 import { splitRoutine } from '../../db/routineSplit';
 import { Button, Callout, TextField } from '../../designSystem';
 import { useAutosave } from '../../hooks/useAutosave';
@@ -42,9 +42,16 @@ import { AccountPicker } from '../AccountPicker';
 import { mergeFormGroup } from '../itemEditor/itemEditorLiveMerge';
 import { NotesSection } from '../itemEditor/NotesSection';
 import { ReassignInFlightInline } from '../itemEditor/ReassignInFlightInline';
-import { isCalendarScheduleChanged, isNextActionScheduleChanged, isStartDateChanged } from '../routines/routineEditDecision';
+import {
+    canPauseRoutine,
+    isCalendarScheduleChanged,
+    isEndedCalendarRoutine,
+    isNextActionScheduleChanged,
+    isStartDateChanged,
+} from '../routines/routineEditDecision';
 import { UnsavedChangesDialog } from '../UnsavedChangesDialog';
 import styles from './RoutineEditorBody.module.css';
+import { RoutinePauseAction } from './RoutinePauseAction';
 import { RoutineScheduleFields } from './RoutineScheduleFields';
 import { buildFinalRrule, buildRoutineTemplateFromForm, buildTemplate, type FormState, initFormState, resolveCalendarLink } from './routineFormState';
 
@@ -505,6 +512,11 @@ export interface RoutineEditorBodyProps {
      * move on to that routine's own page. Omitted, a create closes like an edit.
      */
     onCreated?: ((routine: StoredRoutine) => void) | undefined;
+    /**
+     * Offer "Pause routine" while editing a running routine. Opt-in: the weekly review's routine
+     * card has its own Pause, which also records the review decision.
+     */
+    hasPauseAction?: boolean | undefined;
 }
 
 /**
@@ -514,14 +526,25 @@ export interface RoutineEditorBodyProps {
  * Hosts MUST set `key={routine?._id ?? 'new'}` so React remounts the body when the editor
  * opens on a different routine — otherwise local form state would seed from the wrong routine.
  */
-export function RoutineEditorBody({ db, userId, workContexts, people, routine, onClose, onSaved, onCreated, autoFocusTitle }: RoutineEditorBodyProps) {
+export function RoutineEditorBody({
+    db,
+    userId,
+    workContexts,
+    people,
+    routine,
+    onClose,
+    onSaved,
+    onCreated,
+    autoFocusTitle,
+    hasPauseAction,
+}: RoutineEditorBodyProps) {
     const isEdit = routine !== undefined;
     const [form, setForm] = useState<FormState>(() => initFormState(routine));
     const [isSaving, startSaving] = useTransition();
     const { options: calendarOptions } = useCalendarOptions();
     // all* (unfiltered) sets: the live-row lookup and assigned-tag resolution must keep working
     // when this routine's owner account is toggled out of view (editor reached via deep link).
-    const { loggedInAccounts, allRoutines, allWorkContexts, allPeople } = useAppData();
+    const { loggedInAccounts, allRoutines, allWorkContexts, allPeople, syncAndRefresh } = useAppData();
     const { runReassignWithOverlay, isPending } = usePendingReassign();
 
     // Live row — reflects remote sync merges and our own committed autosaves. Every persistence
@@ -868,7 +891,28 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
             .catch((err) => console.error('[routine reassign] post-flight refresh failed:', err));
     }
 
-    const isEndedCalendar = isEdit && routine.routineType === 'calendar' && computeSplitDate(routine.rrule, routine.createdTs) === null;
+    /**
+     * Inside the save transition, like every other write here: Save stays disabled until the
+     * pause lands — a Save from the pre-pause live row would spread `active: true` back over it.
+     */
+    function onPauseConfirmed() {
+        if (!routine) {
+            return;
+        }
+        startSaving(async () => {
+            // Pending title/notes first, so the pause write carries them.
+            await textAutosave.flush();
+            if (!(await pauseRoutineById(db, routine._id))) {
+                return; // deleted on another device meanwhile — nothing to pause
+            }
+            await onSaved();
+            // Push the pause and pull the Google Calendar cap echo without holding the editor up.
+            void syncAndRefresh();
+        });
+    }
+
+    const isEndedCalendar = isEdit && isEndedCalendarRoutine(routine);
+    const isPausable = hasPauseAction === true && liveRoutine !== undefined && canPauseRoutine(liveRoutine);
     const saveDisabled = !form.title.trim() || !form.rrule || isSaving;
 
     if (reassignInFlight) {
@@ -895,7 +939,8 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
                     This routine changed on another device ({conflictFields.join(', ')}). Your edits are kept and will overwrite on save.
                 </Callout>
             )}
-            {isEdit && !routine.active && (
+            {/* Live row, not the mount-time prop: a Pause from this editor must show the notice at once. */}
+            {liveRoutine && !liveRoutine.active && (
                 <Callout tone="info" variant="outline">
                     This routine is paused. Save your changes to resume it.
                 </Callout>
@@ -958,6 +1003,11 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
             )}
 
             <div className={styles.inlineActions}>
+                {isPausable && (
+                    <div className={styles.leadingActions}>
+                        <RoutinePauseAction routine={liveRoutine} onConfirmed={onPauseConfirmed} disabled={isSaving} />
+                    </div>
+                )}
                 <Button onClick={closeEditor} data-testid="routineEditorCancelButton">
                     Cancel
                 </Button>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isCalendarScheduleChanged, isStartDateChanged } from '../components/routines/routineEditDecision';
+import { canPauseRoutine, isCalendarScheduleChanged, isStartDateChanged } from '../components/routines/routineEditDecision';
 import type { StoredRoutine } from '../types/MyDB';
 
 function make(overrides: Partial<StoredRoutine> = {}): StoredRoutine {
@@ -270,5 +270,26 @@ describe('isStartDateChanged', () => {
     it('treats empty string and undefined as equivalent', () => {
         const previous = make({ startDate: '' });
         expect(isStartDateChanged(previous, { routineType: 'calendar', rrule: previous.rrule, timeOfDay: '09:00', duration: 30 })).toBe(false);
+    });
+});
+
+// The editor's Pause action: only a running routine pauses, and a calendar series that already
+// ended (UNTIL in the past) has nothing left to stop.
+describe('canPauseRoutine', () => {
+    it('allows pausing an active routine', () => {
+        expect(canPauseRoutine(make())).toBe(true);
+        expect(canPauseRoutine(make({ routineType: 'nextAction' }))).toBe(true);
+    });
+
+    it('refuses an already paused routine', () => {
+        expect(canPauseRoutine(make({ active: false }))).toBe(false);
+    });
+
+    it('refuses a calendar routine whose series has ended', () => {
+        expect(canPauseRoutine(make({ rrule: 'FREQ=WEEKLY;BYDAY=MO;UNTIL=20200101T235959Z' }))).toBe(false);
+    });
+
+    it('only a calendar series ends — a next-action routine with a past UNTIL still pauses', () => {
+        expect(canPauseRoutine(make({ routineType: 'nextAction', rrule: 'FREQ=WEEKLY;BYDAY=MO;UNTIL=20200101T235959Z' }))).toBe(true);
     });
 });

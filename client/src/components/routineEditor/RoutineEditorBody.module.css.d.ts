@@ -3,6 +3,7 @@ declare const styles: {
     readonly chipGroup: string;
     readonly endDate: string;
     readonly inlineActions: string;
+    readonly leadingActions: string;
     readonly narrowInput: string;
     readonly ticklerRow: string;
     readonly timeRow: string;

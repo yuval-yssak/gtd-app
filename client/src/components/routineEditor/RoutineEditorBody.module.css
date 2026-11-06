@@ -36,6 +36,11 @@
     justify-content: flex-end;
 }
 
+/* Series-level actions (Pause) sit apart at the start, away from Cancel / Save. */
+.leadingActions {
+    margin-inline-end: auto;
+}
+
 /* The end date sits on its own row under the "Ends on" choice. */
 .endDate {
     display: flex;

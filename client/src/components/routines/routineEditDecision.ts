@@ -1,3 +1,4 @@
+import { computeSplitDate } from '../../lib/routineSplitUtils';
 import type { StoredRoutine } from '../../types/MyDB';
 
 interface RoutineEditIntent {
@@ -117,4 +118,14 @@ export function isStartDateChanged(previous: StoredRoutine, edited: RoutineEditI
     const prev = previous.startDate ?? '';
     const next = edited.startDate ?? '';
     return prev !== next;
+}
+
+/** A calendar series whose UNTIL has passed — nothing left to generate, so it only allows text edits. */
+export function isEndedCalendarRoutine(routine: StoredRoutine) {
+    return routine.routineType === 'calendar' && computeSplitDate(routine.rrule, routine.createdTs) === null;
+}
+
+/** Whether Pause applies: the routine is running and still has occurrences ahead to stop. */
+export function canPauseRoutine(routine: StoredRoutine) {
+    return routine.active && !isEndedCalendarRoutine(routine);
 }

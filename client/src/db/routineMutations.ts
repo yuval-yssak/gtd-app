@@ -94,3 +94,12 @@ export async function pauseRoutine(db: IDBPDatabase<MyDB>, userId: string, routi
     await trashFutureItemsFromDate(db, userId, routine._id, todayStr);
     return updateRoutine(db, { ...routine, active: false });
 }
+
+/**
+ * Pause by id, from the row as stored NOW — an editor's render snapshot can predate a remote edit,
+ * or a remote delete (pausing that snapshot would resurrect the routine). Null when the row is gone.
+ */
+export async function pauseRoutineById(db: IDBPDatabase<MyDB>, routineId: string): Promise<StoredRoutine | null> {
+    const stored = await db.get('routines', routineId);
+    return stored ? pauseRoutine(db, stored.userId, stored) : null;
+}

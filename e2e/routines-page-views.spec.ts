@@ -168,4 +168,56 @@ test.describe('Routines page — row actions', () => {
             await expect(rowFor(page, 'Water plants').getByTestId('routineRowResumeButton')).toBeVisible();
         });
     });
+
+    test('the routine editor pauses the routine in place — confirm, then the paused notice replaces the button', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `routine-editor-pause-${uniqueStamp()}@example.com`, async (page) => {
+            const routine = await gtd.createRoutine(page, {
+                title: 'Water plants',
+                routineType: 'nextAction',
+                rrule: 'FREQ=DAILY',
+                template: {},
+                active: true,
+            });
+            await gtd.flush(page);
+
+            await page.goto(`/routine/${routine._id}`);
+            const editor = page.getByTestId('routinePageWrapper');
+            // A pending title edit lands first — the pause must not be undone by its late autosave.
+            await editor.getByLabel('Title').fill('Water all plants');
+            await editor.getByTestId('routineEditorPauseButton').click();
+            await expect(page.getByTestId('pauseRoutineDialog')).toContainText('Pause "Water all plants"?');
+            await page.getByTestId('pauseRoutineConfirm').click();
+
+            await expect(editor.getByText('This routine is paused. Save your changes to resume it.')).toBeVisible();
+            await expect(editor.getByTestId('routineEditorPauseButton')).toHaveCount(0);
+            await expect
+                .poll(async () => (await gtd.listRoutines(page)).find((r) => r._id === routine._id))
+                .toMatchObject({ active: false, title: 'Water all plants' });
+
+            await page.goto('/routines');
+            await expect(page.getByTestId('routinePausedSectionToggle')).toHaveText(/Paused \(1\)/);
+        });
+    });
+
+    test('the weekly review routine card keeps its own Pause — its series editor offers none', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `routine-review-no-editor-pause-${uniqueStamp()}@example.com`, async (page) => {
+            const routine = await gtd.createRoutine(page, {
+                title: 'Gym',
+                routineType: 'calendar',
+                rrule: 'FREQ=DAILY',
+                startDate: dayjs().format('YYYY-MM-DD'),
+                calendarItemTemplate: { timeOfDay: '12:00', duration: 30 },
+                template: {},
+                active: true,
+            });
+            await gtd.generateCalendarItemsToHorizon(page, routine._id);
+            await gtd.flush(page);
+
+            await page.goto('/weekly-review?stage=calendar');
+            await page.getByTestId('startReviewButton').click();
+            await page.getByTestId('routineCardEdit').click();
+            await expect(page.getByTestId('routineEditorSaveButton')).toBeVisible();
+            await expect(page.getByTestId('routineEditorPauseButton')).toHaveCount(0);
+        });
+    });
 });

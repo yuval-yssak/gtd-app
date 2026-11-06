@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react';
-import { fn } from 'storybook/test';
+import { expect, fn, within } from 'storybook/test';
 import { RouterDecorator } from '../../../.storybook/RouterDecorator';
 import { editorProvidersDecorator } from '../../test-utils/storybookAppData';
 import { mockDb, sampleCalendarRoutine, samplePeople, sampleRoutine, sampleWorkContexts } from '../../test-utils/storybookMocks';
@@ -42,4 +42,23 @@ export const EditExistingCalendar: Story = {
 /** Create mode with no people or work contexts — the context and people pickers render empty. */
 export const NoPeopleOrContexts: Story = {
     args: { workContexts: [], people: [] },
+};
+
+/** The routine page's editor on a running routine — "Pause routine" sits apart from Cancel / Save. */
+export const EditWithPauseAction: Story = {
+    args: { routine: sampleRoutine, hasPauseAction: true },
+    play: async ({ canvasElement }) => {
+        const canvas = within(canvasElement);
+        await expect(await canvas.findByTestId('routineEditorPauseButton')).toBeEnabled();
+    },
+};
+
+/** A paused routine — the "save to resume" notice instead of a Pause button. */
+export const PausedRoutine: Story = {
+    args: { routine: { ...sampleRoutine, active: false }, hasPauseAction: true },
+    play: async ({ canvasElement }) => {
+        const canvas = within(canvasElement);
+        await expect(await canvas.findByText('This routine is paused. Save your changes to resume it.')).toBeVisible();
+        await expect(canvas.queryByTestId('routineEditorPauseButton')).toBeNull();
+    },
 };

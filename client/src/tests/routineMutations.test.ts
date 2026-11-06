@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('#api/syncClient', async () => await import('../api/syncClient.mock.ts'));
 
 import { partitionPastItemsByDoneness } from '../db/routineItemHelpers';
-import { createRoutine, pauseRoutine, removeRoutine, updateRoutine } from '../db/routineMutations';
+import { createRoutine, pauseRoutine, pauseRoutineById, removeRoutine, updateRoutine } from '../db/routineMutations';
 import { waitForPendingFlush } from '../db/syncHelpers';
 import type { MyDB, StoredItem, StoredRoutine } from '../types/MyDB';
 import { openTestDB } from './openTestDB';
@@ -231,6 +231,32 @@ describe('pauseRoutine', () => {
         expect((routineOps[0]?.snapshot as StoredRoutine | null)?.active).toBe(false);
         expect(itemOps).toHaveLength(1);
         expect(itemOps[0]?.entityId).toBe('future-1');
+    });
+});
+
+// The routine editor's Pause works from the row in IDB, never from the editor's render snapshot:
+// another device may have deleted or edited the routine while the confirm dialog was open.
+describe('pauseRoutineById', () => {
+    it('pauses the row as stored now, keeping a newer edit the caller never saw', async () => {
+        const routine = await createRoutine(db, routineFields());
+        await db.put('routines', { ...routine, title: 'Renamed elsewhere' });
+        await db.clear('syncOperations');
+
+        const paused = await pauseRoutineById(db, routine._id);
+
+        expect(paused).toMatchObject({ active: false, title: 'Renamed elsewhere' });
+        expect(await db.get('routines', routine._id)).toMatchObject({ active: false, title: 'Renamed elsewhere' });
+    });
+
+    it('does nothing for a routine that no longer exists — no write, no op, no resurrection', async () => {
+        const routine = await createRoutine(db, routineFields());
+        await db.delete('routines', routine._id);
+        await db.clear('syncOperations');
+
+        expect(await pauseRoutineById(db, routine._id)).toBeNull();
+
+        expect(await db.get('routines', routine._id)).toBeUndefined();
+        expect(await db.getAll('syncOperations')).toEqual([]);
     });
 });
 
