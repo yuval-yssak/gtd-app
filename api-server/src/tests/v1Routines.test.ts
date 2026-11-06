@@ -275,6 +275,39 @@ describe('PATCH /v1/routines/:id', () => {
         expect(((await res.json()) as { code: string }).code).toBe('forbidden_field');
     });
 
+    it('answers with the routine as stored — exceptions past the series end already dropped', async () => {
+        const userId = await login();
+        const token = await tokenWith(userId, ['routines.write']);
+        await routinesDAO.insertOne({
+            _id: 'r-1',
+            user: userId,
+            title: 'old',
+            routineType: 'calendar',
+            rrule: 'FREQ=DAILY;UNTIL=20261106T235959Z',
+            startDate: '2026-11-01',
+            calendarItemTemplate: { timeOfDay: '22:00', duration: 5 },
+            template: {},
+            active: false,
+            createdTs: '2026-01-01T00:00:00.000Z',
+            updatedTs: '2026-01-01T00:00:00.000Z',
+            routineExceptions: [
+                { date: '2026-11-05', type: 'skipped' },
+                { date: '2026-11-07', type: 'skipped' },
+            ],
+        });
+        const res = await app.fetch(
+            new Request('http://localhost:4000/v1/routines/r-1', {
+                method: 'PATCH',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title: 'new' }),
+            }),
+        );
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as PublicRoutine & { routineExceptions?: { date: string }[] };
+        expect(body.routineExceptions?.map((e) => e.date)).toEqual(['2026-11-05']);
+        expect(body.routineExceptions).toEqual((await routinesDAO.findByOwnerAndId('r-1', userId))?.routineExceptions);
+    });
+
     it('returns 404 for missing id', async () => {
         const userId = await login();
         const token = await tokenWith(userId, ['routines.write']);

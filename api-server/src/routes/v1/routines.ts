@@ -13,6 +13,7 @@ import routinesDAO from '../../dataAccess/routinesDAO.js';
 import { applyAndPublishOperation, OperationValidationError } from '../../lib/applyOperation.js';
 import { pauseRoutine, resumeRoutine, type SplitParams, splitRoutine } from '../../lib/routineComposites.js';
 import { propagateRoutineEditToItems } from '../../lib/routineEditPropagation.js';
+import { withoutExceptionsPastSeriesEnd } from '../../lib/routineExceptionPrune.js';
 import { ensureFirstRoutineItem } from '../../lib/routineItemGeneration.js';
 import { GCAL_OWNED_ROUTINE_KEYS, type RoutineInterface } from '../../types/entities.js';
 import { presentRoutine } from './projections/routine.js';
@@ -300,7 +301,9 @@ export const v1RoutinesRoutes = new Hono<{ Variables: BearerVariables }>()
             delete merged.lastKnownCalendarSyncConfigId;
             delete merged.lastKnownCalendarAccountEmail;
         }
-        const snapshot = merged;
+        // Trimmed here, not only inside the apply pipeline, so the reply and the item propagation
+        // below see the routine as stored rather than its past-end exceptions.
+        const snapshot = withoutExceptionsPastSeriesEnd(merged);
         const result = await applyRoutineWrite(userId, tokenId, snapshot, 'update', now);
         if (!result.ok) {
             return c.json(

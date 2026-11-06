@@ -137,3 +137,4 @@
 - [rrule series-end helper reinvented without guards](project_rrule_series_end_reinvented_without_guards.md) — bare rule.all()/no try-catch; reuse effectiveSeriesEndIso (COUNT cap + malformed→open)
 - [Routine-instance "inherits slot" skip + op-less restamp](project_routine_instance_skip_and_silent_restamp_pitfalls.md) — exceptions miss done/attendee/v1 overrides; carry-forward fills absent only
 - [stampSnapshot is not universal](project_stampsnapshot_not_universal.md) — inbound GCal writes (updateRoutineFromGCal cap) bypass it; GCal-capped routines go inactive so exception sync skips them too
+- [Apply-pipeline normalization vs reply drift](project_apply_pipeline_normalization_reply_drift.md) — pipeline-side snapshot transforms (exception prune) diverge from routes replying with their pre-apply snapshot; enumerate callers

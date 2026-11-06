@@ -165,6 +165,30 @@ describe('POST /v1/routines/:id/resume', () => {
         expect(body.active).toBe(true);
         expect(body.startDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     });
+    it('answers with the routine as stored — exceptions past the series end already dropped', async () => {
+        const userId = await login();
+        const token = await tokenWith(userId, ['routines.write']);
+        const routineExceptions: RoutineInterface['routineExceptions'] = [
+            { date: '2024-01-01', type: 'skipped' },
+            { date: '2024-01-10', type: 'skipped' },
+        ];
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                routineType: 'calendar',
+                calendarItemTemplate: { timeOfDay: '09:00', duration: 30 },
+                rrule: 'FREQ=DAILY;UNTIL=20240105T235959Z',
+                active: false,
+                routineExceptions,
+            }),
+        );
+        const res = await app.fetch(
+            new Request('http://localhost:4000/v1/routines/r-1/resume', { method: 'POST', headers: { Authorization: `Bearer ${token}` } }),
+        );
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as { routineExceptions?: { date: string }[] };
+        expect(body.routineExceptions?.map((e) => e.date)).toEqual(['2024-01-01']);
+        expect(body.routineExceptions).toEqual((await routinesDAO.findByOwnerAndId('r-1', userId))?.routineExceptions);
+    });
 });
 
 describe('POST /v1/routines/:id/split', () => {

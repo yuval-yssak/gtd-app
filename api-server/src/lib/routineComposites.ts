@@ -4,7 +4,7 @@ import itemsDAO from '../dataAccess/itemsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import type { ItemInterface, OperationInterface, RoutineInterface } from '../types/entities.js';
 import { applyAndPublishOperation, applyAndPublishOperations, type RawOperation } from './applyOperation.js';
-import { withoutExceptionsFrom } from './routineExceptionPrune.js';
+import { withoutExceptionsFrom, withoutExceptionsPastSeriesEnd } from './routineExceptionPrune.js';
 import { ensureFirstRoutineItem } from './routineItemGeneration.js';
 import { addUntilToRrule } from './routineSplitUtils.js';
 import { userLocalDate } from './userTimezone.js';
@@ -251,7 +251,8 @@ async function updateRoutine(
     patch: Partial<RoutineInterface>,
     now: string,
 ): Promise<{ ok: true; routine: RoutineInterface }> {
-    const snapshot: RoutineInterface = { ...routine, ...patch, updatedTs: now };
+    // Trimmed before the apply (which trims too) so the returned routine matches the stored row.
+    const snapshot = withoutExceptionsPastSeriesEnd({ ...routine, ...patch, updatedTs: now });
     await applyAndPublishOperation(
         ctx.userId,
         { entityType: 'routine', opType: 'update', entityId: routine._id, snapshot },
