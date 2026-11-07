@@ -10,22 +10,13 @@ import { putItem } from '../db/itemHelpers';
 import { withSessionGate } from '../db/syncHelpers';
 import { performSignOutAll } from '../hooks/useAccounts';
 import type { MyDB, StoredItem } from '../types/MyDB';
+import { deferred } from './deferred';
 import { openTestDB } from './openTestDB';
 
 let db: IDBPDatabase<MyDB>;
 
 function inboxItem(userId: string): StoredItem {
     return { _id: `item-${userId}`, userId, status: 'inbox', title: userId, createdTs: '2026-01-01T00:00:00.000Z', updatedTs: '2026-01-01T00:00:00.000Z' };
-}
-
-/** A promise the test settles by hand, to hold a gated task at a chosen point. */
-function deferred() {
-    // let: the executor is the only place the resolver is handed out (Promise.withResolvers is ES2024).
-    let resolve!: () => void;
-    const promise = new Promise<void>((settle) => {
-        resolve = settle;
-    });
-    return { promise, resolve };
 }
 
 beforeEach(async () => {

@@ -66,6 +66,8 @@ export function AccountSwitcher({ db }: Props) {
                                 <MenuItem
                                     key={account.id}
                                     data-testid={`accountSwitcherItem-${account.id}`}
+                                    // Lets e2e wait until the switcher has loaded its accounts before picking one.
+                                    data-current={account.id === activeAccount?.id || undefined}
                                     disabled={isPending}
                                     leading={<AccountAvatar account={account} size={24} />}
                                     description={account.email}

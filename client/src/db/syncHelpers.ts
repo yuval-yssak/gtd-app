@@ -19,7 +19,7 @@ import type {
     StoredWorkContext,
     SyncOperation,
 } from '../types/MyDB';
-import { getActiveAccount, isAccountOnDevice } from './accountHelpers';
+import { getActiveAccount, getIntendedActiveAccount, isAccountOnDevice } from './accountHelpers';
 import { mergeServerOwnedCalendarFields } from './calendarLinkMerge';
 import { hasWebLocks, SYNC_APPLY_LOCK, SYNC_FLUSH_LOCK, withCrossContextLock } from './crossContextLock';
 import { getOrCreateDeviceId, getSyncCursor, setSyncCursor } from './deviceId';
@@ -577,11 +577,11 @@ export function withSessionGate<T>(task: () => Promise<T>): Promise<T> {
 /**
  * The user-selected active account. Read inside the session gate: a sync pass pivots IDB's active
  * pointer to each account it syncs and restores it before releasing the gate, so a bare read
- * mid-pass returns whichever account is being synced. Known limit: a pass that outlives the gate's
- * hard timeout releases it early, and a read queued behind it can still see the pivoted pointer.
+ * mid-pass returns whichever account is being synced. A pass that outlives the gate's hard timeout
+ * releases it early, so the read also resolves past any pivot still in flight.
  */
 export function readSettledActiveAccount(db: IDBPDatabase<MyDB>) {
-    return withSessionGate(() => getActiveAccount(db));
+    return withSessionGate(() => getIntendedActiveAccount(db));
 }
 
 const pullInFlight = new Map<string, Promise<void>>();

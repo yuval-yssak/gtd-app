@@ -1,6 +1,7 @@
 import dayjs from 'dayjs';
 import type { IDBPDatabase, IDBPTransaction } from 'idb';
 import type { MyDB, OAuthProvider, StoredAccount } from '../types/MyDB';
+import { intendedActiveUserId } from './activeAccountChoice';
 import { SYNC_APPLY_LOCK, withCrossContextLock } from './crossContextLock';
 
 /**
@@ -70,6 +71,20 @@ export async function getActiveAccount(db: IDBPDatabase<MyDB>): Promise<StoredAc
     const active = await db.get('activeAccount', 'active');
     if (!active) return undefined;
     return db.get('accounts', active.userId);
+}
+
+/**
+ * The account the user is on. Differs from `getActiveAccount` only while a sync pass has IDB pivoted
+ * to another account — readable mid-pass once a slow pass outlives the session gate's timeout.
+ */
+export async function getIntendedActiveAccount(db: IDBPDatabase<MyDB>): Promise<StoredAccount | undefined> {
+    const stored = await getActiveAccount(db);
+    const intendedId = intendedActiveUserId(stored?.id);
+    if (!intendedId || intendedId === stored?.id) {
+        return stored;
+    }
+    // The intended account can be gone (signed out mid-pass); the stored pointer is then the best answer.
+    return (await db.get('accounts', intendedId)) ?? stored;
 }
 
 export async function getAllAccounts(db: IDBPDatabase<MyDB>): Promise<StoredAccount[]> {

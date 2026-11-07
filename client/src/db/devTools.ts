@@ -43,7 +43,7 @@ import { generateCalendarItemsToHorizon, materializePendingNextActionRoutines, r
 import type { NewRoutineFields } from './routineMutations';
 import { createRoutine, pauseRoutine, removeRoutine, updateRoutine } from './routineMutations';
 import { closeSseConnections, getConnectedSseUserIds, getOpenSseUserIds } from './sseClient';
-import { flushSyncQueue, pullFromServer, readSettledActiveAccount, waitForPendingFlush, withSessionGate } from './syncHelpers';
+import { flushSyncQueue, pullFromServer, readSettledActiveAccount, setSessionGateTimeoutMs, waitForPendingFlush, withSessionGate } from './syncHelpers';
 import { getWorkContextsByUser } from './workContextHelpers';
 import { createWorkContext } from './workContextMutations';
 
@@ -201,6 +201,9 @@ export function mountDevTools(db: IDBPDatabase<MyDB>): void {
         // mid-pivot otherwise revokes the session the pass is about to restore, and the device
         // drops to /login.
         withSessionGate: <T>(task: () => Promise<T>) => withSessionGate(task),
+        // Shrinks the gate's 10s hard timeout so a spec can hold a pass past it without waiting 10s
+        // per queued task (every gated task behind a held one waits out its own timeout in turn).
+        setSessionGateTimeoutMs: (ms: number) => setSessionGateTimeoutMs(ms),
         // The production resolved-broadcast (same call auth.callback makes after an OAuth
         // re-login) — exposed so e2e can drive the real cross-tab clear path, not a hand-rolled
         // localStorage payload that could drift from the implementation.

@@ -4,6 +4,7 @@ import {
     clearAllAccounts,
     getActiveAccount,
     getAllAccounts,
+    getIntendedActiveAccount,
     getLoggedInAccounts,
     getLoggedInUserIds,
     removeAccount,
@@ -14,8 +15,10 @@ import {
     wipeUserData,
     writeIfAccountOnDevice,
 } from '../db/accountHelpers';
+import { resetAccountChoicesForTests, whilePivoting } from '../db/activeAccountChoice';
 import { SYNC_APPLY_LOCK } from '../db/crossContextLock';
 import type { MyDB, StoredAccount, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext, SyncOperation } from '../types/MyDB';
+import { deferred } from './deferred';
 import { installQueueingLocks, uninstallLocks } from './fakeWebLocks';
 import { openTestDB } from './openTestDB';
 
@@ -39,6 +42,7 @@ beforeEach(async () => {
 
 afterEach(() => {
     db.close();
+    resetAccountChoicesForTests();
 });
 
 // ── upsertAccount ─────────────────────────────────────────────────────────────
@@ -412,16 +416,6 @@ describe('writeIfAccountOnDevice', () => {
         uninstallLocks();
     });
 
-    /** A promise the test settles by hand, to hold the write at a chosen point. */
-    function deferred() {
-        // let: the executor is the only place the resolver is handed out (Promise.withResolvers is ES2024).
-        let resolve!: () => void;
-        const promise = new Promise<void>((settle) => {
-            resolve = settle;
-        });
-        return { promise, resolve };
-    }
-
     it('runs the write under the sync apply lock while the account is on the device', async () => {
         const lockNames = installQueueingLocks();
         await upsertAccount(makeAccount('userA', 1), db);
@@ -458,5 +452,43 @@ describe('writeIfAccountOnDevice', () => {
 
         expect(await db.get('items', 'late')).toBeUndefined();
         expect(await db.get('accounts', 'userA')).toBeUndefined();
+    });
+});
+
+// ── getIntendedActiveAccount ──────────────────────────────────────────────────
+
+describe('getIntendedActiveAccount', () => {
+    async function seedTwoAccountsStoredOn(storedUserId: string) {
+        await upsertAccount(makeAccount('user-a', 1000), db);
+        await upsertAccount(makeAccount('user-b', 2000), db);
+        await setActiveAccount(storedUserId, db);
+    }
+
+    /** Reads the intended account while a pass that started on `startingUserId` is in flight. */
+    function readDuringPassStartedOn(startingUserId: string, beforeRead: () => Promise<void> = async () => undefined) {
+        return whilePivoting(startingUserId, async () => {
+            await beforeRead();
+            return getIntendedActiveAccount(db);
+        });
+    }
+
+    it('is the stored account when no pass is pivoting', async () => {
+        await seedTwoAccountsStoredOn('user-b');
+
+        expect((await getIntendedActiveAccount(db))?.id).toBe('user-b');
+    });
+
+    it('is the account the pass started on while it has IDB pivoted to another', async () => {
+        await seedTwoAccountsStoredOn('user-b');
+
+        expect((await readDuringPassStartedOn('user-a'))?.id).toBe('user-a');
+    });
+
+    it('falls back to the stored account when the intended one was removed mid-pass', async () => {
+        await seedTwoAccountsStoredOn('user-b');
+
+        const intended = await readDuringPassStartedOn('user-a', () => db.delete('accounts', 'user-a'));
+
+        expect(intended?.id).toBe('user-b');
     });
 });

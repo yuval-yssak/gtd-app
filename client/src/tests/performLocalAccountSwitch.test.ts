@@ -1,10 +1,12 @@
 import type { IDBPDatabase } from 'idb';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { setActiveAccount } from '../db/accountHelpers';
+import { resetAccountChoicesForTests } from '../db/activeAccountChoice';
 import { withSessionGate } from '../db/syncHelpers';
 import { performLocalAccountSwitch } from '../hooks/useAccounts';
 import { readFreshListScrollEntry, resetListScrollMemory, saveListScrollEntry } from '../lib/listScrollMemory';
 import type { MyDB } from '../types/MyDB';
+import { deferred } from './deferred';
 import { openTestDB } from './openTestDB';
 
 // Pins the local-first switch core: the only remaining failure mode of switchToAccount is an IDB
@@ -13,16 +15,6 @@ import { openTestDB } from './openTestDB';
 
 let db: IDBPDatabase<MyDB>;
 
-/** A promise the test settles by hand, to hold a gated task at a chosen point. */
-function deferred() {
-    // let: the executor is the only place the resolver is handed out (Promise.withResolvers is ES2024).
-    let resolve!: () => void;
-    const promise = new Promise<void>((settle) => {
-        resolve = settle;
-    });
-    return { promise, resolve };
-}
-
 beforeEach(async () => {
     db = await openTestDB();
 });
@@ -30,6 +22,7 @@ beforeEach(async () => {
 afterEach(() => {
     db.close();
     resetListScrollMemory();
+    resetAccountChoicesForTests();
 });
 
 describe('performLocalAccountSwitch', () => {

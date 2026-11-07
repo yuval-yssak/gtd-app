@@ -7,7 +7,8 @@ import { enterCase2Recovery } from '../contexts/syncRecoveryStore';
 import { authClient } from '../lib/authClient';
 import { hasAtLeastOne } from '../lib/typeUtils';
 import type { MyDB } from '../types/MyDB';
-import { getActiveAccount, getLoggedInUserIds, setActiveAccount } from './accountHelpers';
+import { getActiveAccount, getIntendedActiveAccount, getLoggedInUserIds, setActiveAccount } from './accountHelpers';
+import { accountToRestore, isPivotAllowed, whilePivoting } from './activeAccountChoice';
 import { evaporateUserAndRecover } from './evaporateUser';
 import { bootstrapFromServerUnguarded, flushSyncQueue, pullFromServerUnguarded, withSessionGate } from './syncHelpers';
 import { countQueuedOpsForUser, isDeviceUnregistered, recoverFromBootstrapRequiredUnderGate } from './syncRecovery';
@@ -123,11 +124,8 @@ export async function syncAllLoggedInUsers(db: IDBPDatabase<MyDB>, options: Sync
             return { navigated };
         }
         const sessions = await loadDeviceSessionsByUserId();
-        const previouslyActive = await getActiveAccount(db);
-        const previouslyActiveSession = previouslyActive ? sessions.get(previouslyActive.id) : undefined;
-        const deletedMidPass = await syncSurvivors(db, survivors, sessions, resolvedOptions).finally(() =>
-            restorePreviouslyActiveSession(db, previouslyActive?.id, previouslyActiveSession),
-        );
+        const pass: SyncPass = { sessions, startingUserId: await readStartingUserId(db), totalUsers: survivors.length, options: resolvedOptions };
+        const deletedMidPass = await whilePivoting(pass.startingUserId, () => syncSurvivors(db, survivors, pass).finally(() => restoreActiveAccount(db, pass)));
         // Evaporate only AFTER the restore: inside a pass, IDB's activeAccount points at the account
         // being synced, so an evaporation there would read `wasActive` for the wrong account, pivot
         // to an arbitrary survivor and reload a tab that had nothing to do with the deletion.
@@ -136,10 +134,10 @@ export async function syncAllLoggedInUsers(db: IDBPDatabase<MyDB>, options: Sync
 }
 
 /** Runs every survivor's pass in order and returns the accounts whose dead session turned out to be a deletion. */
-async function syncSurvivors(db: IDBPDatabase<MyDB>, survivors: string[], sessions: Map<string, DeviceSession>, options: SyncAllLoggedInUsersOptions) {
+async function syncSurvivors(db: IDBPDatabase<MyDB>, survivors: string[], pass: SyncPass) {
     const outcomes = await mapSequentially(survivors, async (userId) => ({
         userId,
-        outcome: await syncOneUser(db, userId, sessions, options, survivors.length),
+        outcome: await syncOneUser(db, userId, pass),
     }));
     return outcomes.filter(({ outcome }) => outcome === 'deleted').map(({ userId }) => userId);
 }
@@ -204,15 +202,12 @@ export async function syncSingleUser(db: IDBPDatabase<MyDB>, userId: string): Pr
                 `syncSingleUser: no Better Auth multi-session entry for ${userId} — cannot pivot the cookie, refusing to pull under the wrong session`,
             );
         }
-        const previouslyActive = await getActiveAccount(db);
-        const previouslyActiveSession = previouslyActive ? sessions.get(previouslyActive.id) : undefined;
         // totalUsers > 1 wouldn't matter here because we've already verified the session entry
         // exists — `syncOneUser` will take the pivot branch unconditionally. We pass 2 to
         // signal "multi-user device" so the no-pivot fallback in `syncOneUser` is unreachable
         // by construction (defense-in-depth against future refactors).
-        const outcome = await syncOneUser(db, userId, sessions, {}, 2).finally(() =>
-            restorePreviouslyActiveSession(db, previouslyActive?.id, previouslyActiveSession),
-        );
+        const pass: SyncPass = { sessions, startingUserId: await readStartingUserId(db), totalUsers: 2, options: {} };
+        const outcome = await whilePivoting(pass.startingUserId, () => syncOneUser(db, userId, pass).finally(() => restoreActiveAccount(db, pass)));
         // After the restore, for the same reason as in syncAllLoggedInUsers: the pass left IDB's
         // activeAccount on `userId`, which is not necessarily the account the user chose.
         if (outcome === 'deleted') {
@@ -246,15 +241,17 @@ export async function withAccountSession<T>(db: IDBPDatabase<MyDB>, userId: stri
             }
             return task();
         }
-        const previouslyActive = await getActiveAccount(db);
-        const previouslyActiveSession = previouslyActive ? sessions.get(previouslyActive.id) : undefined;
-        try {
-            await authClient.multiSession.setActive({ sessionToken: target.sessionToken });
-            await setActiveAccount(userId, db);
-            return await task();
-        } finally {
-            await restorePreviouslyActiveSession(db, previouslyActive?.id, previouslyActiveSession);
-        }
+        const pivot: AccountPivot = { sessions, startingUserId: await readStartingUserId(db) };
+        return whilePivoting(pivot.startingUserId, async () => {
+            try {
+                await authClient.multiSession.setActive({ sessionToken: target.sessionToken });
+                // Skipped once the user has picked an account: the cookie alone then serves the task.
+                await pivotActiveAccountForPass(db, userId);
+                return await task();
+            } finally {
+                await restoreActiveAccount(db, pivot);
+            }
+        });
     });
 }
 
@@ -353,26 +350,25 @@ async function loadDeviceSessionsByUserId(): Promise<Map<string, DeviceSession>>
  * flag this user for reauth and skip, so a stale cookie for one account doesn't abort the whole loop
  * or spin retrying against a dead session.
  */
-async function syncOneUser(
-    db: IDBPDatabase<MyDB>,
-    userId: string,
-    sessions: Map<string, DeviceSession>,
-    options: SyncAllLoggedInUsersOptions,
-    totalUsers: number,
-): Promise<'synced' | 'skipped' | 'deleted'> {
-    const session = sessions.get(userId) ?? (totalUsers > 1 ? await refreshSessionForUser(userId) : undefined);
-    if (session) {
-        await authClient.multiSession.setActive({ sessionToken: session.sessionToken });
-        await setActiveAccount(userId, db);
-    } else if (totalUsers > 1) {
+async function syncOneUser(db: IDBPDatabase<MyDB>, userId: string, pass: SyncPass): Promise<'synced' | 'skipped' | 'deleted'> {
+    if (!isPivotAllowed()) {
+        // The user picked an account and the page is reloading onto it: syncing on would pivot IDB over the pick.
+        return 'skipped';
+    }
+    const session = pass.sessions.get(userId) ?? (pass.totalUsers > 1 ? await refreshSessionForUser(userId) : undefined);
+    if (!session && pass.totalUsers > 1) {
         console.warn(`[multi-sync] no multi-session entry for ${userId} on a multi-user device — skipping pass to avoid cross-user data corruption`);
         // A deleted account's session disappears from the device list too — probe before telling
         // the user to re-login to an account that no longer exists.
         return probeDeadSession(userId);
-    } else {
-        // Single-user case: no pivot needed, but make sure IDB active matches so the downstream
-        // session-match guard passes (it reads IDB's activeAccount).
-        await setActiveAccount(userId, db);
+    }
+    if (session) {
+        await authClient.multiSession.setActive({ sessionToken: session.sessionToken });
+    }
+    // Single-user case: no cookie pivot is needed, but IDB active must still match so the downstream
+    // session-match guard passes (it reads IDB's activeAccount).
+    if (!(await pivotActiveAccountForPass(db, userId))) {
+        return 'skipped';
     }
     // Snapshot BEFORE the pass: a success may only clear a reauth flag that predates it. A flag
     // raised mid-pass (SW relay, a concurrent failing path) reports a new failure and must survive.
@@ -409,8 +405,8 @@ async function syncOneUser(
         }
         throw err;
     }
-    if (options.onUserSynced) {
-        await options.onUserSynced(userId);
+    if (pass.options.onUserSynced) {
+        await pass.options.onUserSynced(userId);
     }
     return 'synced';
 }
@@ -471,11 +467,58 @@ async function pullOrBootstrap(db: IDBPDatabase<MyDB>, userId: string): Promise<
     await pullFromServerUnguarded(db, userId);
 }
 
+/** A run that pivots the active account away and back: the sessions it pivots with and the account it started on. */
+interface AccountPivot {
+    sessions: Map<string, DeviceSession>;
+    startingUserId: string | undefined;
+}
+
+/** One run of the sync orchestrator over the device's accounts. */
+interface SyncPass extends AccountPivot {
+    totalUsers: number;
+    options: SyncAllLoggedInUsersOptions;
+}
+
 /**
- * Restores the active account the user had before the orchestrator ran: IDB always, the cookie
- * best-effort. If the cookie pivot fails (offline, or the session is gone) the cookie stays on
- * whichever account ended the loop until `reconcileActiveSessionCookie` re-aligns it to IDB.
+ * The account a pass starts on — the intended one, not the stored pointer: an earlier pass that
+ * outlived the gate may still have IDB pivoted, and restoring that pivot would strand the device on
+ * the account it was syncing.
  */
+async function readStartingUserId(db: IDBPDatabase<MyDB>) {
+    return (await getIntendedActiveAccount(db))?.id;
+}
+
+/**
+ * Points IDB's active account at `userId` for the pass, unless the user has picked an account in
+ * this page. The check and the write are issued back to back with no await between them, so IDB
+ * orders this write before the write of any pick recorded after the check.
+ */
+async function pivotActiveAccountForPass(db: IDBPDatabase<MyDB>, userId: string): Promise<boolean> {
+    if (!isPivotAllowed()) {
+        return false;
+    }
+    await setActiveAccount(userId, db);
+    return true;
+}
+
+/**
+ * Restores the active account the user had before the orchestrator ran — or the one they picked
+ * while it ran (`accountToRestore`): IDB always, the cookie best-effort. If the cookie pivot fails
+ * (offline, or the session is gone) the cookie stays on whichever account ended the loop until
+ * `reconcileActiveSessionCookie` re-aligns it to IDB.
+ */
+async function restoreActiveAccount(db: IDBPDatabase<MyDB>, pivot: AccountPivot): Promise<void> {
+    const userId = await resolveAccountToRestore(db, pivot.startingUserId);
+    await restorePreviouslyActiveSession(db, userId, userId ? pivot.sessions.get(userId) : undefined);
+}
+
+/** A pick of an account removed before the pass ended falls back to the account the pass started on. */
+async function resolveAccountToRestore(db: IDBPDatabase<MyDB>, startingUserId: string | undefined) {
+    const chosen = accountToRestore(startingUserId);
+    const isChosenOnDevice = chosen !== undefined && (await db.get('accounts', chosen)) !== undefined;
+    return isChosenOnDevice ? chosen : startingUserId;
+}
+
 async function restorePreviouslyActiveSession(
     db: IDBPDatabase<MyDB>,
     previousUserId: string | undefined,

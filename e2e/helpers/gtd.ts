@@ -348,6 +348,13 @@ const gtdImpl = {
     // ── Device + notifications introspection (Step 1 multi-account work) ─────
     getDeviceId: (page: Page): Promise<string> => page.evaluate(() => (window as unknown as { __gtd: { getDeviceId(): Promise<string> } }).__gtd.getDeviceId()),
 
+    /** Shrinks the page's session-gate timeout (default 10s) — see devTools `setSessionGateTimeoutMs`. */
+    setSessionGateTimeoutMs: (page: Page, ms: number): Promise<void> =>
+        page.evaluate(
+            (timeoutMs) => (window as unknown as { __gtd: { setSessionGateTimeoutMs(ms: number): void } }).__gtd.setSessionGateTimeoutMs(timeoutMs),
+            ms,
+        ),
+
     getActiveAccountId: (page: Page): Promise<string | null> =>
         page.evaluate(() => (window as unknown as { __gtd: { getActiveAccountId(): Promise<string | null> } }).__gtd.getActiveAccountId()),
 

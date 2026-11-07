@@ -28,6 +28,7 @@ import dayjs from 'dayjs';
 import { fetchUserStatus } from '#api/accountApi';
 import { fetchSyncOps, pushSyncOps, SyncAuthError } from '#api/syncClient';
 import { ACCOUNT_NEEDS_REAUTH_EVENT, flagAccountNeedsReauth, getReauthFlaggedUserIds, resetAccountReauthStore } from '../contexts/accountReauthEvents';
+import { resetAccountChoicesForTests } from '../db/activeAccountChoice';
 import {
     handleDeadSessionGated,
     reconcileActiveSessionCookie,
@@ -36,9 +37,11 @@ import {
     syncSingleUser,
     withAccountSession,
 } from '../db/multiUserSync';
-import { setSessionGateTimeoutMs } from '../db/syncHelpers';
+import { readSettledActiveAccount, setSessionGateTimeoutMs } from '../db/syncHelpers';
+import { performLocalAccountSwitch } from '../hooks/useAccounts';
 import { authClient } from '../lib/authClient';
 import type { MyDB } from '../types/MyDB';
+import { deferred } from './deferred';
 import { openTestDB } from './openTestDB';
 
 let db: IDBPDatabase<MyDB>;
@@ -72,6 +75,7 @@ beforeEach(async () => {
 afterEach(() => {
     vi.clearAllMocks();
     resetAccountReauthStore(); // reauth-flag tests must not leak flags into later cases
+    resetAccountChoicesForTests(); // a recorded switch would steer later passes' restores
     db.close();
 });
 
@@ -1048,5 +1052,169 @@ describe('reconcileActiveSessionCookie × syncAllLoggedInUsers — gate serializ
         // [reconcile pivot-b] then the orchestrator's [pivot-a, pivot-b, restore-b] — the leading
         // token-b is the reconcile's, proving it ran to completion first under the gate.
         expect(setActiveCalls).toEqual(['token-b', 'token-a', 'token-b', 'token-b']);
+    });
+});
+
+describe("a user's account switch during a sync pass", () => {
+    type PullPage = Awaited<ReturnType<typeof fetchSyncOps>>;
+    const EMPTY_PULL: PullPage = { ops: [], serverTs: '2025-01-02T00:00:00.000Z', serverId: '' };
+
+    /** Holds the pass's `nth` pull until the test lets it go, so a switch can land mid-pass. Earlier pulls answer at once. */
+    function stallPull(nth: 1 | 2) {
+        const reached = deferred();
+        const release = deferred<PullPage>();
+        const pulls = vi.mocked(fetchSyncOps);
+        if (nth === 2) {
+            pulls.mockResolvedValueOnce(EMPTY_PULL);
+        }
+        pulls.mockImplementationOnce(() => {
+            reached.resolve();
+            return release.promise;
+        });
+        return { reached: reached.promise, release: () => release.resolve(EMPTY_PULL) };
+    }
+
+    async function seedAccountsWithActive(userIds: string[], activeUserId: string) {
+        for (const userId of userIds) {
+            await seedAccount(db, userId, `${userId}@example.com`);
+            await db.put('syncCursors', { userId, lastSyncedTs: '2025-01-01T00:00:00.000Z', lastSyncedId: '' });
+        }
+        await db.put('activeAccount', { userId: activeUserId }, 'active');
+    }
+
+    function switchTo(userId: string) {
+        return performLocalAccountSwitch(db, userId, { pathname: '/inbox', search: '' });
+    }
+
+    function cookiePivots() {
+        return vi.mocked(authClient.multiSession.setActive).mock.calls.map(([body]) => body?.sessionToken);
+    }
+
+    function lastCookiePivot() {
+        const last = cookiePivots().at(-1);
+        if (!last) throw new Error('expected at least one cookie pivot');
+        return last;
+    }
+
+    async function activeUserId() {
+        return (await db.get('activeAccount', 'active'))?.userId;
+    }
+
+    beforeEach(() => {
+        // A slow pass outliving the gate's timeout is the phone scenario: the switch then runs WHILE
+        // the pass is still going, and the pass must neither pivot over the choice nor restore over it.
+        setSessionGateTimeoutMs(20);
+    });
+
+    afterEach(() => {
+        setSessionGateTimeoutMs(10_000);
+    });
+
+    it('the settled active-account read reports the account the user is on, not the one a timed-out pass is syncing', async () => {
+        // The switcher reads through this: a pivoted answer check-marked the wrong account and ignored a
+        // tap on it as "already active".
+        await seedAccountsWithActive(['user-a', 'user-b'], 'user-a');
+        const pull = stallPull(2);
+        const pass = syncAllLoggedInUsers(db, { onUserDeleted: noNavigation() });
+        await pull.reached;
+
+        const whileSyncingB = (await readSettledActiveAccount(db))?.id;
+        await switchTo('user-b');
+        const afterSwitch = (await readSettledActiveAccount(db))?.id;
+        pull.release();
+        await pass;
+
+        expect(whileSyncingB).toBe('user-a');
+        expect(afterSwitch).toBe('user-b');
+    });
+
+    it('a switch to the account the pass is syncing survives the restore to the account it started on', async () => {
+        await seedAccountsWithActive(['user-a', 'user-b'], 'user-a');
+        const pull = stallPull(2);
+        const pass = syncAllLoggedInUsers(db, { onUserDeleted: noNavigation() });
+        await pull.reached;
+
+        await switchTo('user-b');
+        pull.release();
+        await pass;
+
+        expect(await activeUserId()).toBe('user-b');
+        expect(lastCookiePivot()).toBe('token-b');
+    });
+
+    it('a switch back to an account already synced stops the pass before it pivots to the next one', async () => {
+        // The reload that follows a switch can kill the page before the pass's restore runs, so a later
+        // pivot alone — IDB left on user-b — would boot the wrong account.
+        await seedAccountsWithActive(['user-a', 'user-b'], 'user-b');
+        const pull = stallPull(1);
+        const pass = syncAllLoggedInUsers(db, { onUserDeleted: noNavigation() });
+        await pull.reached;
+        const pivotsBeforeSwitch = cookiePivots().length;
+
+        await switchTo('user-a');
+        pull.release();
+        await pass;
+
+        expect(fetchSyncOps).toHaveBeenCalledTimes(1);
+        expect(cookiePivots().slice(pivotsBeforeSwitch)).toEqual(['token-a']);
+        expect(await activeUserId()).toBe('user-a');
+    });
+
+    it('a pass that starts after the switch, before its reload, neither pivots nor pulls — the reload could land mid-pivot', async () => {
+        await seedAccountsWithActive(['user-a', 'user-b'], 'user-a');
+        await switchTo('user-b');
+
+        await syncAllLoggedInUsers(db, { onUserDeleted: noNavigation() });
+
+        expect(fetchSyncOps).not.toHaveBeenCalled();
+        expect(cookiePivots()).toEqual(['token-b']);
+        expect(await activeUserId()).toBe('user-b');
+    });
+
+    it('a chosen account removed before the pass ends hands the device back to the account it started on', async () => {
+        await seedAccountsWithActive(['user-a', 'user-b'], 'user-a');
+        const pull = stallPull(1);
+        const pass = syncAllLoggedInUsers(db, { onUserDeleted: noNavigation() });
+        await pull.reached;
+
+        await switchTo('user-b');
+        await db.delete('accounts', 'user-b');
+        pull.release();
+        await pass;
+
+        expect(await activeUserId()).toBe('user-a');
+        expect(lastCookiePivot()).toBe('token-a');
+    });
+
+    it('syncSingleUser: a switch to a third account mid-pass is kept by the restore, cookie included', async () => {
+        await seedAccountsWithActive(['user-a', 'user-b', 'user-c'], 'user-a');
+        const pull = stallPull(1);
+        const pass = syncSingleUser(db, 'user-b');
+        await pull.reached;
+
+        await switchTo('user-c');
+        pull.release();
+        await pass;
+
+        expect(await activeUserId()).toBe('user-c');
+        expect(lastCookiePivot()).toBe('token-c');
+    });
+
+    it('withAccountSession: a switch made while the task runs is kept by the restore, cookie included', async () => {
+        await seedAccountsWithActive(['user-a', 'user-b', 'user-c'], 'user-a');
+        const taskStarted = deferred();
+        const releaseTask = deferred();
+        const session = withAccountSession(db, 'user-b', async () => {
+            taskStarted.resolve();
+            await releaseTask.promise;
+        });
+        await taskStarted.promise;
+
+        await switchTo('user-c');
+        releaseTask.resolve();
+        await session;
+
+        expect(await activeUserId()).toBe('user-c');
+        expect(lastCookiePivot()).toBe('token-c');
     });
 });

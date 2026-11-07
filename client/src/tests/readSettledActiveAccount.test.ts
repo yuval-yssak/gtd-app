@@ -3,22 +3,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { getActiveAccount, setActiveAccount, upsertAccount } from '../db/accountHelpers';
 import { readSettledActiveAccount, withSessionGate } from '../db/syncHelpers';
 import type { MyDB, StoredAccount } from '../types/MyDB';
+import { deferred } from './deferred';
 import { openTestDB } from './openTestDB';
 
 let db: IDBPDatabase<MyDB>;
 
 function account(id: string): StoredAccount {
     return { id, email: `${id}@example.com`, name: id, image: null, provider: 'google', addedAt: 0 };
-}
-
-/** A promise the test settles by hand, to hold a gated task at a chosen point. */
-function deferred() {
-    // let: the executor is the only place the resolver is handed out (Promise.withResolvers is ES2024).
-    let resolve!: () => void;
-    const promise = new Promise<void>((settle) => {
-        resolve = settle;
-    });
-    return { promise, resolve };
 }
 
 /** Starts a sync-pass stand-in that pivots the active pointer to `syncedId` and waits to be released. */

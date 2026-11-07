@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { signOutDevice } from '../api/pushApi';
 import { runLocalAccountAction } from '../contexts/accountEvaporatedRecovery';
 import { getAllAccounts, removeAccountAndData, removeAllAccountsAndData, setActiveAccount } from '../db/accountHelpers';
+import { recordAccountChoice, withdrawAccountChoice } from '../db/activeAccountChoice';
 import { getOrCreateDeviceId } from '../db/deviceId';
 import { readSettledActiveAccount, withSessionGate } from '../db/syncHelpers';
 import { authClient } from '../lib/authClient';
@@ -46,7 +47,12 @@ export interface AccountsState {
 export async function performLocalAccountSwitch(db: IDBPDatabase<MyDB>, userId: string, currentUrl: { pathname: string; search: string }): Promise<string> {
     // Inside the session gate: a sync pass in flight restores the account it started on when it
     // ends, which would silently undo a switch written mid-pass.
-    await withSessionGate(() => setActiveAccount(userId, db));
+    // Recorded as well as written: past the gate's timeout slow passes are still running in this page,
+    // and until the reload none of them may pivot over the pick or restore anything but it.
+    await withSessionGate(() => {
+        recordAccountChoice(userId);
+        return setActiveAccount(userId, db);
+    });
     // Scroll positions are per-account (anchors are item _ids) and the switch hard-reloads
     // the SAME url — without this the previous account's offset would restore onto the next
     // account's completely different list.
@@ -107,6 +113,8 @@ export function useAccounts(db: IDBPDatabase<MyDB>): AccountsState {
             return await runLocalAccountAction(fn);
         } catch (err) {
             console.error(`Account action "${action}" failed`, err);
+            // No reload follows a failed action, so a pick it recorded must not keep this page's sync frozen.
+            withdrawAccountChoice();
             setPendingAction(null);
             setActionError(FAILURE_LABELS[action]);
             return undefined;
@@ -233,6 +241,8 @@ export function useAccounts(db: IDBPDatabase<MyDB>): AccountsState {
             // ownership via the device multi-session cookie (not userId), so it can revoke
             // the old session even though we're now authenticated as the next user.
             await authClient.multiSession.setActive({ sessionToken: targetSessionToken });
+            // A deliberate move to `next` ending in a reload, like a switch: no slow pass may pivot over it.
+            recordAccountChoice(next.id);
             await setActiveAccount(next.id, db);
             if (currentSessionToken) {
                 await authClient.multiSession.revoke({ sessionToken: currentSessionToken });
