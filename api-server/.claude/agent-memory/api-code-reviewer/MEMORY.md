@@ -124,7 +124,7 @@
 - [Multi-session cookie renewal keys on newSession](project_multisession_cookie_renewal_newsession.md) — never forward the MAIN cookie from ungated routes on pivoting devices; newSession can be stale after revoke
 - [Mongo $set-undefined→null + $exists scan](project_mongo_query_hazards_undefined_and_exists.md) — no ignoreUndefined: $set undefined writes null → strict-schema jam; $exists+sort scans all missing rows, use $type
 - [Unvalidated order key poisons minting](project_unvalidated_order_key_poisons_minting.md) — rank is nonEmptyString only; one malformed lowest key makes topRankForUser throw on every create for that user
-- [Removed-symbol doc grep](feedback_removed_symbol_doc_grep.md) — "references updated" misses README/CLAUDE.md rule text; grep guidance docs for the old name
+- [Removed-symbol / changed-semantics doc grep](feedback_removed_symbol_doc_grep.md) — renames AND field-semantics changes leave entities.ts docstrings, docs/, test comments stale
 - [Backfill write-then-publish unrecoverable](project_backfill_write_then_publish_unrecoverable.md) — 'field present → skip' idempotency + separate op publish = publish failure never repaired on rerun; ask for rollback/republish.
 - [Rank backfill per-user vs merged keyspace](project_rank_backfill_per_user_vs_merged_keyspace.md) — server mints ranks per user; client merges accounts into one ranked list, so keys interleave. Non-blocking so far.
 - [Dep-bump review method](project_dep_bump_review_method.md) — diff old vs new node_modules; Anthropic 1.0 wire change + Better Auth 1.7 requireLocalEmailVerified slip past mocked tests

@@ -1172,7 +1172,8 @@ describe('Stale device cleanup', () => {
             .toISOString();
         const recentTs = dayjs().subtract(1, 'day').toISOString();
 
-        // lastSeenTs is stale but lastSyncedTs is recent — device still pulls, just doesn't push
+        // A row written before /sync/pull refreshed lastSeenTs (or seeded by a migration) — the reaper
+        // must still need BOTH fields stale
         await db
             .collection<LegacyDeviceSyncStateRow>('deviceSyncState')
             .insertOne({ _id: `dev-pull-only::${userId}`, deviceId: 'dev-pull-only', user: userId, lastSeenTs: staleTs, lastSyncedTs: recentTs });
@@ -1333,6 +1334,20 @@ describe('Reaped-device bootstrap guard', () => {
         const row = await db.collection<DeviceSyncStateInterface>('deviceSyncState').findOne({ _id: `dev-1::${userId}` });
         expect(row?.lastSyncedTs).toBe(cursorTs);
         expect(dayjs(row?.lastSeenTs).isAfter(oldSeenTs)).toBe(true);
+    });
+
+    it('pull with an existing row refreshes lastSeenTs — a read-only device is still seen', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        const oldSeenTs = dayjs().subtract(18, 'day').toISOString();
+        await registerDevice('dev-reader', userId, { lastSeenTs: oldSeenTs });
+
+        const res = await pull(cookie, { deviceId: 'dev-reader' });
+
+        expect(res.status).toBe(200);
+        const row = await db.collection<DeviceSyncStateInterface>('deviceSyncState').findOne({ _id: `dev-reader::${userId}` });
+        if (!row) throw new Error('expected dev-reader row');
+        expect(dayjs().diff(dayjs(row.lastSeenTs), 'second')).toBeLessThan(30);
     });
 
     it('device-status: registered:false before bootstrap, true after', async () => {

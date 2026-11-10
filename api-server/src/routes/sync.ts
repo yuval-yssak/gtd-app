@@ -152,6 +152,8 @@ async function isDeviceRegistered(deviceId: string, userId: string): Promise<boo
  * when no row matched — the row was reaped by a concurrent pull's stale-device sweep mid-request.
  * Callers must then answer 409 bootstrapRequired instead of the ops payload: re-creating the row
  * at the stale cursor would re-register the device inside a purge gap (the original data-loss bug).
+ * Also refreshes `lastSeenTs`: a device that only reads still syncs, and "Last seen" in Connected
+ * devices must not freeze at its last push.
  */
 async function recordPullCursorOnExistingRow(
     deviceId: string,
@@ -161,7 +163,7 @@ async function recordPullCursorOnExistingRow(
 ): Promise<boolean> {
     const result = await deviceSyncStateDAO.updateOne(
         { _id: deviceSyncStateId(deviceId, userId) },
-        { $set: { ...cursor, deviceId, user: userId, ...deviceReportFields(report) } },
+        { $set: { ...cursor, deviceId, user: userId, lastSeenTs: dayjs().toISOString(), ...deviceReportFields(report) } },
         { upsert: false },
     );
     return result.matchedCount > 0;

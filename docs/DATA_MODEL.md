@@ -161,7 +161,7 @@ One field-level exception: the server-owned calendar fields of an item (`calenda
 Each device registers itself in `DeviceSyncStateInterface` with a stable UUID generated on first launch. The server tracks:
 
 - `lastSyncedTs` — the most recent operation this device has pulled
-- `lastSeenTs` — the most recent operation this device has pushed
+- `lastSeenTs` — the most recent bootstrap, pull or push from this device ("Last seen" in Connected devices). A row is reaped only when both `lastSeenTs` and `lastSyncedTs` are older than `STALE_DEVICE_DAYS`
 
 **Purge rule**: operations older than `min(lastSyncedTs)` across all of a user's devices can be safely deleted. This prevents unbounded log growth while guaranteeing every device can always catch up.
 

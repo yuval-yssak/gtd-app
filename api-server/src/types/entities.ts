@@ -712,8 +712,8 @@ export interface DeviceSyncStateInterface {
      */
     lastSyncedId: string;
     /**
-     * ISO datetime of the most recent operation this (device, user) pair has pushed
-     * to the server.
+     * ISO datetime of the most recent /sync/bootstrap, /sync/pull or /sync/push from this
+     * (device, user) pair — "Last seen" in Connected devices, and one half of the stale-device reap test.
      */
     lastSeenTs: string;
     name?: string; // user-given label, e.g. "iPhone", "Work laptop" — set via PATCH /devices/:deviceId, wins over autoLabel
