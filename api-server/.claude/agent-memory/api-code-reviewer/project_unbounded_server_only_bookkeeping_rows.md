@@ -28,11 +28,15 @@ Verified empirically against the repo's Mongo 8.0 test container (2026-09-21): t
 one collection, one doc with a past ISO string and one with a past `Date` — the Date row was reaped
 within ~30 s, the string row survived indefinitely.
 
-This matters because the three pre-existing TTL indexes in this repo — `apiTokensDAO`,
-`oauthRefreshTokensDAO`, `oauthAuthCodesDAO` — are all on `expiresTs?: string` and are therefore
-**silent no-ops today**. Nothing is broken (each DAO enforces expiry at read time, and
-`apiTokensDAO`'s own comment says "TTL is housekeeping only"), but they never GC, and they are a
-trap if cited as the pattern to copy. Do NOT hold them up as the reference implementation.
+Status 2026-11-11: the three legacy string-TTL indexes (`apiTokens`, `oauthRefreshTokens`,
+`oauthAuthCodes`) were the root cause of a prod user accumulating 348 OAuth access-token rows. The
+fix (worktree gtd-device-last-seen, reviewed 2026-11-11) adds `lib/ttlExpiry.ts` — `expiryFields()`
+writes both the ISO `expiresTs` (read-time checks) and a BSON `expiresAt` twin (TTL), and
+`ensureExpiresAtTtl` drops `expiresTs_1` + backfills on boot. If that merged, `ttlExpiry.ts` is the
+pattern; verify before citing. Recurring hazard: every NEW writer of these collections must use
+`expiryFields()` — a writer that sets only `expiresTs` silently re-creates the original leak. The
+first draft tested only the access-token writer; the approved version also asserts the code and
+refresh rows (oauthExpiryTtl.test.ts) — a new writer needs the same assertion.
 
 **How to apply:** for any new non-synced collection, ask (1) what deletes a row when the happy path
 does not complete, and (2) what bounds the collection's size a year out. Expect a dedicated

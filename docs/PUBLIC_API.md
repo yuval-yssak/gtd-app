@@ -36,7 +36,7 @@ In any environment (production, staging, local dev), sign in to the app and open
 
 The list shows each token's label, creation date, and last-used time, plus revocation status for any tokens you have revoked.
 
-A per-user cap of **20 active tokens** is enforced; revoke unused ones before creating new ones. Hitting the cap returns `429 token_cap_reached` from the underlying `POST /account/tokens` endpoint.
+A per-user cap of **20 active personal tokens** is enforced (the short-lived access tokens a connected Claude client obtains through OAuth do not count); revoke unused ones before creating new ones. Hitting the cap returns `429 token_cap_reached` from the underlying `POST /account/tokens` endpoint.
 
 ### Mint, list, revoke (HTTP)
 
@@ -45,7 +45,7 @@ The Settings UI calls these endpoints under `/account/tokens` (Better Auth sessi
 | Method | Path | Body | Notes |
 |---|---|---|---|
 | `POST` | `/account/tokens` | `{ "label": "..." }` | Returns `{ id, label, createdTs, plaintext }`. |
-| `GET` | `/account/tokens` | — | Returns `{ tokens: [...] }` (no plaintext, no hash). |
+| `GET` | `/account/tokens` | — | Returns `{ tokens: [...] }` — personal tokens only, active and revoked (no plaintext, no hash). |
 | `DELETE` | `/account/tokens/:id` | — | Idempotent: revoking an already-revoked token still returns `200`. |
 
 ### Local development shortcut

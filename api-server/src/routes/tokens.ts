@@ -92,7 +92,7 @@ async function mintTokenForUser(
     // both pass with active=cap-1, both insert, ending at cap+1. The cap is a UX guardrail rather
     // than a security boundary (settings UI is single-tab in normal use), so we accept the race
     // rather than wrap every mint in a transaction.
-    const active = await apiTokensDAO.countActiveForUser(userId);
+    const active = await apiTokensDAO.countActivePersonalForUser(userId);
     if (active >= PROD_TOKEN_CAP_PER_USER) {
         return {
             ok: false,
@@ -136,10 +136,10 @@ export const tokensRoutes = new Hono<{ Variables: AuthVariables }>()
         });
     })
 
-    // GET /account/tokens — list the caller's tokens (active + revoked).
+    // GET /account/tokens — list the caller's personal tokens (active + revoked).
     .get('/', async (c) => {
         const userId = c.get('session').user.id;
-        const tokens = await apiTokensDAO.listForUser(userId);
+        const tokens = await apiTokensDAO.listPersonalForUser(userId);
         return c.json({ tokens: tokens.map(presentToken) });
     })
 

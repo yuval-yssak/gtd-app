@@ -1,7 +1,7 @@
 /** biome-ignore-all lint/style/noNonNullAssertion: test code asserts status before using ! */
 import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { hashToken, issueApiToken } from '../auth/apiTokens.js';
+import { hashToken, issueApiToken, issueOAuthAccessToken } from '../auth/apiTokens.js';
 import apiTokensDAO from '../dataAccess/apiTokensDAO.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { PROD_TOKEN_CAP_PER_USER, tokensRoutes } from '../routes/tokens.js';
@@ -30,6 +30,12 @@ beforeEach(async () => {
         db.collection('apiTokens').deleteMany({}),
     ]);
 });
+
+async function sessionUserId(sessionCookie: string) {
+    const res = await app.fetch(new Request('http://localhost:4000/auth/get-session', { headers: { Cookie: `${SESSION_COOKIE}=${sessionCookie}` } }));
+    const { user } = (await res.json()) as { user: { id: string } };
+    return user.id;
+}
 
 async function loginAs(provider: 'google' | 'github', overrides: Record<string, unknown> = {}): Promise<string> {
     const { sessionCookie } = await oauthLogin(app, provider, overrides);
@@ -130,6 +136,18 @@ describe('POST /account/tokens', () => {
         const res = await authenticatedRequest(app, { method: 'POST', path: '/account/tokens', sessionCookie, body: { label: 'fresh' } });
         expect(res.status).toBe(200);
     });
+
+    it('does not count OAuth access tokens (the Claude connector) against the cap', async () => {
+        const sessionCookie = await loginAs('google');
+        const userId = await sessionUserId(sessionCookie);
+        for (let i = 0; i < PROD_TOKEN_CAP_PER_USER - 1; i++) {
+            await issueApiToken(userId, `seed-${i}`);
+        }
+        await issueOAuthAccessToken(userId, 'client-1', ['items.read'], 3600);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/account/tokens', sessionCookie, body: { label: 'fresh' } });
+        expect(res.status).toBe(200);
+    });
 });
 
 describe('GET /account/tokens', () => {
@@ -178,6 +196,20 @@ describe('GET /account/tokens', () => {
         const body = (await list.json()) as { tokens: Array<{ id: string; revokedTs?: string }> };
         expect(body.tokens).toHaveLength(1);
         expect(body.tokens[0]!.revokedTs).toBeTruthy();
+    });
+});
+
+describe('GET /account/tokens — personal tokens only', () => {
+    it('leaves out the hourly OAuth access tokens a connected MCP client mints', async () => {
+        const sessionCookie = await loginAs('google');
+        const userId = await sessionUserId(sessionCookie);
+        await issueApiToken(userId, 'my-script');
+        await issueOAuthAccessToken(userId, 'client-1', ['items.read'], 3600);
+        await issueOAuthAccessToken(userId, 'client-1', ['items.read'], 3600);
+
+        const list = await authenticatedRequest(app, { method: 'GET', path: '/account/tokens', sessionCookie });
+        const body = (await list.json()) as { tokens: Array<{ label: string }> };
+        expect(body.tokens.map((t) => t.label)).toEqual(['my-script']);
     });
 });
 

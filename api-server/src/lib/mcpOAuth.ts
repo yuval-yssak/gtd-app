@@ -15,6 +15,7 @@ import oauthClientsDAO from '../dataAccess/oauthClientsDAO.js';
 import oauthRefreshTokensDAO from '../dataAccess/oauthRefreshTokensDAO.js';
 import { type ApiTokenScope, MINTABLE_API_TOKEN_SCOPES, type OAuthClientInterface } from '../types/entities.js';
 import { betterAuthSecret } from './betterAuthTokenCrypto.js';
+import { expiryFields } from './ttlExpiry.js';
 
 /** Scopes the remote MCP authorization server advertises + permits. Read+write across all entity domains. */
 export const MCP_SUPPORTED_SCOPES: ApiTokenScope[] = [
@@ -171,7 +172,7 @@ export async function issueAuthCode(input: IssueAuthCodeInput): Promise<string> 
         codeChallenge: input.codeChallenge,
         codeChallengeMethod: 'S256',
         scopes: input.scopes,
-        expiresTs: now.add(AUTH_CODE_TTL_SEC, 'second').toISOString(),
+        ...expiryFields(now.add(AUTH_CODE_TTL_SEC, 'second')),
         createdTs: now.toISOString(),
     });
     return code;
@@ -208,7 +209,7 @@ async function mintTokenSet(user: string, clientId: string, scopes: ApiTokenScop
         clientId,
         scopes,
         accessTokenId: record._id,
-        expiresTs: dayjs().add(refreshTtlSec, 'second').toISOString(),
+        ...expiryFields(dayjs().add(refreshTtlSec, 'second')),
         createdTs: dayjs().toISOString(),
     });
     return { accessToken, refreshToken, refreshTokenId, accessTokenId: record._id, expiresInSec: accessTtlSec, scopes };

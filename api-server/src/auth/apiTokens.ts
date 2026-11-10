@@ -12,6 +12,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import dayjs from 'dayjs';
 import apiTokensDAO from '../dataAccess/apiTokensDAO.js';
+import { expiryFields } from '../lib/ttlExpiry.js';
 import { type ApiTokenInterface, type ApiTokenScope, DEFAULT_API_TOKEN_SCOPES } from '../types/entities.js';
 
 const TOKEN_PREFIX = 'gtd_';
@@ -70,7 +71,7 @@ export async function issueOAuthAccessToken(userId: string, clientId: string, sc
         scopes,
         kind: 'oauth_access',
         oauthClientId: clientId,
-        expiresTs: now.add(ttlSec, 'second').toISOString(),
+        ...expiryFields(now.add(ttlSec, 'second')),
     };
     await apiTokensDAO.insertOne(record);
     return { plaintext, record };

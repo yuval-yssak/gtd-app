@@ -1,4 +1,5 @@
 import type { MongoClient } from 'mongodb';
+import { ensureExpiresAtTtl } from '../lib/ttlExpiry.js';
 import type { OAuthAuthCodeInterface } from '../types/entities.js';
 import AbstractDAO from './abstractDAO.js';
 
@@ -14,7 +15,7 @@ class OAuthAuthCodesDAO extends AbstractDAO<OAuthAuthCodeInterface> {
         await super.init(client, dbName);
         // GC consumed/expired codes shortly after expiry. Security relies on the atomic consume
         // below, NOT on the TTL — a not-yet-reaped expired code is rejected by the `expiresTs` guard.
-        await this._collection.createIndex({ expiresTs: 1 }, { expireAfterSeconds: 0 });
+        await ensureExpiresAtTtl(client.db(dbName), this.COLLECTION_NAME);
     }
 
     /**

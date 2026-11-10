@@ -1,4 +1,5 @@
-import { expect, test } from '@playwright/test';
+import { createHash } from 'node:crypto';
+import { type APIRequestContext, expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { resetServerForEmails, withOneLoggedInDevice } from './helpers/context';
 import { API_URL, CLIENT_URL } from './helpers/env';
@@ -10,7 +11,85 @@ import { uniqueStamp } from './helpers/uniqueStamp';
 // by `public-api.spec.ts` (issue #19 step 2) — keeping that out of this spec keeps the
 // settings-UI assertions tight and the spec fast.
 
+// Derived rather than hard-coded so the pair can never drift apart and fail the code exchange.
+const PKCE_VERIFIER = 'e2e-pkce-verifier-that-is-at-least-forty-three-characters';
+const PKCE_CHALLENGE = createHash('sha256').update(PKCE_VERIFIER).digest('base64url');
+// Nothing listens here: the spec reads the code off the decision response and never follows the redirect.
+const OAUTH_REDIRECT_URI = 'http://127.0.0.1:65530/callback';
+
+async function registerOAuthClient(request: APIRequestContext) {
+    const registration = await request.post(`${API_URL}/mcp-oauth/register`, { data: { redirect_uris: [OAUTH_REDIRECT_URI], client_name: 'Claude' } });
+    expect(registration.status()).toBe(201);
+    return ((await registration.json()) as { client_id: string }).client_id;
+}
+
+/**
+ * Walks the consent page as a person would and returns the authorization code from the redirect.
+ * The decision POST is answered from its own `Location` header instead of being followed: Playwright
+ * does not route the target of a redirected navigation, so the tab would hit the dead loopback URI.
+ */
+async function approveConsent(page: Page, clientId: string) {
+    const authorize = new URLSearchParams({
+        response_type: 'code',
+        client_id: clientId,
+        redirect_uri: OAUTH_REDIRECT_URI,
+        code_challenge: PKCE_CHALLENGE,
+        code_challenge_method: 'S256',
+        scope: 'items.read',
+        state: 'e2e',
+    });
+    const redirectLocation = new Promise<string>((resolve) => {
+        void page.route(`${API_URL}/mcp-oauth/authorize/decision`, async (route) => {
+            const response = await route.fetch({ maxRedirects: 0 });
+            resolve(response.headers().location ?? '');
+            await route.fulfill({ status: 200, body: 'consented' });
+        });
+    });
+    await page.goto(`${API_URL}/mcp-oauth/authorize?${authorize}`);
+    await page.getByRole('button', { name: 'Allow' }).click();
+    const code = new URL(await redirectLocation).searchParams.get('code');
+    if (!code) {
+        throw new Error('consent redirect carried no code');
+    }
+    return code;
+}
+
+async function postTokenGrant(request: APIRequestContext, form: Record<string, string>) {
+    const res = await request.post(`${API_URL}/mcp-oauth/token`, { form });
+    expect(res.status()).toBe(200);
+    return ((await res.json()) as { refresh_token: string }).refresh_token;
+}
+
+/** Connects an MCP client and refreshes it twice — three hourly access tokens' worth of rows. */
+async function connectMcpClientAndRefreshTwice(page: Page) {
+    const clientId = await registerOAuthClient(page.request);
+    const code = await approveConsent(page, clientId);
+    const first = await postTokenGrant(page.request, {
+        grant_type: 'authorization_code',
+        code,
+        client_id: clientId,
+        redirect_uri: OAUTH_REDIRECT_URI,
+        code_verifier: PKCE_VERIFIER,
+    });
+    const second = await postTokenGrant(page.request, { grant_type: 'refresh_token', refresh_token: first, client_id: clientId });
+    await postTokenGrant(page.request, { grant_type: 'refresh_token', refresh_token: second, client_id: clientId });
+}
+
 test.describe('Personal API tokens (settings)', () => {
+    test('a connected Claude client and its hourly refreshes never show up as personal tokens', async ({ browser }) => {
+        const email = `tokens-oauth-${uniqueStamp()}@example.com`;
+        await resetServerForEmails([email]);
+
+        await withOneLoggedInDevice(browser, email, async (page) => {
+            await connectMcpClientAndRefreshTwice(page);
+
+            await page.goto(`${CLIENT_URL}/settings`);
+
+            await expect(page.getByTestId('tokensEmptyState')).toBeVisible();
+            await expect(page.getByTestId('tokenRow')).toHaveCount(0);
+        });
+    });
+
     test('mint, reveal, revoke', async ({ browser }) => {
         const email = `tokens-${uniqueStamp()}@example.com`;
         await resetServerForEmails([email]);

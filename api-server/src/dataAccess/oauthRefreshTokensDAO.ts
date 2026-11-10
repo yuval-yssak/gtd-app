@@ -1,4 +1,5 @@
 import type { MongoClient } from 'mongodb';
+import { ensureExpiresAtTtl } from '../lib/ttlExpiry.js';
 import type { OAuthRefreshTokenInterface } from '../types/entities.js';
 import AbstractDAO from './abstractDAO.js';
 
@@ -12,11 +13,9 @@ class OAuthRefreshTokensDAO extends AbstractDAO<OAuthRefreshTokenInterface> {
 
     override async init(client: MongoClient, dbName: string) {
         await super.init(client, dbName);
-        await this._collection.createIndexes([
-            { key: { user: 1 } },
-            // GC expired refresh rows. Partial so rows without an expiry are never reaped.
-            { key: { expiresTs: 1 }, expireAfterSeconds: 0, partialFilterExpression: { expiresTs: { $exists: true } } },
-        ]);
+        await this._collection.createIndexes([{ key: { user: 1 } }]);
+        // GC expired refresh rows.
+        await ensureExpiresAtTtl(client.db(dbName), this.COLLECTION_NAME);
     }
 
     /**

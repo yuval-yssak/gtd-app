@@ -336,7 +336,7 @@ A bearer-token-authenticated REST surface for external integrations and the loca
 
 ### Token mint surface
 
-Tokens are minted from the **Settings → Personal API tokens** UI in the client, which calls `POST /account/tokens` (cookie-authed, per-user cap of 20 active tokens, plaintext returned exactly once). `GET /account/tokens` lists, `DELETE /account/tokens/:id` revokes — see `routes/tokens.ts`. The legacy `POST /dev/api-tokens` (gated by `NODE_ENV !== 'production'`) is the dev convenience shortcut and is intentionally absent from production deploys.
+Tokens are minted from the **Settings → Personal API tokens** UI in the client, which calls `POST /account/tokens` (cookie-authed, per-user cap of 20 active personal tokens, plaintext returned exactly once). `GET /account/tokens` lists personal tokens only — the hourly `oauth_access` rows a connected MCP client mints are left out of both the list and the cap — `DELETE /account/tokens/:id` revokes — see `routes/tokens.ts`. The legacy `POST /dev/api-tokens` (gated by `NODE_ENV !== 'production'`) is the dev convenience shortcut and is intentionally absent from production deploys.
 
 ## Account deletion & data export
 
@@ -388,7 +388,7 @@ DAOs are initialized as singletons in `loadDataAccess()` before the server start
 |---|---|---|
 | ItemsDAO | `items` | `user`, `user+status`, `user+expectedBy`, `user+timeStart`, `user+updatedTs`, `user+rank` (Next Actions priority mint: lowest key per user, binary order), `user+externalId` (unique sparse, public-API dedupe), `user+status+contentHash+createdTs` (public-API content dedupe) |
 | OperationsDAO | `operations` | `user+ts`, `user+entityType+entityId+ts` |
-| ApiTokensDAO | `apiTokens` | `tokenHash` (unique), `user` |
+| ApiTokensDAO | `apiTokens` | `tokenHash` (unique), `user`, `expiresAt` TTL (BSON Date, OAuth access tokens only) |
 | RoutinesDAO | `routines` | `user`, `user+updatedTs` |
 | PeopleDAO | `people` | `user`, `user+updatedTs` |
 | WorkContextsDAO | `workContexts` | `user`, `user+updatedTs` |

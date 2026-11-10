@@ -1,4 +1,5 @@
 import type { MongoClient } from 'mongodb';
+import { ensureExpiresAtTtl } from '../lib/ttlExpiry.js';
 import type { ApiTokenInterface, ApiTokenScope } from '../types/entities.js';
 import AbstractDAO from './abstractDAO.js';
 
@@ -13,11 +14,10 @@ class ApiTokensDAO extends AbstractDAO<ApiTokenInterface> {
             { key: { tokenHash: 1 }, unique: true },
             // List-tokens-for-user view in settings.
             { key: { user: 1 } },
-            // GC for OAuth access tokens: expire rows once `expiresTs` passes. Partial so personal
-            // tokens (no `expiresTs`) are never touched. TTL is housekeeping only — expiry is ALSO
-            // enforced in `findActiveUnexpiredByHash` so a not-yet-reaped row can't authenticate.
-            { key: { expiresTs: 1 }, expireAfterSeconds: 0, partialFilterExpression: { expiresTs: { $exists: true } } },
         ]);
+        // GC for OAuth access tokens. TTL is housekeeping only — expiry is ALSO enforced in
+        // `findActiveUnexpiredByHash` so a not-yet-reaped row can't authenticate.
+        await ensureExpiresAtTtl(client.db(dbName), this.COLLECTION_NAME);
     }
 
     /** Returns the token row for `tokenHash`, or null if missing or revoked. */
@@ -54,14 +54,21 @@ class ApiTokensDAO extends AbstractDAO<ApiTokenInterface> {
         await this._collection.updateOne({ _id: tokenId }, { $set: { scopes } });
     }
 
-    /** Lists every token belonging to `userId`, including revoked ones. Sorted by createdTs DESC. */
-    async listForUser(userId: string): Promise<ApiTokenInterface[]> {
-        return this._collection.find({ user: userId }).sort({ createdTs: -1 }).toArray();
+    /**
+     * Lists the personal tokens `userId` minted in Settings, including revoked ones. Sorted by
+     * createdTs DESC. OAuth access tokens are left out: a connected MCP client mints one per hour, so
+     * they would bury the user's own tokens, and revoking one does nothing (the next refresh mints another).
+     */
+    async listPersonalForUser(userId: string): Promise<ApiTokenInterface[]> {
+        return this._collection
+            .find({ user: userId, kind: { $ne: 'oauth_access' } })
+            .sort({ createdTs: -1 })
+            .toArray();
     }
 
-    /** Counts active (not revoked) tokens for `userId`. Used to enforce the per-user mint cap. */
-    async countActiveForUser(userId: string): Promise<number> {
-        return this._collection.countDocuments({ user: userId, revokedTs: { $exists: false } });
+    /** Counts active (not revoked) personal tokens for `userId`. Used to enforce the per-user mint cap. */
+    async countActivePersonalForUser(userId: string): Promise<number> {
+        return this._collection.countDocuments({ user: userId, kind: { $ne: 'oauth_access' }, revokedTs: { $exists: false } });
     }
 
     /**

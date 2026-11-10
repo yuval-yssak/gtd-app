@@ -1005,6 +1005,8 @@ export interface ApiTokenInterface {
      * is in the past — enforced INSIDE the Mongo query so the no-cache revocation guardrail holds.
      */
     expiresTs?: string;
+    /** BSON twin of `expiresTs` for the TTL index (lib/ttlExpiry.ts) — never compared in queries. */
+    expiresAt?: Date;
     /** Token provenance. Absent ⇒ 'personal'. 'oauth_access' ⇒ short-lived, issued via /mcp-oauth/token. */
     kind?: 'personal' | 'oauth_access';
     /** For `kind:'oauth_access'`: the `oauthClients._id` that obtained it (surfaces as AuthInfo.clientId). */
@@ -1047,6 +1049,8 @@ export interface OAuthAuthCodeInterface {
     scopes: ApiTokenScope[];
     /** ISO datetime, ~now+60s. Redemption requires `expiresTs > now`. */
     expiresTs: string;
+    /** BSON twin of `expiresTs` for the TTL index (lib/ttlExpiry.ts) — never compared in queries. */
+    expiresAt: Date;
     /** Set on first redemption. A second redemption finds it set → `invalid_grant` (replay guard). */
     consumedTs?: string;
     createdTs: string;
@@ -1069,6 +1073,8 @@ export interface OAuthRefreshTokenInterface {
     rotatedToId?: string;
     revokedTs?: string;
     expiresTs?: string;
+    /** BSON twin of `expiresTs` for the TTL index (lib/ttlExpiry.ts) — never compared in queries. */
+    expiresAt?: Date;
     createdTs: string;
 }
 
