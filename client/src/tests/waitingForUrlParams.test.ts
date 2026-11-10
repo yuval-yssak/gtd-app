@@ -2,12 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { parseWaitingForSearch } from '../lib/waitingForUrlParams';
 
 describe('parseWaitingForSearch', () => {
-    it('passes through "date"', () => {
-        expect(parseWaitingForSearch({ sortBy: 'date' })).toEqual({ sortBy: 'date' });
+    it('passes through "person"', () => {
+        expect(parseWaitingForSearch({ sortBy: 'person' })).toEqual({ sortBy: 'person' });
     });
 
-    it('drops "person" so the default is omitted from the URL', () => {
-        expect(parseWaitingForSearch({ sortBy: 'person' })).toEqual({ sortBy: undefined });
+    it('drops "date" so the default is omitted from the URL', () => {
+        expect(parseWaitingForSearch({ sortBy: 'date' })).toEqual({ sortBy: undefined });
     });
 
     it('drops a missing value', () => {

@@ -47,7 +47,7 @@
 - [Removed fixed row leaves a degenerate empty state](feedback_removed_row_leaves_degenerate_empty_state.md) — Deleting an always-present row makes the dynamic remainder vacuously complete at zero; check the manage dialog can reach zero permanently.
 - [Spec header comments outlive inline edits](feedback_spec_header_comment_outlives_inline_edits.md) — e2e file-header flow summaries keep describing removed steps; they evade concept greps, so read the top of every touched spec.
 - [Grouped key-comparator reused on a flat list](feedback_grouped_comparator_reused_flat.md) — Unique-bucket-key comparators go asymmetric on sentinel-vs-sentinel once flattened; test cmp both directions and `dayjs(undefined)`.
-- ["Mirror the page" ignores view toggles](feedback_mirror_the_page_ignores_view_toggles.md) — Page-parity claims copy the flat `.sort()` and miss a `useSearch()`-defaulted grouped render branch (/waiting-for defaults to person).
+- ["Mirror the page" ignores view toggles](feedback_mirror_the_page_ignores_view_toggles.md) — Page-parity claims copy the flat `.sort()` and miss a `useSearch()`-defaulted grouped render branch (/waiting-for defaulted to person until 2026-11-10).
 - [Empty state added, primary label left stale](feedback_empty_state_added_but_primary_label_stale.md) — The new "nothing here" message lands but the pinned primary still asserts "All X clear"; also check the message's verb names a real control.
 - [Repeat-click e2e loops race the transition gate](feedback_e2e_repeat_click_races_transition_gate.md) — `for (i<N) .first().click()` on `isMutating`-disabled rows can re-hit one row; assert the shrinking count per iteration.
 - [Reordered list breaks persisted ordinals](feedback_reordered_list_breaks_persisted_ordinals.md) — "All consumers are id-keyed" misses draft `stageIndex`; a `.length` clamp no-ops on a permutation, so mid-flight users resume on the swapped stage.
@@ -96,3 +96,4 @@
 - [Secondary editor action, own transition](feedback_secondary_editor_action_own_transition.md) — added Pause/etc. in an editor child leaves Save enabled mid-write; `db.get ?? prop` resurrects deletes.
 - [Ranked adapter closes over render state](feedback_ranked_adapter_closes_over_render_state.md) — New `useRankedRows` writers ignore fresh `sectionRows` and plan from a closure; quick Alt+Up/Down drops the move.
 - [Global DS colour token change](feedback_global_ds_colour_token_change.md) — new semantic token swapped into DS defaults is fine; no token story needed; check className colour pins + both themes.
+- [Default-view flip strands divergence comments](project_default_flip_strands_divergence_comments.md) — flipping a page default leaves stale "divergence from default" comments in reviewFlowState + reviewer memory.

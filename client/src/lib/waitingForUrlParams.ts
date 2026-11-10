@@ -8,7 +8,7 @@ export interface WaitingForUrlState {
     sortBy?: WaitingForSortBy | undefined;
 }
 
-const readSortBy = (raw: unknown): WaitingForSortBy | undefined => (raw === 'date' ? 'date' : undefined);
+const readSortBy = (raw: unknown): WaitingForSortBy | undefined => (raw === 'person' ? 'person' : undefined);
 
 // Mapped optional-unknown shape so dot-notation reads don't trip TS4111 — same tradeoff as
 // listQueryUrlParams's RawListQueryBag.

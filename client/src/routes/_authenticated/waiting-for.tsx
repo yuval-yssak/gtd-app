@@ -41,8 +41,8 @@ import type { StoredItem } from '../../types/MyDB';
 import styles from './-waiting-for.module.css';
 
 const SORT_OPTIONS = [
-    { value: 'person', label: 'Person', 'aria-label': 'Sort by person', 'data-testid': 'waitingForSortByPerson' },
     { value: 'date', label: 'Date', 'aria-label': 'Sort by date', 'data-testid': 'waitingForSortByDate' },
+    { value: 'person', label: 'Person', 'aria-label': 'Sort by person', 'data-testid': 'waitingForSortByPerson' },
 ] as const;
 
 export const Route = createFileRoute('/_authenticated/waiting-for')({
@@ -53,7 +53,7 @@ export const Route = createFileRoute('/_authenticated/waiting-for')({
 function WaitingForPage() {
     useDocumentTitle('Waiting For');
     const { db } = Route.useRouteContext();
-    const { sortBy = 'person' } = Route.useSearch();
+    const { sortBy = 'date' } = Route.useSearch();
     const navigate = useNavigate();
     const { items, allPeople, routines, refreshItems, isInitialSyncing } = useAppData();
     const editor = useItemEditor();
@@ -84,7 +84,7 @@ function WaitingForPage() {
     const sortedGroupEntries = sortGroupEntriesByPersonName(groups, personMap);
 
     function onSortByChanged(value: 'person' | 'date') {
-        void navigate({ to: '/waiting-for', search: { sortBy: value === 'person' ? undefined : value }, replace: true });
+        void navigate({ to: '/waiting-for', search: { sortBy: value === 'date' ? undefined : value }, replace: true });
     }
 
     // `ranked` is declared below; this runs on a click, long after the render that declared it.

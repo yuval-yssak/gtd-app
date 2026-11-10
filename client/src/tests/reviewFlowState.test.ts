@@ -140,7 +140,7 @@ describe('stageEligibleItems', () => {
         ]);
     });
 
-    it('waitingFor walks chronologically (expectedBy ascending, undated first) across people — the page\'s "By date" view, NOT its person-grouped default', () => {
+    it('waitingFor walks chronologically (expectedBy ascending, undated first) across people — the page\'s default "By date" view, never its person view', () => {
         const items = [
             makeItem({ _id: 'bobLater', status: 'waitingFor', waitingForPersonId: 'p-bob', expectedBy: '2026-09-10' }),
             makeItem({ _id: 'unassignedSoon', status: 'waitingFor', expectedBy: '2026-08-25' }),

@@ -151,7 +151,7 @@ test.describe('Ranked lists: Inbox, Someday / Maybe, Waiting For by date', () =>
                 await gtd.clarifyToWaitingFor(page, await gtd.collect(page, title), { expectedBy });
             }
             await gtd.flush(page);
-            await page.goto('/waiting-for?sortBy=date');
+            await page.goto('/waiting-for');
             await page.waitForSelector('text=Ask Ann');
             await expect(page.getByTestId('waitingForSectionHeader')).toHaveCount(2);
 
@@ -345,7 +345,7 @@ test.describe('Ranked lists: keyboard grab downwards keeps focus; Waiting For by
             await expect.poll(() => storedOrder(page, 'inbox')).toEqual(['Bravo', 'Alpha', 'Charlie']);
             await expect.poll(focusedTitle).toMatch(/^Charlie/);
 
-            await page.goto('/waiting-for?sortBy=date');
+            await page.goto('/waiting-for');
             await page.waitForSelector('text=Wait A');
             await rowOf(page, 'waitingForItemRow', 'Wait C').focus();
             await page.keyboard.press('Space');
@@ -362,7 +362,7 @@ test.describe('Ranked lists: keyboard grab downwards keeps focus; Waiting For by
             await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
             const item = await gtd.clarifyToWaitingFor(page, await gtd.collect(page, 'Owed by nobody'), {});
             await gtd.flush(page);
-            await page.goto('/waiting-for');
+            await page.goto('/waiting-for?sortBy=person');
             await page.waitForSelector('text=Owed by nobody');
             await rowOf(page, 'waitingForItemRow', 'Owed by nobody').focus();
             await page.keyboard.press('c');

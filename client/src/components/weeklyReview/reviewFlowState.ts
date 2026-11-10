@@ -192,10 +192,9 @@ export function stageEligibleItems(stageId: ReviewStageId, items: ReadonlyArray<
             // Same comparator as the Next Actions page (expected day ascending, then the manual rank inside each day).
             return items.filter((item) => item.status === 'nextAction' && !isTicklerHidden(item, todayIso)).sort(compareNextActions);
         case 'waitingFor':
-            // DELIBERATE divergence from the /waiting-for page's default (person-grouped) view:
-            // the review walks the page's "By date" view instead — expectedBy ascending, undated
-            // first — because a person-grouped walk re-scrambles the dates every time the group
-            // changes, and a review scans for what's overdue or due soon, not who owes it.
+            // The /waiting-for page's default "By date" view — expectedBy ascending, undated first.
+            // Never its optional person view: a person-grouped walk re-scrambles the dates every time
+            // the group changes, and a review scans for what's overdue or due soon, not who owes it.
             return items.filter((item) => item.status === 'waitingFor' && !isTicklerHidden(item, todayIso)).sort(compareWaitingForByExpectedBy);
         case 'tickler':
             // Mirrors the /tickler page: every tickler-participating status, snoozed rows only.

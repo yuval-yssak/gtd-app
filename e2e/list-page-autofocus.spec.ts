@@ -36,7 +36,7 @@ test.describe('list page input autofocus', () => {
 });
 
 test.describe('waiting-for sorting', () => {
-    test('groups sort alphabetically by person and can switch to date sort', async ({ browser }) => {
+    test('opens sorted by date, Date toggle comes first, and switches to person groups', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `waiting-for-sort-${uniqueStamp()}@example.com`, async (page) => {
             const zoe = await gtd.createPerson(page, { name: 'Zoe' });
             const alice = await gtd.createPerson(page, { name: 'Alice' });
@@ -54,15 +54,10 @@ test.describe('waiting-for sorting', () => {
 
             await page.goto(`${CLIENT_URL}/waiting-for`);
 
-            // The person groups are headed sections (h6, under the page's h5 title).
-            const groupHeaders = page.getByRole('heading', { level: 6 });
-            await expect(groupHeaders).toHaveText(['Alice', 'Zoe', 'Unassigned']);
-
-            // Person chips only render in the by-date view — grouping already names the person here.
-            await expect(page.getByTestId('waitingForPersonChip')).toHaveCount(0);
-
-            await page.getByTestId('waitingForSortByDate').click();
-            await expect(page).toHaveURL(/sortBy=date/);
+            // Date is the default view and the first option of the toggle.
+            await expect(page.getByTestId('waitingForSortToggle').getByRole('button')).toHaveText(['Date', 'Person']);
+            await expect(page.getByTestId('waitingForSortByDate')).toHaveAttribute('aria-pressed', 'true');
+            await expect(page).not.toHaveURL(/sortBy=/);
 
             const rows = page.getByTestId('waitingForItemRow');
             await expect(rows).toHaveText([/Ask Zoe for the report/, /Ask Alice for the invoice/, /Await building permit/]);
@@ -71,8 +66,18 @@ test.describe('waiting-for sorting', () => {
             await expect(page.getByTestId('waitingForPersonChip')).toHaveText(['Zoe', 'Alice']);
 
             await page.getByTestId('waitingForSortByPerson').click();
-            await expect(page).not.toHaveURL(/sortBy=/);
+            await expect(page).toHaveURL(/sortBy=person/);
+
+            // The person groups are headed sections (h6, under the page's h5 title).
+            const groupHeaders = page.getByRole('heading', { level: 6 });
             await expect(groupHeaders).toHaveText(['Alice', 'Zoe', 'Unassigned']);
+
+            // Person chips only render in the by-date view — grouping already names the person here.
+            await expect(page.getByTestId('waitingForPersonChip')).toHaveCount(0);
+
+            await page.getByTestId('waitingForSortByDate').click();
+            await expect(page).not.toHaveURL(/sortBy=/);
+            await expect(rows).toHaveText([/Ask Zoe for the report/, /Ask Alice for the invoice/, /Await building permit/]);
         });
     });
 });
