@@ -2,7 +2,7 @@ import type { IDBPDatabase } from 'idb';
 import { useState } from 'react';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { usePendingReassign } from '../../contexts/PendingReassignProvider';
-import { FROM_GMAIL_READONLY_MESSAGE } from '../../db/itemMutations';
+import { FROM_GMAIL_DONE_NOTICE } from '../../db/itemMutations';
 import { Button, Card } from '../../designSystem';
 import type { MyDB } from '../../types/MyDB';
 import { type ItemEditorActionsApi, ItemEditorBody } from '../itemEditor/ItemEditorBody';
@@ -88,7 +88,7 @@ export function ClarifyStage({ queue, db, onQueueChange, onStageFinished, travel
                         onSaved={refreshItems}
                         onSaveCommitted={nav.markSaveCommitted}
                         onDirtyLockChange={setIsEditorLocked}
-                        onFromGmailReadOnly={() => stageToast.showNotice(FROM_GMAIL_READONLY_MESSAGE)}
+                        onFromGmailReadOnly={() => stageToast.showNotice(FROM_GMAIL_DONE_NOTICE)}
                         presentation="review"
                         hasPositionRow
                         onPositionMoved={yieldSlotOnDownMove(onQueueChange)}

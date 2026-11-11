@@ -13,6 +13,7 @@ import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import { isMissedPush, runMissedPushSweep } from '../lib/calendarPushback.js';
+import { DONE_COLOR_ID } from '../lib/doneMarker.js';
 import { closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { applyExceptionToItems } from '../routes/calendar.js';
 import type { CalendarIntegrationInterface, CalendarSyncConfigInterface, ItemInterface, RoutineInterface } from '../types/entities.js';
@@ -314,6 +315,26 @@ describe('runMissedPushSweep — standalone linked items', () => {
 
         expect(result.repushedItems).toBe(1);
         expect(provider.updateEvent).toHaveBeenCalledTimes(1);
+    });
+
+    // Gmail-created events used to be skipped outright, so a done one was never stamped — the sweep
+    // is what backfills the color marker onto those rows once the push path supports them.
+    it('backfills the color-only done marker onto a done fromGmail item that was never pushed', async () => {
+        await seedCalendarIntegration();
+        const { lastPushedToGCalTs: _neverPushed, ...neverPushed } = standaloneItem({
+            status: 'done',
+            eventType: 'fromGmail',
+            lastSyncedFromGCalTs: '2026-08-01T00:00:00.000Z',
+        });
+        await itemsDAO.insertOne(neverPushed);
+        const provider = fakeProvider();
+
+        await runMissedPushSweep({ userId, integrationId, before: dayjs().toISOString() }, () => provider as never);
+
+        expect(provider.updateEvent).toHaveBeenCalledTimes(1);
+        const [call] = provider.updateEvent.mock.calls;
+        if (!call) throw new Error('expected one updateEvent call');
+        expect(call[2]).toEqual({ colorId: DONE_COLOR_ID });
     });
 
     it('skips an anchor-less linked item — no evidence which side is newer', async () => {

@@ -227,7 +227,7 @@ describe('calendar → active-status transition cascades to GCal event removal',
         expect(deleteEvent).not.toHaveBeenCalled();
     });
 
-    it('skips GCal removal for fromGmail events (read-only via Calendar API)', async () => {
+    it('deletes the event of a fromGmail item that leaves the calendar (Google allows deleting Gmail-created events)', async () => {
         await seedCalendarIntegration();
         await itemsDAO.insertOne(calendarItem({ eventType: 'fromGmail' }));
         const deleteEvent = vi.fn();
@@ -238,11 +238,9 @@ describe('calendar → active-status transition cascades to GCal event removal',
             { deviceId: 'api:tok-1' },
         );
 
-        // The sidecar is still hydrated (the item genuinely leaves calendar status)…
         expect(op.detachedCalendar).toMatchObject({ eventType: 'fromGmail' });
-        // …but pushback must not touch the read-only event.
         await calendarPushback.maybePushToGCal(op, () => fakeProviderWithDelete(deleteEvent));
-        expect(deleteEvent).not.toHaveBeenCalled();
+        expect(deleteEvent).toHaveBeenCalledTimes(1);
     });
 
     it('does not cancel an occurrence when the routine is disconnect-kept (lastKnownCalendarEventId, no live link)', async () => {

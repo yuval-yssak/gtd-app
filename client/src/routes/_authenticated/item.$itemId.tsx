@@ -5,7 +5,7 @@ import { DetailPageHeader } from '../../components/DetailPageHeader';
 import { ItemEditorBody } from '../../components/itemEditor/ItemEditorBody';
 import type { EditableStatus } from '../../components/itemEditor/itemEditorLogic';
 import { useAppData } from '../../contexts/AppDataProvider';
-import { FROM_GMAIL_READONLY_MESSAGE } from '../../db/itemMutations';
+import { FROM_GMAIL_DONE_NOTICE } from '../../db/itemMutations';
 import { Card, Toast } from '../../designSystem';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useScrollToTopOnMount } from '../../hooks/useListScrollRestoration';
@@ -61,7 +61,7 @@ function ItemPage() {
     useDocumentTitle(item?.title.trim() || 'Edit item');
 
     // The page doesn't use useItemEditor, so it owns a tiny local toast slot to surface the
-    // fromGmail-read-only warning when the body's done-transition save fires the callback.
+    // fromGmail done notice when the body's done-transition save fires the callback.
     // Declared before the not-found early return so the hook order stays stable across renders.
     const [toast, setToast] = useState<{ open: boolean; message: string }>({ open: false, message: '' });
     // Set inside `onFromGmailReadOnly` so the post-save navigation in `goBack` can defer the
@@ -129,7 +129,7 @@ function ItemPage() {
 
     const onFromGmailReadOnly = () => {
         fromGmailJustFiredRef.current = true;
-        setToast({ open: true, message: FROM_GMAIL_READONLY_MESSAGE });
+        setToast({ open: true, message: FROM_GMAIL_DONE_NOTICE });
     };
 
     return (

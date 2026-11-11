@@ -17,12 +17,12 @@ function nowIso(): string {
 }
 
 /**
- * Snackbar text shown when a user transitions a `fromGmail` calendar item to a status the server
- * would normally push to GCal (e.g. `done`). Google's Calendar API treats fromGmail events as
- * read-only — the GTD-side change persists, but the server skips pushback. Surfaced as a single
+ * Snackbar text shown when a user marks a `fromGmail` calendar item done. Google's Calendar API
+ * refuses title/time/description changes on events it auto-created from Gmail but accepts a color,
+ * so the server marks them done with the sage color alone — no ✓ title prefix. Surfaced as a single
  * shared constant so every done-transition surface emits identical wording.
  */
-export const FROM_GMAIL_READONLY_MESSAGE = 'GCal events from Gmail can only be edited in Gmail.';
+export const FROM_GMAIL_DONE_NOTICE = "Gmail-created events can't be renamed, so Google Calendar will show this one as done by its color only.";
 
 /**
  * A status change removes the item from the list it was on; the pre-mutation snapshot
@@ -243,15 +243,12 @@ export async function clarifyToSomedayMaybe(db: IDBPDatabase<MyDB>, item: Stored
 
 /**
  * `clarifyToDone` accepts an optional `onReadOnlyGCal` callback — fired AFTER the local write
- * persists, when the server would normally try to push this transition to a GCal event the API
- * treats as read-only (`eventType: 'fromGmail'` events Google auto-creates from email attachments).
- * Gated on `calendarEventId` so the warning only fires for items that actually have a GCal-side
- * representation; otherwise the user would see a "can't edit in Gmail" warning for an item that
- * was never linked to GCal in the first place.
+ * persists, when the item's GCal event is one the API only lets us recolor (`eventType: 'fromGmail'`
+ * events Google auto-creates from email). Gated on `calendarEventId` so the notice only fires for
+ * items that actually have a GCal-side representation.
  *
- * Callers wire it to their Snackbar surface so the user learns "this won't sync to GCal" the moment
- * they click done, instead of the GCal-side change silently failing. The mutation itself proceeds
- * regardless — only GCal pushback is skipped server-side; the GTD state still flips to done.
+ * Callers wire it to their Snackbar surface so the user learns why the event shows no ✓ title
+ * marker the moment they click done. The mutation itself proceeds regardless.
  */
 export async function clarifyToDone(db: IDBPDatabase<MyDB>, item: StoredItem, opts?: { onReadOnlyGCal?: () => void }): Promise<StoredItem> {
     const updated = await disposeItem(db, item, 'done');

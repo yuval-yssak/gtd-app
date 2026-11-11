@@ -30,7 +30,7 @@ const CALENDAR_DETACH_STATUSES: ReadonlySet<StoredItem['status']> = new Set(['in
  * edits a calendar item before pulling the link the server stamped after the Google create keeps
  * a link-less row — and every later edit it pushes lacks the link too. The server also carries
  * the link forward on apply; this makes it available locally right away (open-in-Google link,
- * read-only Gmail-event warning) instead of after the next echo.
+ * Gmail-event done notice) instead of after the next echo.
  *
  * Same rules as the server's `carryForwardCalendarLink`:
  *  - same owner only — a cross-account reassign replays the source account's older ops against

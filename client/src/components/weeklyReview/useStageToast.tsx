@@ -8,7 +8,7 @@ interface StageNotice {
 
 /**
  * A review stage's transient message. Failures raise `showError` so the toast is announced as an
- * alert; everything else (e.g. the Gmail read-only warning) stays a polite status.
+ * alert; everything else (e.g. the Gmail-event done notice) stays a polite status.
  */
 export function useStageToast() {
     const [notice, setNotice] = useState<StageNotice | null>(null);

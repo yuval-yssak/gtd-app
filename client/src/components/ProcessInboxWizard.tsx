@@ -1,7 +1,7 @@
 import type { IDBPDatabase } from 'idb';
 import { useCallback, useRef, useState } from 'react';
 import { usePendingReassign } from '../contexts/PendingReassignProvider';
-import { FROM_GMAIL_READONLY_MESSAGE } from '../db/itemMutations';
+import { FROM_GMAIL_DONE_NOTICE } from '../db/itemMutations';
 import { Button, Callout, Text } from '../designSystem';
 import { useFinishOnce } from '../hooks/useFinishOnce';
 import { showAppNotice } from '../lib/appNotice';
@@ -43,7 +43,7 @@ interface RunTally {
 
 /**
  * The toast the run ends on, back in the inbox. It claims a clear inbox only when nothing was
- * skipped — skipped items are plainly still listed there. A Gmail read-only warning the LAST item
+ * skipped — skipped items are plainly still listed there. A Gmail-event done notice the LAST item
  * raised rides along: the run navigates away as it finishes, so a separate toast would be replaced.
  */
 export function runSummaryNotice({ total, skipped }: RunTally, hasReadonlyWarning: boolean): string {
@@ -51,7 +51,7 @@ export function runSummaryNotice({ total, skipped }: RunTally, hasReadonlyWarnin
         skipped === 0
             ? `Inbox clear! All ${total} item${total === 1 ? '' : 's'} processed.`
             : `Processed ${total - skipped} of ${total} — ${skipped} still in the inbox.`;
-    return hasReadonlyWarning ? `${summary} ${FROM_GMAIL_READONLY_MESSAGE}` : summary;
+    return hasReadonlyWarning ? `${summary} ${FROM_GMAIL_DONE_NOTICE}` : summary;
 }
 
 /**
@@ -65,8 +65,8 @@ export function ProcessInboxWizard({ items, db, people, workContexts, onClose, o
     const step = nextWizardStep(items, index);
     const { isPending } = usePendingReassign();
     const [skippedCount, setSkippedCount] = useState(0);
-    // Set when the last item's save raised the Gmail read-only warning, so the closing toast carries
-    // it. Safe to read at the finish: the warning fires during the save, before the body's onClose
+    // Set when the last item's save raised the Gmail-event done notice, so the closing toast carries
+    // it. Safe to read at the finish: the notice fires during the save, before the body's onClose
     // advances past the last item.
     const lastItemReadonlyRef = useRef(false);
 
@@ -147,7 +147,7 @@ export function ProcessInboxWizard({ items, db, people, workContexts, onClose, o
                 if (step.isLast) {
                     lastItemReadonlyRef.current = true;
                 } else {
-                    showAppNotice(FROM_GMAIL_READONLY_MESSAGE);
+                    showAppNotice(FROM_GMAIL_DONE_NOTICE);
                 }
             }}
             renderActions={renderActions}

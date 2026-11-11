@@ -217,13 +217,6 @@ async function removeItemGCalPresence(snapshot: ItemInterface, userId: string, b
         return;
     }
     if (snapshot.calendarEventId) {
-        // fromGmail events are read-only via Calendar API — same rationale as pushExistingItemToGCal.
-        if (snapshot.eventType === 'fromGmail') {
-            console.log(
-                `[gcal-pushback] skipping fromGmail event delete (read-only via Calendar API) | eventId=${snapshot.calendarEventId} itemId=${snapshot._id}`,
-            );
-            return;
-        }
         // Same defense as pushExistingItemToGCal: if this id is a routine's MASTER recurring event,
         // deleting it would wipe the entire series for all attendees. ANY owning routine counts —
         // active or a split's retired capped base (whose master still holds past occurrences) —
@@ -319,10 +312,11 @@ async function pushRoutineInstanceOverride(
     if (!snapshot.routineId || !snapshot.timeStart || !snapshot._id) {
         return;
     }
-    // Defensive parity with pushExistingItemToGCal: a routine-instance shouldn't carry fromGmail
-    // in practice (Google never produces recurring events from Gmail), but the type-system reachability
-    // is non-zero (routineExceptions can mirror eventType via GCAL_OWNED_ROUTINE_KEYS), and a 400 from
-    // GCal would be silent and confusing. Cheaper to skip uniformly than to discover it in prod.
+    // Defensive: a routine-instance shouldn't carry fromGmail in practice (Google never produces
+    // recurring events from Gmail), but routineExceptions can mirror eventType via
+    // GCAL_OWNED_ROUTINE_KEYS. The override below patches title/times, which Google rejects (400)
+    // on a Gmail-created event, so skip rather than build a color-only instance variant for a
+    // path nobody reaches.
     if (snapshot.eventType === 'fromGmail') {
         console.log(`[gcal-pushback] skipping routine-instance override for fromGmail item | itemId=${snapshot._id}`);
         return;
@@ -510,15 +504,6 @@ async function pushExistingItemToGCal(
         return;
     }
 
-    // `fromGmail` events are auto-created by Google from email attachments and are read-only via
-    // the Calendar API — Google's contract is "modify via Gmail." Attempts to PATCH/DELETE return
-    // 400 Bad Request. Skip pushback entirely; the in-app status change still persists locally.
-    // The client surfaces this to the user via a snackbar at the moment of the gesture.
-    if (snapshot.eventType === 'fromGmail') {
-        console.log(`[gcal-pushback] skipping fromGmail event (read-only via Calendar API) | eventId=${eventId} itemId=${itemId} status=${snapshot.status}`);
-        return;
-    }
-
     // Defense-in-depth: an item can be left pointing at a routine's MASTER recurring event id (the
     // event was imported as a one-off before its series was recognized as a routine, and predates
     // the absorb-on-import convergence). Patching that id would smear the change — most damagingly
@@ -542,6 +527,12 @@ async function pushExistingItemToGCal(
     if (snapshot.status === 'trash') {
         console.log(`[gcal-pushback] deleting GCal event | eventId=${eventId} itemId=${itemId}`);
         await withAuthFailureHandling(integration._id, () => provider.deleteEvent(config.calendarId, eventId));
+        await stampItemLastPushed(userId, itemId);
+        return;
+    }
+
+    if (snapshot.eventType === 'fromGmail') {
+        await pushFromGmailDoneColor(snapshot, ctx, sendUpdates);
         await stampItemLastPushed(userId, itemId);
         return;
     }
@@ -601,6 +592,23 @@ async function pushExistingItemToGCal(
     const htmlForSync = snapshot.notes != null ? markdownToHtml(snapshot.notes) : undefined;
     await stampItemLastPushed(userId, itemId, htmlForSync);
     return;
+}
+
+/**
+ * Done marker for an event Google auto-created from Gmail. The API rejects any patch touching its
+ * summary, times or description (400), but accepts colorId — so the marker is the sage color alone,
+ * with no ✓ title prefix, and every other status clears it. Title/notes edits stay local.
+ */
+async function pushFromGmailDoneColor(snapshot: ItemInterface, ctx: PushContext, sendUpdates: 'all' | 'none'): Promise<void> {
+    const eventId = snapshot.calendarEventId;
+    if (!eventId) {
+        return;
+    }
+    const colorId = snapshot.status === 'done' ? DONE_COLOR_ID : null;
+    console.log('[gcal-pushback] setting fromGmail event color', { eventId, itemId: snapshot._id, status: snapshot.status });
+    await withAuthFailureHandling(ctx.integration._id, () =>
+        ctx.provider.updateEvent(ctx.config.calendarId, eventId, { colorId }, ctx.timeZone, { sendUpdates }),
+    );
 }
 
 /**

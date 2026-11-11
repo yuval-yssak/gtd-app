@@ -3,7 +3,7 @@ import { useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { usePendingReassign } from '../../contexts/PendingReassignProvider';
-import { clarifyToDone, FROM_GMAIL_READONLY_MESSAGE } from '../../db/itemMutations';
+import { clarifyToDone, FROM_GMAIL_DONE_NOTICE } from '../../db/itemMutations';
 import { pauseRoutine } from '../../db/routineMutations';
 import { Button, Card, Text } from '../../designSystem';
 import type { MyDB, StoredItem, StoredRoutine } from '../../types/MyDB';
@@ -146,7 +146,7 @@ export function RoutineReviewCard({ routine, db, nav, travel, onOccurrenceReview
     async function onMarkOccurrenceDone(target: StoredItem) {
         setIsCompleting(true);
         try {
-            await clarifyToDone(db, target, { onReadOnlyGCal: () => stageToast.showNotice(FROM_GMAIL_READONLY_MESSAGE) });
+            await clarifyToDone(db, target, { onReadOnlyGCal: () => stageToast.showNotice(FROM_GMAIL_DONE_NOTICE) });
             await refreshItems();
         } catch (err) {
             console.error('[weekly-review] mark routine occurrence done failed:', err);
@@ -243,7 +243,7 @@ export function RoutineReviewCard({ routine, db, nav, travel, onOccurrenceReview
                                     onSaved={onRoutineSaved}
                                     onSaveCommitted={nav.markSaveCommitted}
                                     onDirtyLockChange={setIsOccurrenceEditorLocked}
-                                    onFromGmailReadOnly={() => stageToast.showNotice(FROM_GMAIL_READONLY_MESSAGE)}
+                                    onFromGmailReadOnly={() => stageToast.showNotice(FROM_GMAIL_DONE_NOTICE)}
                                     presentation="review"
                                     // Text edits wait for Save & next too: an autosave would record the routine
                                     // exception mid-card, and the reconcile would swap the card out from under the user.

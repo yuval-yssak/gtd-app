@@ -2,7 +2,7 @@ import type { IDBPDatabase } from 'idb';
 import { useState } from 'react';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { usePendingReassign } from '../../contexts/PendingReassignProvider';
-import { clarifyToDone, clarifyToTrash, FROM_GMAIL_READONLY_MESSAGE, releaseFromTickler } from '../../db/itemMutations';
+import { clarifyToDone, clarifyToTrash, FROM_GMAIL_DONE_NOTICE, releaseFromTickler } from '../../db/itemMutations';
 import { Button, Card, Text } from '../../designSystem';
 import type { MyDB, StoredItem } from '../../types/MyDB';
 import { FutureDoneConfirmDialog, useFutureDoneConfirm } from '../FutureDoneConfirmDialog';
@@ -148,8 +148,7 @@ export function FocusStage({ stage, queue, db, onQueueChange, onStageFinished, t
         nav.recordDecision({ itemId: currentEntryId, ...record });
     }
 
-    const onDone = (target: StoredItem) =>
-        decideWith(() => clarifyToDone(db, target, { onReadOnlyGCal: () => stageToast.showNotice(FROM_GMAIL_READONLY_MESSAGE) }));
+    const onDone = (target: StoredItem) => decideWith(() => clarifyToDone(db, target, { onReadOnlyGCal: () => stageToast.showNotice(FROM_GMAIL_DONE_NOTICE) }));
     const onTrash = () => decideWith(() => clarifyToTrash(db, currentItem));
     const onRelease = () => decideWith(() => releaseFromTickler(db, currentItem));
 
@@ -210,7 +209,7 @@ export function FocusStage({ stage, queue, db, onQueueChange, onStageFinished, t
                         onSaved={refreshItems}
                         onSaveCommitted={nav.markSaveCommitted}
                         onDirtyLockChange={setIsEditorLocked}
-                        onFromGmailReadOnly={() => stageToast.showNotice(FROM_GMAIL_READONLY_MESSAGE)}
+                        onFromGmailReadOnly={() => stageToast.showNotice(FROM_GMAIL_DONE_NOTICE)}
                         presentation="review"
                         renderActions={renderActions}
                         actionsContainer={actionsBarEl}

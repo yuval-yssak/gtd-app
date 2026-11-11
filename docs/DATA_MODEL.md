@@ -253,7 +253,7 @@ interface ItemInterface {
     creator?: GCalPerson;
     attendees?: GCalAttendee[];
     responseStatus?: GCalResponseStatus;
-    eventType?: GCalEventType;       // 'fromGmail' events are read-only via the API — pushback skips them
+    eventType?: GCalEventType;       // 'fromGmail': the API accepts only colorId on these — pushback marks done by color, deletes on trash
     meetingLink?: string;
     location?: string;
     htmlLink?: string;

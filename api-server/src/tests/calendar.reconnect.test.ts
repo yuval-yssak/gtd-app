@@ -10,6 +10,7 @@ import operationsDAO from '../dataAccess/operationsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import { applyEntityOp } from '../lib/applyEntityOp.js';
 import { maybePushToGCal } from '../lib/calendarPushback.js';
+import { DONE_COLOR_ID } from '../lib/doneMarker.js';
 import type { ItemInterface, RoutineInterface } from '../types/entities.js';
 import {
     app,
@@ -1350,67 +1351,77 @@ describe('pushback self-heal — stale calendarIntegrationId falls back to user 
     });
 });
 
-// ─── pushback skips fromGmail items (read-only via Calendar API) ─────────────────
+// ─── pushback for fromGmail items: color-only done marker, normal delete ─────────
+// Google lets the API change only colorId/reminders/visibility/transparency/status/attendees/
+// extendedProperties on a Gmail-created event — a summary/time/description patch is a 400 — but it
+// may delete one. Verified against a live fromGmail event on 2026-11-11.
 
-describe('pushback skip — fromGmail events are Calendar-API-read-only', () => {
-    it('done transition on a fromGmail item: no provider call, local status stays done', async () => {
+describe('pushback — fromGmail events take a color-only done marker', () => {
+    async function seedFromGmailItem(overrides: Partial<ItemInterface>) {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
         await insertIntegrationWithConfig(userId);
-
         const item = makeItem(userId, {
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            title: 'Visit doctor (Gmail-created)',
+            notes: 'Bring the referral',
+            eventType: 'fromGmail',
+            ...overrides,
+        });
+        await itemsDAO.insertOne(item);
+        return { userId, item };
+    }
+
+    it('done: patches only colorId (sage), stamps lastPushedToGCalTs and leaves lastSyncedNotes alone', async () => {
+        // lastSyncedNotes mirrors Google's description, which a color patch does not touch —
+        // stamping local notes there would make the next inbound read overwrite them.
+        const { userId, item } = await seedFromGmailItem({
             _id: 'item-fromgmail-done',
             calendarEventId: 'gcal-fromgmail-done',
-            calendarIntegrationId: 'int-1',
-            calendarSyncConfigId: 'sync-config-1',
             status: 'done',
-            title: 'Visit doctor (Gmail-created)',
-            eventType: 'fromGmail',
+            lastSyncedNotes: '<p>Gmail description</p>',
         });
-        await itemsDAO.insertOne(item);
-
         const updateSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateEvent').mockResolvedValue(undefined);
-        const deleteSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'deleteEvent').mockResolvedValue(undefined);
 
         await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
 
-        // Google rejects writes to fromGmail events with 400. We skip the attempt entirely.
-        expect(updateSpy).not.toHaveBeenCalled();
-        expect(deleteSpy).not.toHaveBeenCalled();
-
-        // Local state unchanged — the GTD-side status flip persists regardless of GCal skip.
+        expect(updateSpy).toHaveBeenCalledTimes(1);
+        const [call] = updateSpy.mock.calls;
+        if (!call) throw new Error('expected one updateEvent call');
+        const [, eventId, updates] = call;
+        expect(eventId).toBe('gcal-fromgmail-done');
+        expect(updates).toEqual({ colorId: DONE_COLOR_ID });
         const after = await itemsDAO.findByOwnerAndId(item._id!, userId);
-        expect(after!.status).toBe('done');
+        expect(after!.lastPushedToGCalTs).toBeDefined();
+        expect(after!.lastSyncedNotes).toBe('<p>Gmail description</p>');
     });
 
-    it('trash transition on a fromGmail item: no provider call', async () => {
-        const sessionCookie = await loginAsAlice();
-        const userId = await getUserId(sessionCookie);
-        await insertIntegrationWithConfig(userId);
+    it('reopen / edit while on the calendar: patches only colorId: null to clear the done color', async () => {
+        const { userId, item } = await seedFromGmailItem({ _id: 'item-fromgmail-reopen', calendarEventId: 'gcal-fromgmail-reopen', status: 'calendar' });
+        const updateSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateEvent').mockResolvedValue(undefined);
 
-        const item = makeItem(userId, {
-            _id: 'item-fromgmail-trash',
-            calendarEventId: 'gcal-fromgmail-trash',
-            calendarIntegrationId: 'int-1',
-            calendarSyncConfigId: 'sync-config-1',
-            status: 'trash',
-            title: 'Cancel doctor visit',
-            eventType: 'fromGmail',
-        });
-        await itemsDAO.insertOne(item);
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
 
+        expect(updateSpy).toHaveBeenCalledTimes(1);
+        const [call] = updateSpy.mock.calls;
+        if (!call) throw new Error('expected one updateEvent call');
+        expect(call[2]).toEqual({ colorId: null });
+    });
+
+    it('trash: deletes the event', async () => {
+        const { userId, item } = await seedFromGmailItem({ _id: 'item-fromgmail-trash', calendarEventId: 'gcal-fromgmail-trash', status: 'trash' });
         const deleteSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'deleteEvent').mockResolvedValue(undefined);
 
         await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
 
-        expect(deleteSpy).not.toHaveBeenCalled();
+        expect(deleteSpy).toHaveBeenCalledWith(expect.any(String), 'gcal-fromgmail-trash');
     });
 
-    it('hard-delete op on a fromGmail item: no provider call', async () => {
+    it('hard-delete op: deletes the event', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
         await insertIntegrationWithConfig(userId);
-
         const snapshot = makeItem(userId, {
             _id: 'item-fromgmail-hard-delete',
             calendarEventId: 'gcal-fromgmail-hard-delete',
@@ -1420,12 +1431,10 @@ describe('pushback skip — fromGmail events are Calendar-API-read-only', () => 
             title: 'Hard delete me',
             eventType: 'fromGmail',
         });
-
         const deleteSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'deleteEvent').mockResolvedValue(undefined);
 
         await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: snapshot._id!, snapshot, opType: 'delete' }), mockBuildProvider());
 
-        // handleItemDelete must skip the delete call for fromGmail (Google would 400/403).
-        expect(deleteSpy).not.toHaveBeenCalled();
+        expect(deleteSpy).toHaveBeenCalledWith(expect.any(String), 'gcal-fromgmail-hard-delete');
     });
 });

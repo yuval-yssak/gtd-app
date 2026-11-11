@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { nextWizardStep, runSummaryNotice } from '../components/ProcessInboxWizard';
-import { FROM_GMAIL_READONLY_MESSAGE } from '../db/itemMutations';
+import { FROM_GMAIL_DONE_NOTICE } from '../db/itemMutations';
 import type { StoredItem } from '../types/MyDB';
 
 const ITEM_A: StoredItem = {
@@ -58,9 +58,9 @@ describe('runSummaryNotice', () => {
         expect(runSummaryNotice({ total: 2, skipped: 2 }, false)).toBe('Processed 0 of 2 — 2 still in the inbox.');
     });
 
-    // The run returns to the inbox as it finishes, so a read-only warning raised by the last item
+    // The run returns to the inbox as it finishes, so a Gmail-event done notice raised by the last item
     // rides along rather than being replaced by the summary.
-    it('carries the last item’s Gmail read-only warning along', () => {
-        expect(runSummaryNotice({ total: 2, skipped: 0 }, true)).toBe(`Inbox clear! All 2 items processed. ${FROM_GMAIL_READONLY_MESSAGE}`);
+    it('carries the last item’s Gmail-event done notice along', () => {
+        expect(runSummaryNotice({ total: 2, skipped: 0 }, true)).toBe(`Inbox clear! All 2 items processed. ${FROM_GMAIL_DONE_NOTICE}`);
     });
 });

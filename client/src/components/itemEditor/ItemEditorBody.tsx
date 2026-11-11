@@ -199,9 +199,9 @@ export interface ItemEditorBodyProps {
      */
     onDirtyLockChange?: (isLocked: boolean) => void;
     /**
-     * Fired post-save when the user transitions a `fromGmail` calendar item to a status the server
-     * would normally push to GCal. The body has no toast of its own — the host wires this to its
-     * page toast (useItemEditor's `onFromGmailReadOnly`) so the warning surfaces there.
+     * Fired post-save when the user marks a `fromGmail` calendar item done (Google shows it done by
+     * color only). The body has no toast of its own — the host wires this to its page toast
+     * (useItemEditor's `onFromGmailReadOnly`) so the notice surfaces there.
      */
     onFromGmailReadOnly?: () => void;
     /** Pre-selects the status chip on open. When omitted, defaults to item.status. */

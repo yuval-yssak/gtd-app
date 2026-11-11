@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { FROM_GMAIL_READONLY_MESSAGE } from '../../db/itemMutations';
+import { FROM_GMAIL_DONE_NOTICE } from '../../db/itemMutations';
 import { type ModifierClickSource, useNewTabAwareNavigate } from '../../lib/newTabNavigation';
 import type { StoredItem } from '../../types/MyDB';
 import type { EditableStatus } from './itemEditorLogic';
@@ -14,11 +14,11 @@ export interface OpenEditorArgs {
 
 export interface ItemEditorAPI {
     openEditor: (args: OpenEditorArgs) => void;
-    /** Toast state for the fromGmail read-only notice. The hook owns it; the page mounts one toast driven by these. */
+    /** Toast state for the fromGmail done notice. The hook owns it; the page mounts one toast driven by these. */
     toast: { open: boolean; message: string };
     closeToast: () => void;
     /**
-     * Pre-wired callback that emits the canonical fromGmail-readonly toast. Route handlers pass
+     * Pre-wired callback that emits the canonical fromGmail done-notice toast. Route handlers pass
      * this into `clarifyToDone({ onReadOnlyGCal: editor.onFromGmailReadOnly })` so the message
      * string lives in exactly one place (the mutation module) and routes don't need to import it.
      */
@@ -43,7 +43,7 @@ export function useItemEditor(): ItemEditorAPI {
         [navigateOrNewTab],
     );
     // Stable handler so mutation call sites don't see a fresh function identity every render.
-    const onFromGmailReadOnly = useCallback(() => setToast({ open: true, message: FROM_GMAIL_READONLY_MESSAGE }), []);
+    const onFromGmailReadOnly = useCallback(() => setToast({ open: true, message: FROM_GMAIL_DONE_NOTICE }), []);
     const closeToast = useCallback(() => setToast({ open: false, message: '' }), []);
 
     return { openEditor, toast, closeToast, onFromGmailReadOnly };

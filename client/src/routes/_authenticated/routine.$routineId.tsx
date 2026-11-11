@@ -7,7 +7,7 @@ import { DetailPageHeader } from '../../components/DetailPageHeader';
 import { FutureDoneConfirmDialog, useFutureDoneConfirm } from '../../components/FutureDoneConfirmDialog';
 import { RoutineEditorBody } from '../../components/routineEditor/RoutineEditorBody';
 import { useAppData } from '../../contexts/AppDataProvider';
-import { clarifyToDone, FROM_GMAIL_READONLY_MESSAGE } from '../../db/itemMutations';
+import { clarifyToDone, FROM_GMAIL_DONE_NOTICE } from '../../db/itemMutations';
 import { Button, Card, Chip, Toast } from '../../designSystem';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useScrollToTopOnMount } from '../../hooks/useListScrollRestoration';
@@ -51,7 +51,7 @@ function NextItemLink({ routine, items }: { routine: StoredRoutine; items: Store
     // re-resolves to the following occurrence on the refresh.
     const onMarkDone = (target: StoredItem) =>
         startCompleting(async () => {
-            await clarifyToDone(db, target, { onReadOnlyGCal: () => setToast(FROM_GMAIL_READONLY_MESSAGE) });
+            await clarifyToDone(db, target, { onReadOnlyGCal: () => setToast(FROM_GMAIL_DONE_NOTICE) });
             await refreshItems();
         });
 
