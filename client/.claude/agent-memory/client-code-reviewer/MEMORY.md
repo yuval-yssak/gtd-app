@@ -77,3 +77,4 @@
 - [Vacuous absence assertions](project_vacuous_absence_assertion_self_hiding_row.md) — toHaveCount(0) on a gated control passes when the fixture would hide it anyway (compact Position row at total<2, tickler-hidden neighbours).
 - [Switch choice vs mid-pass pivot](project_switch_choice_vs_midpass_pivot.md) — switch-race fixes guard the pass's restore but later per-user pivots still overwrite the choice before the reload.
 - [History counters count gesture rows](project_history_counter_counts_gesture_rows.md) — rules over a routine's done/trash history also count type-switch/pause trash rows; list every trash writer.
+- [Lazy chunk count misses node_modules](project_lazy_chunk_inventory_misses_node_modules.md) — CodeMirror language-data adds ~100 dynamic chunks; list build assets before trusting "only N lazy chunks".

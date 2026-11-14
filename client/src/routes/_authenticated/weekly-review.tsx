@@ -31,11 +31,12 @@ import { Button, Card, Spinner, Text } from '../../designSystem';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useExclusiveTabLock } from '../../hooks/useExclusiveTabLock';
 import { getTodayIso } from '../../lib/dayClock';
+import { lazyChunkLoaders } from '../../lib/lazyChunks';
 import { hasAtLeastOne, type NonEmptyArray } from '../../lib/typeUtils';
 import styles from './-weekly-review.module.css';
 
 // Lazy: pulls canvas-confetti out of the main chunk — the celebration renders once per review.
-const CompletionCelebration = lazy(() => import('../../components/weeklyReview/CompletionCelebration'));
+const CompletionCelebration = lazy(lazyChunkLoaders.completionCelebration);
 
 export const Route = createFileRoute('/_authenticated/weekly-review')({
     // `?stage=<id>` mirrors the active review stage so a reload or shared link lands on it.

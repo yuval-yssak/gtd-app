@@ -13,6 +13,7 @@ import { openAppDB } from './db/indexedDB';
 import { ensureToastRegion } from './designSystem';
 import { APP_NAME } from './lib/appName';
 import { startColorSchemeSync } from './lib/colorScheme';
+import { lazyChunkLoaders, scheduleLazyChunkWarmup } from './lib/lazyChunks';
 
 // Stamp <html data-theme> before anything renders (including the pre-React upgrade notice), so the
 // first paint is already in the user's scheme; it then follows the OS and other tabs for the page's life.
@@ -63,6 +64,7 @@ async function main() {
             </AppErrorBoundary>
         </StrictMode>,
     );
+    scheduleLazyChunkWarmup(Object.values(lazyChunkLoaders));
 }
 
 // void: top-level await isn't available in this module context; discard the Promise explicitly

@@ -1,9 +1,10 @@
 import { Component, lazy, type ReactNode, Suspense } from 'react';
 import { Skeleton } from '../../designSystem';
+import { lazyChunkLoaders } from '../../lib/lazyChunks';
 import styles from './MarkdownNotesEditor.module.css';
 import type { MarkdownNotesEditorProps } from './MarkdownNotesEditorView';
 
-const MarkdownNotesEditorView = lazy(() => import('./MarkdownNotesEditorView'));
+const MarkdownNotesEditorView = lazy(lazyChunkLoaders.markdownNotesEditorView);
 
 /**
  * Single source for the notes editor's accessible name and hint text — the visible section
