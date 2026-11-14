@@ -3,6 +3,7 @@ import utc from 'dayjs/plugin/utc';
 import type { IDBPDatabase } from 'idb';
 import { RRule } from 'rrule';
 import { getCalendarHorizonMonths } from '../lib/calendarHorizon';
+import { hasUsedAllOccurrences } from '../lib/routineOccurrenceCount';
 import { computeFirstOccurrenceDate, mergeRoutineEditIntoOpenItem } from '../lib/routineOpenItemMerge';
 import { computeNextOccurrence, RruleExhaustedError } from '../lib/rruleUtils';
 import type { GCalOwnedRoutineKey, MyDB, StoredItem, StoredRoutine } from '../types/MyDB';
@@ -35,11 +36,21 @@ export function isFutureStartDate(startDate: string | undefined): boolean {
     return startDate > dayjs().startOf('day').format('YYYY-MM-DD');
 }
 
+/** Throws `RruleExhaustedError` once a COUNT-bounded routine has used every occurrence — the
+ *  date math alone never ends such a series (see `hasUsedAllOccurrences`). */
+async function assertOccurrencesRemain(db: IDBPDatabase<MyDB>, routine: StoredRoutine, expectedBy: string): Promise<void> {
+    const routineItems = (await db.getAllFromIndex('items', 'userId', routine.userId)).filter((i) => i.routineId === routine._id);
+    if (hasUsedAllOccurrences(routine.rrule, routineItems, expectedBy)) {
+        throw new RruleExhaustedError(`routine ${routine._id} has used all of its COUNT occurrences`);
+    }
+}
+
 /**
  * Build, persist, and queue-sync a nextAction item for the given expectedBy date. Shared body
  * between createNextRoutineItem (disposal path) and createFirstRoutineItem (creation path).
  */
 async function persistRoutineItem(db: IDBPDatabase<MyDB>, userId: string, routine: StoredRoutine, expectedBy: string): Promise<void> {
+    await assertOccurrencesRemain(db, routine, expectedBy);
     const now = dayjs().toISOString();
     const item = {
         _id: crypto.randomUUID(),
@@ -686,10 +697,24 @@ export async function materializePendingNextActionRoutines(db: IDBPDatabase<MyDB
                 if (hasOpen) {
                     continue;
                 }
-                await createFirstRoutineItem(db, userId, routine);
+                await seedFirstItemOrDeactivate(db, routine);
             }
         }),
     );
+}
+
+/** Seeds the first nextAction item; an exhausted series (UNTIL passed, COUNT used up) is over, so the
+ *  routine is deactivated instead of failing the save — or, in the boot tick, aborting the pass over
+ *  the routines after it. */
+export async function seedFirstItemOrDeactivate(db: IDBPDatabase<MyDB>, routine: StoredRoutine): Promise<void> {
+    try {
+        await createFirstRoutineItem(db, routine.userId, routine);
+    } catch (err) {
+        if (!(err instanceof RruleExhaustedError)) {
+            throw err;
+        }
+        await updateRoutine(db, { ...routine, active: false });
+    }
 }
 
 /**

@@ -27,6 +27,8 @@ class ItemsDAO extends AbstractDAO<ItemInterface> {
             // Priority-order mint: `topRankForUser` reads the user's lowest `rank` (`sort: { rank: 1 }`,
             // a binary sort — the keys' own order). Non-unique, so it cannot fail boot on existing data.
             { key: { user: 1, rank: 1 } },
+            // Per-routine reads: the open-item guard, the COUNT check and pause's future-item trash.
+            { key: { user: 1, routineId: 1 } },
             // Public API dedupe: external integrations may upsert by externalId.
             // Sparse + partial: only items that actually carry an externalId participate; in-app
             // items have no externalId and must not collide with each other.

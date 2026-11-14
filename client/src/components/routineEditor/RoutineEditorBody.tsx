@@ -6,7 +6,6 @@ import { useAppData } from '../../contexts/AppDataProvider';
 import { usePendingReassign } from '../../contexts/PendingReassignProvider';
 import { offlineReassignMessage } from '../../db/reassignMutations';
 import {
-    createFirstRoutineItem,
     generateCalendarItemsToHorizon,
     hardDeletePastItems,
     hasOpenNonCalendarRoutineItem,
@@ -18,6 +17,7 @@ import {
     reconcileFutureItemsWithSchedule,
     regenerateFutureItemContent,
     restoreTrashedRoutineItem,
+    seedFirstItemOrDeactivate,
     syncOpenItemAfterNextActionEdit,
     trashNativeItemsForTypeSwitch,
 } from '../../db/routineItemHelpers';
@@ -331,21 +331,8 @@ async function seedAfterStartDateChange(db: IDBPDatabase<MyDB>, edit: RoutineEdi
     if (await hasOpenRoutineItem(db, edit.next.userId, edit.next._id)) {
         return null;
     }
-    await seedFirstItemDeactivatingOnExhaustion(db, edit.next);
+    await seedFirstItemOrDeactivate(db, edit.next);
     return null;
-}
-
-/** Seeds the first nextAction item; an exhausted rrule (e.g. Ends date already passed) deactivates
- *  the routine instead of failing the save — same series-over semantics as the disposal path. */
-async function seedFirstItemDeactivatingOnExhaustion(db: IDBPDatabase<MyDB>, routine: StoredRoutine): Promise<void> {
-    try {
-        await createFirstRoutineItem(db, routine.userId, routine);
-    } catch (err) {
-        if (!(err instanceof RruleExhaustedError)) {
-            throw err;
-        }
-        await updateRoutine(db, { ...routine, active: false });
-    }
 }
 
 /**
@@ -401,11 +388,11 @@ export async function transitionRoutineType(db: IDBPDatabase<MyDB>, previous: St
     if (await hasOpenNonCalendarRoutineItem(db, updated.userId, updated._id)) {
         return null;
     }
-    await seedFirstItemDeactivatingOnExhaustion(db, updated);
+    await seedFirstItemOrDeactivate(db, updated);
     return null;
 }
 
-/** Calendar analog of `seedFirstItemDeactivatingOnExhaustion`: an exhausted rrule (no occurrence
+/** Calendar analog of `seedFirstItemOrDeactivate`: an exhausted rrule (no occurrence
  *  before the horizon) deactivates the routine instead of failing the save. */
 async function generateHorizonDeactivatingOnExhaustion(db: IDBPDatabase<MyDB>, routine: StoredRoutine): Promise<void> {
     await deactivatingOnExhaustion(db, routine, () => generateCalendarItemsToHorizon(db, routine.userId, routine));

@@ -138,3 +138,4 @@
 - [Routine-instance "inherits slot" skip + op-less restamp](project_routine_instance_skip_and_silent_restamp_pitfalls.md) — exceptions miss done/attendee/v1 overrides; carry-forward fills absent only
 - [stampSnapshot is not universal](project_stampsnapshot_not_universal.md) — inbound GCal writes (updateRoutineFromGCal cap) bypass it; GCal-capped routines go inactive so exception sync skips them too
 - [Apply-pipeline normalization vs reply drift](project_apply_pipeline_normalization_reply_drift.md) — pipeline-side snapshot transforms (exception prune) diverge from routes replying with their pre-apply snapshot; enumerate callers
+- [Trash status is overloaded](project_trash_status_overloaded.md) — user skip vs system trash (pause, type switch, regen); rules reading trash as user intent miscount (COUNT fix 2026-11-11)

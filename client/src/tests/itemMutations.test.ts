@@ -1550,3 +1550,66 @@ describe('ghost snapshot recording', () => {
         expect(getGhostSnapshots()).toHaveLength(0);
     });
 });
+
+describe('COUNT-bounded nextAction routine', () => {
+    const MONTHLY_FIVE = 'FREQ=MONTHLY;BYMONTHDAY=8;COUNT=5';
+
+    /** A routine whose first four occurrences are done and whose fifth (last) is open. */
+    async function seedRoutineOnLastOccurrence(disposedRrule = MONTHLY_FIVE) {
+        const routine: StoredRoutine = {
+            _id: 'routine-count',
+            userId: USER_ID,
+            title: 'Pay installment',
+            routineType: 'nextAction',
+            rrule: disposedRrule,
+            startDate: '2025-07-08',
+            template: {},
+            active: true,
+            createdTs: '2025-07-08T00:00:00.000Z',
+            updatedTs: '2025-07-08T00:00:00.000Z',
+        };
+        await db.put('routines', routine);
+        const occurrence = (expectedBy: string, status: StoredItem['status']): StoredItem => ({
+            _id: `occ-${expectedBy}`,
+            userId: USER_ID,
+            title: routine.title,
+            routineId: routine._id,
+            status,
+            expectedBy,
+            ignoreBefore: expectedBy,
+            createdTs: '2025-07-08T00:00:00.000Z',
+            updatedTs: '2025-07-08T00:00:00.000Z',
+        });
+        for (const date of ['2025-07-08', '2025-08-08', '2025-09-08', '2025-10-08']) {
+            await db.put('items', occurrence(date, 'done'));
+        }
+        const last = occurrence('2025-11-08', 'nextAction');
+        await db.put('items', last);
+        return { routine, last };
+    }
+
+    async function itemsOfRoutine(routineId: string) {
+        return (await db.getAllFromIndex('items', 'userId', USER_ID)).filter((i) => i.routineId === routineId);
+    }
+
+    it.each(['done', 'trash'] as const)('a %s disposal of the last occurrence ends the series: no successor, routine deactivated', async (disposal) => {
+        const { routine, last } = await seedRoutineOnLastOccurrence();
+
+        await (disposal === 'done' ? clarifyToDone(db, last) : clarifyToTrash(db, last));
+
+        const items = await itemsOfRoutine(routine._id);
+        expect(items.filter((i) => i.status !== 'done' && i.status !== 'trash')).toEqual([]);
+        expect(items).toHaveLength(5);
+        expect((await db.get('routines', routine._id))?.active).toBe(false);
+    });
+
+    it('a disposal before the last occurrence still generates the next one', async () => {
+        const { routine, last } = await seedRoutineOnLastOccurrence('FREQ=MONTHLY;BYMONTHDAY=8;COUNT=6');
+
+        await clarifyToDone(db, last);
+
+        const open = (await itemsOfRoutine(routine._id)).filter((i) => i.status === 'nextAction');
+        expect(open).toHaveLength(1);
+        expect((await db.get('routines', routine._id))?.active).toBe(true);
+    });
+});

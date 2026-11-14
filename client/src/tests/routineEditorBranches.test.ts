@@ -407,6 +407,22 @@ describe('routineType switch (nextAction ↔ calendar)', () => {
         expect(stored?.active).toBe(false);
     });
 
+    it('calendar → nextAction on a COUNT-bounded rule: the trashed horizon does not use up the count', async () => {
+        const rrule = 'FREQ=DAILY;COUNT=3';
+        const routine = buildRoutine({ routineType: 'calendar', rrule, calendarItemTemplate: { timeOfDay: '09:00', duration: 30 } });
+        await db.put('routines', routine);
+        for (const offset of [1, 2, 3]) {
+            const day = dayjs().add(offset, 'day').format('YYYY-MM-DD');
+            await db.put('items', buildItem({ _id: `future-cal-${offset}`, status: 'calendar', timeStart: `${day}T09:00:00`, timeEnd: `${day}T09:30:00` }));
+        }
+
+        await saveEditWithoutStartDateChange(db, routine, buildCtx({ routineType: 'nextAction', finalRrule: rrule }));
+
+        const seeded = (await db.getAllFromIndex('items', 'userId', USER_ID)).filter((i) => i.status === 'nextAction');
+        expect(seeded).toHaveLength(1);
+        expect((await db.get('routines', routine._id))?.active).toBe(true);
+    });
+
     it('type switch combined with a startDate change also runs the transition (no orphaned old-type items)', async () => {
         const routine = buildRoutine({ routineType: 'calendar', calendarItemTemplate: { timeOfDay: '09:00', duration: 30 } });
         await db.put('routines', routine);

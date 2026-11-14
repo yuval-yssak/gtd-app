@@ -1278,3 +1278,161 @@ describe('timezone-aware generation', () => {
         expect(item?.status).toBe('trash');
     });
 });
+
+// ── COUNT-bounded series: the rule re-anchors at each disposal, so consumption ends it ──
+
+describe('COUNT-bounded nextAction routine', () => {
+    interface SeriesSeed {
+        rrule: string;
+        /** Due dates in order: every one done except the last, which takes `lastStatus`. */
+        dates: string[];
+        lastStatus?: ItemInterface['status'];
+    }
+
+    const MONTHLY_FIVE: SeriesSeed = {
+        rrule: 'FREQ=MONTHLY;BYMONTHDAY=8;COUNT=5',
+        dates: ['2025-07-08', '2025-08-08', '2025-09-08', '2025-10-08', '2025-11-08'],
+    };
+
+    async function seedSeries(userId: string, seed: SeriesSeed): Promise<{ routine: RoutineInterface; lastId: string }> {
+        const [firstDate] = seed.dates;
+        const routine: RoutineInterface = {
+            _id: randomUUID(),
+            user: userId,
+            title: 'Pay installment',
+            routineType: 'nextAction',
+            rrule: seed.rrule,
+            ...(firstDate ? { startDate: firstDate } : {}),
+            template: {},
+            active: true,
+            createdTs: '2026-01-01T00:00:00.000Z',
+            updatedTs: '2026-01-01T00:00:00.000Z',
+        };
+        await routinesDAO.insertOne(routine);
+        const lastIndex = seed.dates.length - 1;
+        await Promise.all(
+            seed.dates.map((expectedBy, idx) =>
+                itemsDAO.insertOne({
+                    _id: `${routine._id}-${expectedBy}`,
+                    user: userId,
+                    status: idx === lastIndex ? (seed.lastStatus ?? 'nextAction') : 'done',
+                    title: routine.title,
+                    routineId: routine._id,
+                    expectedBy,
+                    ignoreBefore: expectedBy,
+                    createdTs: '2026-01-01T00:00:00.000Z',
+                    updatedTs: '2026-01-01T00:00:00.000Z',
+                }),
+            ),
+        );
+        return { routine, lastId: `${routine._id}-${seed.dates[lastIndex]}` };
+    }
+
+    async function openItemsOf(userId: string, routineId: string) {
+        return (await getItemsForRoutine(userId, routineId)).filter((i) => i.status !== 'done' && i.status !== 'trash');
+    }
+
+    async function isActive(userId: string, routineId: string) {
+        return (await routinesDAO.findByOwnerAndId(routineId, userId))?.active;
+    }
+
+    /** `count` consecutive due dates of a rule stepping by `unit`, ending at `last`. */
+    function datesEndingAt(last: dayjs.Dayjs, count: number, unit: 'day' | 'month') {
+        return Array.from({ length: count }, (_, idx) => last.subtract(count - 1 - idx, unit).format('YYYY-MM-DD'));
+    }
+
+    it.each(['complete', 'trash'] as const)(
+        'POST /v1/items/:id/%s on the last occurrence mints no further item and deactivates the routine',
+        async (action) => {
+            const userId = await login();
+            const token = await tokenWith(userId, ['routines.write', 'items.write']);
+            const { routine, lastId } = await seedSeries(userId, MONTHLY_FIVE);
+
+            const res = await postJson(`/v1/items/${lastId}/${action}`, token, {});
+
+            expect(res.status).toBe(200);
+            expect(await getItemsForRoutine(userId, routine._id)).toHaveLength(5);
+            expect(await openItemsOf(userId, routine._id)).toEqual([]);
+            expect(await isActive(userId, routine._id)).toBe(false);
+        },
+    );
+
+    it('completing an occurrence before the last still mints the next one', async () => {
+        const userId = await login();
+        const token = await tokenWith(userId, ['routines.write', 'items.write']);
+        const { routine, lastId } = await seedSeries(userId, { ...MONTHLY_FIVE, rrule: 'FREQ=MONTHLY;BYMONTHDAY=8;COUNT=6' });
+
+        expect((await postJson(`/v1/items/${lastId}/complete`, token, {})).status).toBe(200);
+
+        expect(await openItemsOf(userId, routine._id)).toHaveLength(1);
+        expect(await isActive(userId, routine._id)).toBe(true);
+    });
+
+    it('ensureFirstRoutineItem on a used-up routine deactivates instead of seeding', async () => {
+        const userId = await login();
+        const { routine } = await seedSeries(userId, { ...MONTHLY_FIVE, lastStatus: 'done' });
+
+        await ensureFirstRoutineItem({ userId, deviceId: 'server' }, routine);
+
+        expect(await openItemsOf(userId, routine._id)).toEqual([]);
+        expect(await isActive(userId, routine._id)).toBe(false);
+    });
+
+    it('pause then resume on the last occurrence of a fixed-day rule re-issues that occurrence', async () => {
+        const userId = await login();
+        const lastDue = dayjs.utc().add(10, 'day');
+        const seed = { rrule: `FREQ=MONTHLY;BYMONTHDAY=${lastDue.date()};COUNT=5`, dates: datesEndingAt(lastDue, 5, 'month') };
+        const { routine } = await seedSeries(userId, seed);
+
+        await pauseRoutine({ userId, tokenId: 'test-token' }, routine._id);
+        await resumeRoutine({ userId, tokenId: 'test-token' }, routine._id);
+
+        expect((await openItemsOf(userId, routine._id)).map((i) => i.expectedBy)).toEqual([lastDue.format('YYYY-MM-DD')]);
+        expect(await isActive(userId, routine._id)).toBe(true);
+    });
+
+    // Known, accepted cost: a daily rule resumes on a later date than the one the pause trashed, and a
+    // trashed dated occurrence cannot be told apart from a skip — so the pause consumes one occurrence.
+    it('pause then resume on the last occurrence of a daily rule ends the series (the pause cost that occurrence)', async () => {
+        const userId = await login();
+        const { routine } = await seedSeries(userId, { rrule: 'FREQ=DAILY;COUNT=5', dates: datesEndingAt(dayjs.utc(), 5, 'day') });
+
+        await pauseRoutine({ userId, tokenId: 'test-token' }, routine._id);
+        await resumeRoutine({ userId, tokenId: 'test-token' }, routine._id);
+
+        expect(await openItemsOf(userId, routine._id)).toEqual([]);
+        expect(await isActive(userId, routine._id)).toBe(false);
+    });
+
+    it('switching a COUNT-bounded calendar routine to nextAction seeds an item instead of counting the trashed horizon', async () => {
+        const userId = await login();
+        const token = await tokenWith(userId, ['routines.write', 'items.write']);
+        const routine = await createRoutineViaApi(token, {
+            routineType: 'calendar',
+            rrule: 'FREQ=DAILY;COUNT=3',
+            calendarItemTemplate: { timeOfDay: '09:00', duration: 30 },
+        });
+        await Promise.all([1, 2, 3].map((offset) => insertFutureCalendarOccurrence(userId, routine._id, offset)));
+
+        expect((await patchJson(`/v1/routines/${routine._id}`, token, { routineType: 'nextAction' })).status).toBe(200);
+
+        expect((await openItemsOf(userId, routine._id)).filter((i) => i.status === 'nextAction')).toHaveLength(1);
+        expect(await isActive(userId, routine._id)).toBe(true);
+    });
+
+    async function insertFutureCalendarOccurrence(userId: string, routineId: string, daysAhead: number) {
+        const day = dayjs.utc().add(daysAhead, 'day').format('YYYY-MM-DD');
+        const now = dayjs().toISOString();
+        await itemsDAO.insertOne({
+            _id: randomUUID(),
+            user: userId,
+            status: 'calendar',
+            title: 'r',
+            routineId,
+            timeStart: `${day}T09:00:00`,
+            timeEnd: `${day}T09:30:00`,
+            createdTs: now,
+            updatedTs: now,
+        });
+    }
+});

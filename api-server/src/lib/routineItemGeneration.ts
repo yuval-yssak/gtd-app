@@ -4,6 +4,7 @@ import utc from 'dayjs/plugin/utc.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import type { ItemInterface, RoutineInterface } from '../types/entities.js';
 import { applyAndPublishOperation } from './applyOperation.js';
+import { hasUsedAllOccurrences } from './routineOccurrenceCount.js';
 import { computeNextOccurrence, RruleExhaustedError } from './rruleHelpers.js';
 import { topRankForUser } from './topRankForUser.js';
 import { localDateInTimezone, resolveUserTimezone, userLocalDate } from './userTimezone.js';
@@ -175,6 +176,7 @@ function computeDisposalAnchor(disposalLocalDate: string, startDate: string | un
  * + web push + webhook fan-out cover this server-side generation.
  */
 async function publishRoutineItem(ctx: RoutineItemGenerationContext, routine: RoutineInterface, expectedBy: string): Promise<void> {
+    await assertOccurrencesRemain(ctx.userId, routine, expectedBy);
     const now = dayjs().toISOString();
     const snapshot = buildRoutineItemSnapshot(routine, expectedBy, now, await topRankForUser(ctx.userId));
     await applyAndPublishOperation(
@@ -182,6 +184,17 @@ async function publishRoutineItem(ctx: RoutineItemGenerationContext, routine: Ro
         { entityType: 'item', opType: 'create', entityId: snapshot._id ?? '', snapshot },
         { deviceId: ctx.deviceId, now },
     );
+}
+
+/** Throws `RruleExhaustedError` once a COUNT-bounded routine has used every occurrence — the
+ *  date math alone never ends such a series (see `hasUsedAllOccurrences`). */
+async function assertOccurrencesRemain(userId: string, routine: RoutineInterface, expectedBy: string): Promise<void> {
+    // Scoped to the current owner: a reassigned routine's earlier items stay with the old owner,
+    // so its count restarts after the move — accepted.
+    const routineItems = await itemsDAO.findArray({ user: userId, routineId: routine._id }, { projection: { _id: 1, status: 1, expectedBy: 1 } });
+    if (hasUsedAllOccurrences(routine.rrule, routineItems, expectedBy)) {
+        throw new RruleExhaustedError(`routine ${routine._id} has used all of its COUNT occurrences`);
+    }
 }
 
 /**

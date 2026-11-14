@@ -309,3 +309,35 @@ describe('materializePendingNextActionRoutines', () => {
         expect(await db.getAll('syncOperations')).toEqual([]);
     });
 });
+
+describe('materializePendingNextActionRoutines — COUNT-bounded routines', () => {
+    beforeEach(async () => {
+        await seedAccountOnDevice(db, USER_ID);
+    });
+
+    it('deactivates an active routine whose COUNT is used up instead of minting another occurrence, and still seeds the others', async () => {
+        const usedUp = buildRoutine({ _id: 'count-used-up', rrule: 'FREQ=DAILY;COUNT=2' });
+        const fresh = buildRoutine({ _id: 'count-fresh', rrule: 'FREQ=DAILY;COUNT=2' });
+        await db.put('routines', usedUp);
+        await db.put('routines', fresh);
+        for (const expectedBy of ['2026-01-01', '2026-01-02']) {
+            await db.put('items', {
+                _id: `${usedUp._id}-${expectedBy}`,
+                userId: USER_ID,
+                title: usedUp.title,
+                routineId: usedUp._id,
+                status: 'done',
+                expectedBy,
+                createdTs: '2026-01-01T00:00:00.000Z',
+                updatedTs: '2026-01-01T00:00:00.000Z',
+            });
+        }
+
+        await materializePendingNextActionRoutines(db, USER_ID);
+
+        const items = await db.getAllFromIndex('items', 'userId', USER_ID);
+        expect(items.filter((i) => i.routineId === usedUp._id && i.status === 'nextAction')).toEqual([]);
+        expect(items.filter((i) => i.routineId === fresh._id && i.status === 'nextAction')).toHaveLength(1);
+        expect((await db.get('routines', usedUp._id))?.active).toBe(false);
+    });
+});
