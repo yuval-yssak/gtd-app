@@ -83,6 +83,18 @@ export function getConnectedSseUserIds(): string[] {
         .map(([userId]) => userId);
 }
 
+/**
+ * Whether every account has a usable channel. CONNECTING counts: the browser is already retrying it.
+ * CLOSED does not: the browser gives up for good when a connect gets an error page instead of a
+ * stream (a Cloudflare 5xx, an auth hiccup), and only `openSseConnections` replaces it.
+ */
+export function areLiveChannelsUp(userIds: readonly string[]): boolean {
+    return userIds.every((userId) => {
+        const source = eventSources.get(userId);
+        return source !== undefined && source.readyState !== EventSource.CLOSED;
+    });
+}
+
 function closeStaleConnections(activeUserIds: string[]): void {
     const next = new Set(activeUserIds);
     for (const [userId, source] of eventSources.entries()) {

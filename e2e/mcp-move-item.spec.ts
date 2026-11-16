@@ -3,6 +3,7 @@ import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { resetServerForEmails, withOneLoggedInDevice } from './helpers/context';
 import { API_URL, CLIENT_URL } from './helpers/env';
+import { gtd } from './helpers/gtd';
 import { callTool, initializeMcp, McpStdioClient } from './helpers/mcpStdioClient';
 import { uniqueStamp } from './helpers/uniqueStamp';
 
@@ -13,6 +14,14 @@ interface MovedItem {
     _id: string;
     url?: string;
     placement?: { position: number; total: number };
+}
+
+/**
+ * The moves below are asserted through live delivery (SSE → pull). A move made while the channel is
+ * still connecting only reaches the page through the slower catch-up pass, so wait for it first.
+ */
+async function waitForLiveChannel(page: Page): Promise<void> {
+    await expect.poll(async () => (await gtd.sseConnectedUserIds(page)).length).toBeGreaterThan(0);
 }
 
 const rowTitles = async (page: Page) => (await page.getByTestId('nextActionItemRow').allInnerTexts()).map((t) => t.split('\n')[0]?.trim() ?? '');
@@ -57,6 +66,7 @@ test.describe('MCP gtd_move_item', () => {
 
                 await page.goto(`${CLIENT_URL}/next-actions`);
                 await expect.poll(() => rowTitles(page)).toEqual(['Alpha', 'Bravo', 'Charlie']);
+                await waitForLiveChannel(page);
 
                 const toTop = (await callTool(mcp, 'gtd_move_item', { id: idOf(ids, 'Charlie'), position: 'top' })) as MovedItem;
                 expect(toTop.placement).toEqual({ position: 1, total: 3 });
@@ -115,6 +125,7 @@ test.describe('MCP gtd_move_item', () => {
 
                 await page.goto(`${CLIENT_URL}/next-actions`);
                 await expect.poll(() => rowTitles(page)).toEqual(['Newer', 'Older', 'Ranked']);
+                await waitForLiveChannel(page);
 
                 const moved = (await callTool(mcp, 'gtd_move_item', { id: idOf(ranked, 'Ranked'), after: `mcp-move-newer-${stamp}` })) as MovedItem;
                 expect(moved.placement).toEqual({ position: 2, total: 3 });

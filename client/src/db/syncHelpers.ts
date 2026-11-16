@@ -1,7 +1,7 @@
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
-import type { ServerOp } from '#api/syncClient';
-import { fetchBootstrap, fetchSyncOps, PUSH_BATCH_MAX, PUSH_TIMEOUT_MS, pushSyncOps } from '#api/syncClient';
+import type { OpCursor, PullPayload, ServerOp } from '#api/syncClient';
+import { BootstrapRequiredError, fetchBootstrap, fetchSyncOps, PUSH_BATCH_MAX, PUSH_TIMEOUT_MS, pushSyncOps, SyncAuthError } from '#api/syncClient';
 import type { ServerItemBriefSnapshot } from '../api/briefApi';
 import { describeDevice } from '../lib/deviceLabel';
 import { forgetNetworkVerificationFor, markVerifiedWithNetwork, notifySyncQueueChanged } from '../lib/syncFreshness';
@@ -219,7 +219,7 @@ async function resolveQueueUserId(db: IDBPDatabase<MyDB>, explicitUserId: string
 // online handler, service worker message) collapse into a single in-flight pass per scope.
 // Without this, two simultaneous flushes read the same queued ops and POST them twice,
 // causing the server to send duplicate push notifications for the same change.
-// Keyed by `userIdFilter` (like `pullInFlight`): a flush for user A that is WAITING on the
+// Keyed by `userIdFilter` (like `pullStates`): a flush for user A that is WAITING on the
 // cross-context lock must not be handed to the orchestrator's pass for user B — B's ops would
 // go unflushed that pass, and A's push would later leave under B's pivoted cookie.
 const flushInFlight = new Map<string, Promise<void>>();
@@ -460,6 +460,11 @@ export function bootstrapFromServer(db: IDBPDatabase<MyDB>, userId: string): Pro
     return withSessionGate(() => bootstrapFromServerUnguarded(db, userId));
 }
 
+// One bootstrap per account at a time. Two orchestrator passes can overlap past the session gate's
+// timeout on a slow link; each found no cursor and downloaded the whole account again, racing the
+// cursor and device-row writes. A second caller joins the running bootstrap instead.
+const bootstrapsInFlight = new Map<string, Promise<void>>();
+
 /**
  * Bootstrap without acquiring the session gate. Caller must already hold it. The IDB hydration runs
  * under the cross-context apply lock: the session gate is per-context, so without the lock a
@@ -467,7 +472,17 @@ export function bootstrapFromServer(db: IDBPDatabase<MyDB>, userId: string): Pro
  * network fetch stays OUTSIDE the lock — holding it across a slow request would wedge every other
  * context's sync for the duration (the exact failure mode the session gate's timeout exists for).
  */
-export async function bootstrapFromServerUnguarded(db: IDBPDatabase<MyDB>, userId: string): Promise<void> {
+export function bootstrapFromServerUnguarded(db: IDBPDatabase<MyDB>, userId: string): Promise<void> {
+    const running = bootstrapsInFlight.get(userId);
+    if (running) {
+        return running;
+    }
+    const bootstrap = runBootstrap(db, userId).finally(() => bootstrapsInFlight.delete(userId));
+    bootstrapsInFlight.set(userId, bootstrap);
+    return bootstrap;
+}
+
+async function runBootstrap(db: IDBPDatabase<MyDB>, userId: string): Promise<void> {
     await assertActiveSessionMatches(db, userId, 'bootstrapFromServer');
     const deviceId = await getOrCreateDeviceId(db);
 
@@ -524,7 +539,7 @@ export async function bootstrapFromServerUnguarded(db: IDBPDatabase<MyDB>, userI
 // different users can't observe one user's session pivot mid-fetch and attribute that response to
 // the wrong user's cursor (the failure mode H1/M1 in the per-user-cursor review). Per-user dedup
 // (an SSE event arriving while a SW-push pull is in flight for the same user) is layered on top
-// via `pullInFlight`.
+// via `pullStates`.
 let sessionGate: Promise<void> = Promise.resolve();
 
 /**
@@ -536,7 +551,8 @@ let sessionGate: Promise<void> = Promise.resolve();
  *
  * Exposed for tests (via `setSessionGateTimeoutMs`) so timing-dependent specs can run fast.
  */
-let sessionGateTimeoutMs = 10_000;
+export const DEFAULT_SESSION_GATE_TIMEOUT_MS = 10_000;
+let sessionGateTimeoutMs = DEFAULT_SESSION_GATE_TIMEOUT_MS;
 
 /** Test-only: override the gate timeout. Restored to the default at the end of each test. */
 export function setSessionGateTimeoutMs(ms: number): void {
@@ -590,35 +606,121 @@ export function readSettledActiveAccount(db: IDBPDatabase<MyDB>) {
     return withSessionGate(() => getIntendedActiveAccount(db));
 }
 
-const pullInFlight = new Map<string, Promise<void>>();
+/**
+ * Per-user pull bookkeeping. "Queued" (a gated pull waiting for the session gate) is kept apart from
+ * "running" (a pull past the gate, or an unguarded one): the orchestrator holds the gate while it
+ * calls `pullFromServerUnguarded`, so joining a queued pull there would wait on the gate it holds
+ * until the gate's hard timeout, then race that pull through the pass's session pivots.
+ */
+interface UserPullState {
+    /** A gated pull waiting for the session gate. Only `pullFromServer` may join it. */
+    queued?: Promise<void> | undefined;
+    /** The pull past the gate (or unguarded) — joinable by both entry points while not yet reading. */
+    running?: Promise<void> | undefined;
+    /** The running pull has sent its request: what it returns was read before any later commit. */
+    isReading: boolean;
+    /** One follow-up shared by every request made while the running pull was reading. */
+    followUp?: Promise<void> | undefined;
+}
+
+const pullStates = new Map<string, UserPullState>();
+
+function pullStateOf(userId: string): UserPullState {
+    const existing = pullStates.get(userId);
+    if (existing) {
+        return existing;
+    }
+    const created: UserPullState = { isReading: false };
+    pullStates.set(userId, created);
+    return created;
+}
 
 /**
  * Per-user pull that acquires the session gate. Use from any caller outside the orchestrator
  * (SSE handler, devTools). The orchestrator calls `pullFromServerUnguarded` to avoid recursing
  * into the gate it already holds.
  *
- * Same-user dedup happens before the gate — two SSE events arriving for the same user collapse
- * into one queue entry rather than two sequential gate acquisitions.
+ * A request joins a pull that has not sent its request yet (it will read the change the request
+ * announces — SSE notifies after the commit). Once the pull is reading, it may have read the server
+ * before that change was committed (a server burst sends one notification per op), so the request
+ * gets one fresh pull after it instead: at most one extra pull per in-flight pull, shared by every
+ * request made meanwhile.
  */
 export function pullFromServer(db: IDBPDatabase<MyDB>, userId: string): Promise<void> {
-    const existing = pullInFlight.get(userId);
-    if (existing) return existing;
-    const promise = withSessionGate(() => doPull(db, userId)).finally(() => pullInFlight.delete(userId));
-    pullInFlight.set(userId, promise);
-    return promise;
+    const state = pullStateOf(userId);
+    if (state.running) {
+        return state.isReading ? followUpPull(db, userId, state.running) : state.running;
+    }
+    return state.queued ?? queueGatedPull(db, userId);
+}
+
+function queueGatedPull(db: IDBPDatabase<MyDB>, userId: string): Promise<void> {
+    const state = pullStateOf(userId);
+    // Holder, because the gate task needs the promise `withSessionGate` is about to return.
+    const queuedPull: { promise?: Promise<void> } = {};
+    queuedPull.promise = withSessionGate(() => {
+        // Past the gate: from here on it is a running pull the orchestrator may join.
+        if (state.queued === queuedPull.promise) {
+            state.queued = undefined;
+        }
+        // A pass that outlived the gate's hard timeout released the gate while its unguarded pull
+        // still runs: wait for it rather than run a second doPull for this user alongside it.
+        return state.running ? state.running.catch(() => undefined).then(() => runTrackedPull(db, userId)) : runTrackedPull(db, userId);
+    });
+    state.queued = queuedPull.promise;
+    return queuedPull.promise;
+}
+
+/** Registers the pull as running for the whole of `doPull`, and clears it — and its reading flag — when it settles. */
+function runTrackedPull(db: IDBPDatabase<MyDB>, userId: string): Promise<void> {
+    const state = pullStateOf(userId);
+    const running = doPull(db, userId).finally(() => {
+        if (state.running === running) {
+            state.running = undefined;
+            state.isReading = false;
+        }
+    });
+    state.running = running;
+    return running;
+}
+
+/** A failure a second request would hit in exactly the same way — no point in a follow-up. */
+function isTerminalPullFailure(err: unknown): boolean {
+    return err instanceof SyncAuthError || err instanceof BootstrapRequiredError;
+}
+
+function followUpPull(db: IDBPDatabase<MyDB>, userId: string, running: Promise<void>): Promise<void> {
+    const state = pullStateOf(userId);
+    if (state.followUp) {
+        return state.followUp;
+    }
+    const startFollowUp = () => {
+        state.followUp = undefined;
+        return pullFromServer(db, userId);
+    };
+    // A plain failure did not cover the request either, so the follow-up still runs; an auth or
+    // reaped-device failure is handed to every waiting request instead.
+    const followUp = running.then(startFollowUp, (err: unknown) => {
+        if (isTerminalPullFailure(err)) {
+            state.followUp = undefined;
+            throw err;
+        }
+        return startFollowUp();
+    });
+    state.followUp = followUp;
+    return followUp;
 }
 
 /**
- * Per-user pull WITHOUT acquiring the session gate. Caller must already hold it. Same-user dedup
- * still applies — the orchestrator serializes its own loop so this rarely matters, but defending
- * against re-entrancy is cheap.
+ * Per-user pull WITHOUT acquiring the session gate. Caller must already hold it. It joins only a
+ * RUNNING pull — never one queued for the gate the caller holds (see `UserPullState`).
  */
 export function pullFromServerUnguarded(db: IDBPDatabase<MyDB>, userId: string): Promise<void> {
-    const existing = pullInFlight.get(userId);
-    if (existing) return existing;
-    const promise = doPull(db, userId).finally(() => pullInFlight.delete(userId));
-    pullInFlight.set(userId, promise);
-    return promise;
+    const existing = pullStateOf(userId).running;
+    if (existing) {
+        return existing;
+    }
+    return runTrackedPull(db, userId);
 }
 
 /**
@@ -633,38 +735,124 @@ export function pullFromServerUnguarded(db: IDBPDatabase<MyDB>, userId: string):
 async function doPull(db: IDBPDatabase<MyDB>, userId: string): Promise<void> {
     await assertActiveSessionMatches(db, userId, 'doPull');
     const deviceId = await getOrCreateDeviceId(db);
-    // The IDB cursor `(ts, id)` doubles as `(since, sinceId)` (what ops to fetch) AND `(ackedTs,
-    // ackedId)` (what we've durably persisted). They're equal in steady state — they only diverge
-    // after a partial-apply failure where setSyncCursor ran but applyServerOp didn't (a state we
-    // don't reach today; this protocol makes the contract explicit so we can split them later if
-    // needed). Crucially we never advance the server's purge floor past what we've written to IDB.
-    const cursor = await getSyncCursor(db, userId);
-    const { ops, serverTs, serverId } = await fetchSyncOps(cursor.ts, cursor.id, cursor.ts, cursor.id, deviceId).catch((err: unknown) => {
-        // The device may have missed changes — its badges say so, and the catch-up retrier tries again.
+    const outcome = await storeAllPages(db, userId, pullPages(db, userId, deviceId)).catch((err: unknown) => {
+        // A page failed to arrive or to apply: the device may have missed changes — its badges say
+        // so, and the catch-up retrier tries again. Pages stored before it stay stored.
         forgetNetworkVerificationFor(userId);
         throw err;
     });
+    recordPullOutcome(userId, outcome);
+}
 
-    console.log(
-        `[debug-gcal-sync][client] doPull | userId=${userId} since=${cursor.ts}/${cursor.id} serverTs=${serverTs}/${serverId} opCount=${ops.length}`,
-        ops.map((op) => `${op.opType}:${op.entityType}:${op.entityId}@${(op.snapshot as { updatedTs?: string } | null)?.updatedTs ?? 'n/a'}`),
-    );
+/**
+ * Ops a pull may ask for in one page. A device back from weeks offline otherwise downloads every
+ * missed op in one response — slow, and on a weak link easily cut off and started over.
+ */
+export const PULL_PAGE_SIZE = 200;
+const pullPaging = { pageSize: PULL_PAGE_SIZE };
 
-    // Cross-context lock around apply + ack: `pullInFlight`/`sessionGate` only dedupe within THIS
-    // context, but every tab and the Service Worker share one IndexedDB. Two contexts pulling
-    // different accounts can interleave applies for the same entityId (a cross-account reassign
-    // emits delete+create under two users) — the delete's owner guard then reads a row the other
-    // context is mid-replace, and the entity vanishes from IDB while the server stays correct.
-    // The network fetch above deliberately stays OUTSIDE the lock so a slow request can't wedge
-    // every other context's sync; the per-op transaction in `applyEntityOp` is the second layer
-    // for browsers without Web Locks.
-    await withCrossContextLock(SYNC_APPLY_LOCK, async () => {
-        if (await isRemovedFromDevice(db, userId)) {
+/** Test-only (e2e harness): a small page size lets a spec page through a handful of ops. */
+export function setPullPageSize(size: number): void {
+    pullPaging.pageSize = size;
+}
+
+/** How a pull ended. Only `complete` means the device now holds everything the server had. */
+type PullOutcome = 'complete' | 'accountRemoved' | 'sessionChanged' | 'cursorStalled';
+
+interface PulledPage {
+    page: PullPayload;
+    /** The stored cursor the page was requested from (and acknowledged). */
+    requestedFrom: OpCursor;
+}
+
+/**
+ * Yields `/sync/pull` pages until the server reports none left. Each request reads the cursor the
+ * consumer stored for the previous page, so it both resumes from and acknowledges exactly what the
+ * device has durably written — the server never advances the purge floor past it.
+ */
+async function* pullPages(db: IDBPDatabase<MyDB>, userId: string, deviceId: string): AsyncGenerator<PulledPage> {
+    for (;;) {
+        const requestedFrom = await getSyncCursor(db, userId);
+        // From the first request on, the server's answer may predate a write: a pull requested now
+        // gets a follow-up instead of joining this one (see UserPullState). Cleared by the wrapper.
+        pullStateOf(userId).isReading = true;
+        const page = await fetchSyncOps({ cursor: requestedFrom, acked: requestedFrom, deviceId, limit: pullPaging.pageSize });
+        console.log('[sync] pull page', {
+            userId,
+            since: requestedFrom,
+            next: { ts: page.serverTs, id: page.serverId },
+            opCount: page.ops.length,
+            hasMore: page.hasMore === true,
+        });
+        yield { page, requestedFrom };
+        if (page.hasMore !== true) {
             return;
+        }
+    }
+}
+
+/** Stores each page in turn, checking before every further request that paging may go on. */
+async function storeAllPages(db: IDBPDatabase<MyDB>, userId: string, pages: AsyncGenerator<PulledPage>): Promise<PullOutcome> {
+    for await (const { page, requestedFrom } of pages) {
+        const stored = await storePulledPage(db, userId, page);
+        if (stored === 'accountRemoved') {
+            return stored;
+        }
+        const blocker = page.hasMore === true ? await reasonNotToRequestNextPage(db, userId, requestedFrom) : undefined;
+        if (blocker) {
+            return blocker;
+        }
+    }
+    return 'complete';
+}
+
+/**
+ * Re-checked before every page after the first. The pull holds the session gate, but the gate
+ * releases a task after its hard timeout while the task keeps running — a slow multi-page catch-up
+ * can outlive it, a queued pass can switch the active session, and the next page would then go out
+ * under another account's cookie (its ops applied here, its device row acknowledged with our cursor).
+ * A page that claims more remain but did not move the cursor would be requested forever.
+ */
+async function reasonNotToRequestNextPage(db: IDBPDatabase<MyDB>, userId: string, requestedFrom: OpCursor): Promise<PullOutcome | undefined> {
+    if ((await getActiveAccount(db))?.id !== userId) {
+        return 'sessionChanged';
+    }
+    const stored = await getSyncCursor(db, userId);
+    return stored.ts === requestedFrom.ts && stored.id === requestedFrom.id ? 'cursorStalled' : undefined;
+}
+
+function recordPullOutcome(userId: string, outcome: PullOutcome): void {
+    if (outcome === 'complete') {
+        markVerifiedWithNetwork(userId);
+        return;
+    }
+    if (outcome !== 'accountRemoved') {
+        // The pull stopped short of the server's head: what the device holds is not verified.
+        console.log('[sync] pull stopped before the last page', { userId, outcome });
+        forgetNetworkVerificationFor(userId);
+    }
+}
+
+/**
+ * Applies one page and advances the cursor past it. `accountRemoved` when the account left the
+ * device while the request was in flight: the page is dropped and paging stops.
+ *
+ * Cross-context lock around apply + ack: `pullStates`/`sessionGate` only dedupe within THIS
+ * context, but every tab and the Service Worker share one IndexedDB. Two contexts pulling
+ * different accounts can interleave applies for the same entityId (a cross-account reassign emits
+ * delete+create under two users) — the delete's owner guard then reads a row the other context is
+ * mid-replace, and the entity vanishes from IDB while the server stays correct. The network fetch
+ * stays OUTSIDE the lock so a slow request can't wedge every other context's sync; the per-op
+ * transaction in `applyEntityOp` is the second layer for browsers without Web Locks.
+ */
+function storePulledPage(db: IDBPDatabase<MyDB>, userId: string, { ops, serverTs, serverId }: PullPayload): Promise<'stored' | 'accountRemoved'> {
+    return withCrossContextLock(SYNC_APPLY_LOCK, async () => {
+        if (await isRemovedFromDevice(db, userId)) {
+            return 'accountRemoved';
         }
         await applyPulledOps(db, userId, ops);
         await advanceSyncCursor(db, userId, serverTs, serverId ?? '');
-        markVerifiedWithNetwork(userId);
+        return 'stored';
     });
 }
 

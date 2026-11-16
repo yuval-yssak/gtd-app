@@ -13,16 +13,20 @@ vi.mock('../db/multiUserSync', () => ({
 }));
 
 import dayjs from 'dayjs';
-import { fetchBootstrap, fetchSyncOps, PUSH_BATCH_MAX, pushSyncOps } from '#api/syncClient';
+import { BootstrapRequiredError, fetchBootstrap, fetchSyncOps, PUSH_BATCH_MAX, pushSyncOps, SyncAuthError } from '#api/syncClient';
 import { removeAccountAndData } from '../db/accountHelpers';
 import { SYNC_APPLY_LOCK, SYNC_FLUSH_LOCK } from '../db/crossContextLock';
 import { syncSingleUser } from '../db/multiUserSync';
 import {
     __resetPushAttemptedForTests,
     bootstrapFromServer,
+    bootstrapFromServerUnguarded,
     DEFAULT_FLUSH_LOCK_WAIT_MS,
+    DEFAULT_SESSION_GATE_TIMEOUT_MS,
     flushSyncQueue,
+    PULL_PAGE_SIZE,
     pullFromServer,
+    pullFromServerUnguarded,
     queueDeleteThenRemove,
     queueSyncOp,
     setFlushLockWaitMs,
@@ -34,6 +38,7 @@ import { __resetUnconfirmedDeletesForTests, entityKey, isAwaitingDeleteEcho } fr
 import { _resetSyncFreshnessForTests, isVerifiedWithNetwork, subscribeToSyncFreshness } from '../lib/syncFreshness';
 // StoredPerson/Routine/WorkContext are still needed for the db.put() casts below
 import type { MyDB, StoredItem, StoredItemBrief, StoredPerson, StoredRoutine, StoredWorkContext, SyncOperation } from '../types/MyDB';
+import { deferred } from './deferred';
 import { openTestDB } from './openTestDB';
 
 const USER_ID = 'user-1';
@@ -1327,7 +1332,7 @@ describe('pullFromServer — item ops', () => {
         await pullFromServer(db, USER_ID);
 
         // Second call resumes from the first pull's (t1, op-1) for both the since and ack pairs.
-        expect(vi.mocked(fetchSyncOps)).toHaveBeenLastCalledWith(t1, 'op-1', t1, 'op-1', expect.any(String));
+        expect(vi.mocked(fetchSyncOps)).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: { ts: t1, id: 'op-1' }, acked: { ts: t1, id: 'op-1' } }));
     });
 
     it('empty-id boundary re-delivery is idempotent: re-applying ops creates no duplicate', async () => {
@@ -1373,9 +1378,9 @@ describe('pullFromServer — item ops', () => {
         expect(cursorB?.lastSyncedTs).toBe('2024-01-01T00:00:00.000Z');
     });
 
-    it('same-user dedup: two simultaneous pullFromServer calls for the same user collapse into one fetch', async () => {
+    it('same-user dedup: a request made before the queued pull has sent its request joins it — one fetch', async () => {
         // The session gate's job is to serialize *across* users. Same-user dedup is a separate
-        // property — two SSE events arriving for the same user shouldn't fire two fetches.
+        // property — a pull that has not read yet will read whatever the second request announces.
         vi.mocked(fetchSyncOps).mockResolvedValueOnce({ ops: [], serverTs: '2025-09-01T12:00:00.000Z', serverId: '' });
         const a = pullFromServer(db, USER_ID);
         const b = pullFromServer(db, USER_ID);
@@ -1441,9 +1446,11 @@ describe('pullFromServer — item ops', () => {
 
         await pullFromServer(db, USER_ID);
 
-        // (since, sinceId, ackedTs, ackedId, deviceId) — the since pair and ack pair are equal in
-        // steady state. sinceId/ackedId are '' here because the seeded cursor has no id component.
-        expect(vi.mocked(fetchSyncOps)).toHaveBeenCalledWith(cursor, '', cursor, '', expect.any(String));
+        // The since pair and ack pair are equal in steady state. The ids are '' here because the
+        // seeded cursor has no id component.
+        expect(vi.mocked(fetchSyncOps)).toHaveBeenCalledWith(
+            expect.objectContaining({ cursor: { ts: cursor, id: '' }, acked: { ts: cursor, id: '' }, deviceId: expect.any(String) }),
+        );
     });
 
     it('lost-response replay: a retry after a failed pull re-sends the same ackedTs (cursor never advanced)', async () => {
@@ -1482,7 +1489,9 @@ describe('pullFromServer — item ops', () => {
         vi.mocked(fetchSyncOps).mockResolvedValueOnce({ ops: [op], serverTs: '2026-02-01T00:00:00.000Z', serverId: '' });
         await pullFromServer(db, USER_ID);
 
-        expect(vi.mocked(fetchSyncOps)).toHaveBeenLastCalledWith(initialCursor, '', initialCursor, '', expect.any(String));
+        expect(vi.mocked(fetchSyncOps)).toHaveBeenLastCalledWith(
+            expect.objectContaining({ cursor: { ts: initialCursor, id: '' }, acked: { ts: initialCursor, id: '' } }),
+        );
         expect(await db.get('items', 'lost-item')).toBeDefined();
     });
 });
@@ -1886,7 +1895,7 @@ describe('bootstrapFromServer', () => {
 describe('withSessionGate — self-healing timeout', () => {
     afterEach(() => {
         // Reset to production default so cross-test gate state doesn't leak.
-        setSessionGateTimeoutMs(10_000);
+        setSessionGateTimeoutMs(DEFAULT_SESSION_GATE_TIMEOUT_MS);
     });
 
     it('releases the gate after the deadline so queued tasks proceed even if one hangs', async () => {
@@ -2006,5 +2015,324 @@ describe('network verification — what the "Not verified" badge reads', () => {
 
         expect(await db.getAll('syncOperations')).toEqual([]);
         expect(listener).toHaveBeenCalled();
+    });
+});
+
+// A server burst (an MCP move re-keys neighbours, then writes the moved row) arrives as one SSE
+// notification per op. The first starts a pull; a notification for an op committed after that pull
+// read the server used to join the in-flight pull and be lost — the device stayed stale until some
+// unrelated sync. A request made mid-read now gets one fresh pull after it.
+describe('pullFromServer — a request made while a pull is in flight', () => {
+    type PullResponse = Awaited<ReturnType<typeof fetchSyncOps>>;
+    const emptyResponse: PullResponse = { ops: [], serverTs: '2025-06-01T00:00:00.000Z', serverId: '' };
+    const lateItemResponse: PullResponse = {
+        ops: [{ entityType: 'item', entityId: 'item-late', opType: 'create', snapshot: serverItem('item-late') }],
+        serverTs: '2025-06-01T00:00:01.000Z',
+        serverId: '',
+    };
+
+    /** Holds the first fetch open, so a test can act while that pull is mid-read; later fetches answer `next`. */
+    function holdFirstFetch(next: PullResponse = emptyResponse) {
+        const firstResponse = deferred<PullResponse>();
+        vi.mocked(fetchSyncOps)
+            .mockImplementationOnce(() => firstResponse.promise)
+            .mockResolvedValue(next);
+        return { resolve: () => firstResponse.resolve(emptyResponse), reject: firstResponse.reject };
+    }
+
+    const firstFetchSent = () => vi.waitFor(() => expect(fetchSyncOps).toHaveBeenCalledTimes(1));
+
+    beforeEach(() => {
+        // clearAllMocks keeps queued once-implementations and default implementations; reset both ways.
+        vi.mocked(fetchSyncOps).mockReset();
+    });
+
+    afterEach(() => {
+        vi.mocked(fetchSyncOps).mockReset();
+        setSessionGateTimeoutMs(DEFAULT_SESSION_GATE_TIMEOUT_MS);
+    });
+
+    it('runs one more pull after the in-flight one, so a change committed meanwhile is not missed', async () => {
+        const first = holdFirstFetch(lateItemResponse);
+
+        const initial = pullFromServer(db, USER_ID);
+        await firstFetchSent();
+        const followUp = pullFromServer(db, USER_ID);
+        first.resolve();
+        await Promise.all([initial, followUp]);
+
+        expect(fetchSyncOps).toHaveBeenCalledTimes(2);
+        expect(await db.get('items', 'item-late')).toBeDefined();
+    });
+
+    it('collapses every request made during one pull into a single follow-up pull', async () => {
+        const first = holdFirstFetch();
+
+        const initial = pullFromServer(db, USER_ID);
+        await firstFetchSent();
+        const followUps = [pullFromServer(db, USER_ID), pullFromServer(db, USER_ID), pullFromServer(db, USER_ID)];
+        first.resolve();
+        await Promise.all([initial, ...followUps]);
+
+        expect(fetchSyncOps).toHaveBeenCalledTimes(2);
+    });
+
+    it('still runs the follow-up when the in-flight pull failed — it did not cover the request either', async () => {
+        const first = holdFirstFetch(lateItemResponse);
+
+        const initial = pullFromServer(db, USER_ID);
+        await firstFetchSent();
+        const followUp = pullFromServer(db, USER_ID);
+        first.reject(new Error('GET /sync/pull 503'));
+
+        await expect(initial).rejects.toThrow('503');
+        await expect(followUp).resolves.toBeUndefined();
+        expect(await db.get('items', 'item-late')).toBeDefined();
+    });
+
+    it.each([
+        ['an expired session', () => new SyncAuthError('GET /sync/pull')],
+        ['a reaped device', () => new BootstrapRequiredError('GET /sync/pull')],
+    ])('skips the follow-up when the in-flight pull failed on %s — a second request fails the same way', async (_cause, makeError) => {
+        const first = holdFirstFetch();
+        const failure = makeError();
+
+        const initial = pullFromServer(db, USER_ID);
+        await firstFetchSent();
+        const followUp = pullFromServer(db, USER_ID);
+        first.reject(failure);
+
+        await expect(initial).rejects.toBe(failure);
+        await expect(followUp).rejects.toBe(failure);
+        expect(fetchSyncOps).toHaveBeenCalledTimes(1);
+    });
+
+    it("lets the orchestrator's unguarded pull join a pull that is reading", async () => {
+        const first = holdFirstFetch();
+
+        const initial = pullFromServer(db, USER_ID);
+        await firstFetchSent();
+        const orchestrated = pullFromServerUnguarded(db, USER_ID);
+        first.resolve();
+        await Promise.all([initial, orchestrated]);
+
+        expect(fetchSyncOps).toHaveBeenCalledTimes(1);
+    });
+
+    it("gives a request made during the orchestrator's reading pull a follow-up", async () => {
+        const first = holdFirstFetch();
+
+        const orchestrated = pullFromServerUnguarded(db, USER_ID);
+        await firstFetchSent();
+        const followUp = pullFromServer(db, USER_ID);
+        first.resolve();
+        await Promise.all([orchestrated, followUp]);
+
+        expect(fetchSyncOps).toHaveBeenCalledTimes(2);
+    });
+
+    // A pass that outlives the gate's hard timeout releases the gate while its unguarded pull still
+    // runs. A gated pull queued behind it then enters the gate — it must wait for that pull, not run a
+    // second doPull for the same user alongside it (racing cursor writes, clobbering the bookkeeping).
+    it('makes a gated pull that enters the gate early wait for the still-running orchestrator pull', async () => {
+        setSessionGateTimeoutMs(50);
+        const first = holdFirstFetch();
+        const orchestratorPass = withSessionGate(async () => {
+            await db.get('syncCursors', USER_ID);
+            return pullFromServerUnguarded(db, USER_ID);
+        });
+        const queuedBehindPass = pullFromServer(db, USER_ID);
+        await firstFetchSent();
+
+        // Past the gate timeout: the queued pull has entered the gate by now.
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        expect(fetchSyncOps).toHaveBeenCalledTimes(1);
+
+        first.resolve();
+        await Promise.all([orchestratorPass, queuedBehindPass]);
+        expect(fetchSyncOps).toHaveBeenCalledTimes(2);
+    });
+
+    // The follow-up waits for the session gate. The orchestrator, queued for that gate behind the
+    // reading pull, must not join a pull that itself waits for the gate the orchestrator holds — it
+    // would stall until the gate's hard timeout, then race the follow-up through its pivots.
+    it('never makes the orchestrator wait on a follow-up that is still queued for the gate', async () => {
+        setSessionGateTimeoutMs(5_000);
+        const first = holdFirstFetch();
+
+        const initial = pullFromServer(db, USER_ID);
+        await firstFetchSent();
+        // Like the real pass, it reads IndexedDB (accounts, cursor) before it pulls.
+        const orchestratorPass = withSessionGate(async () => {
+            await db.get('syncCursors', USER_ID);
+            return pullFromServerUnguarded(db, USER_ID);
+        });
+        const followUp = pullFromServer(db, USER_ID);
+        first.resolve();
+        const stalled = new Promise<'stalled'>((resolve) => setTimeout(() => resolve('stalled'), 1_000));
+
+        await expect(Promise.race([orchestratorPass.then(() => 'settled' as const), stalled])).resolves.toBe('settled');
+        await Promise.all([initial, followUp]);
+    });
+});
+
+describe('pullFromServer — paging', () => {
+    function page(ids: string[], cursor: { ts: string; id: string }, hasMore: boolean) {
+        return {
+            ops: ids.map((id) => ({ entityType: 'item' as const, entityId: id, opType: 'create' as const, snapshot: serverItem(id) })),
+            serverTs: cursor.ts,
+            serverId: cursor.id,
+            hasMore,
+        };
+    }
+    const FIRST_PAGE_END = { ts: '2025-06-01T00:00:00.000Z', id: 'op-2' };
+    const LAST_PAGE_END = { ts: '2025-06-02T00:00:00.000Z', id: 'op-3' };
+
+    it('asks the server for pages of PULL_PAGE_SIZE ops', async () => {
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce(page([], LAST_PAGE_END, false));
+
+        await pullFromServer(db, USER_ID);
+
+        expect(vi.mocked(fetchSyncOps)).toHaveBeenCalledWith(expect.objectContaining({ limit: PULL_PAGE_SIZE }));
+    });
+
+    it('follows hasMore, storing each page and acknowledging it in the next request', async () => {
+        vi.mocked(fetchSyncOps)
+            .mockResolvedValueOnce(page(['item-p1', 'item-p2'], FIRST_PAGE_END, true))
+            .mockResolvedValueOnce(page(['item-p3'], LAST_PAGE_END, false));
+
+        await pullFromServer(db, USER_ID);
+
+        expect(await db.get('items', 'item-p1')).toBeDefined();
+        expect(await db.get('items', 'item-p3')).toBeDefined();
+        expect(await db.get('syncCursors', USER_ID)).toEqual({ userId: USER_ID, lastSyncedTs: LAST_PAGE_END.ts, lastSyncedId: LAST_PAGE_END.id });
+        // The second page is requested from — and acknowledges — what the first page stored.
+        expect(vi.mocked(fetchSyncOps)).toHaveBeenLastCalledWith(
+            expect.objectContaining({ cursor: { ts: FIRST_PAGE_END.ts, id: FIRST_PAGE_END.id }, acked: { ts: FIRST_PAGE_END.ts, id: FIRST_PAGE_END.id } }),
+        );
+    });
+
+    /** One successful empty pull first, so an "unverified" assertion afterwards proves a withdrawal. */
+    async function verifyAccountFirst() {
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce(page([], { ts: '2025-05-01T00:00:00.000Z', id: 'op-0' }, false));
+        await pullFromServer(db, USER_ID);
+        expect(isVerifiedWithNetwork(USER_ID)).toBe(true);
+    }
+
+    it('keeps the pages it stored when a later page fails, and leaves the account unverified', async () => {
+        await verifyAccountFirst();
+        vi.mocked(fetchSyncOps)
+            .mockResolvedValueOnce(page(['item-p1'], FIRST_PAGE_END, true))
+            .mockRejectedValueOnce(new Error('GET /sync/pull timed out after 30000ms'));
+
+        await expect(pullFromServer(db, USER_ID)).rejects.toThrow('timed out');
+
+        expect(await db.get('items', 'item-p1')).toBeDefined();
+        expect(await db.get('syncCursors', USER_ID)).toEqual({ userId: USER_ID, lastSyncedTs: FIRST_PAGE_END.ts, lastSyncedId: FIRST_PAGE_END.id });
+        expect(isVerifiedWithNetwork(USER_ID)).toBe(false);
+    });
+
+    it('marks the account verified only once the last page is stored', async () => {
+        const verifiedAfterFirstPage = { value: false };
+        vi.mocked(fetchSyncOps)
+            .mockResolvedValueOnce(page(['item-p1'], FIRST_PAGE_END, true))
+            .mockImplementationOnce(async () => {
+                verifiedAfterFirstPage.value = isVerifiedWithNetwork(USER_ID);
+                return page(['item-p3'], LAST_PAGE_END, false);
+            });
+
+        await pullFromServer(db, USER_ID);
+
+        expect(verifiedAfterFirstPage.value).toBe(false);
+        expect(isVerifiedWithNetwork(USER_ID)).toBe(true);
+    });
+
+    it('keeps page 1 when applying page 2 fails, with the cursor at the end of page 1 and the account unverified', async () => {
+        await verifyAccountFirst();
+        // No `_id`: IndexedDB rejects the write (the items store keys on `_id`), so the apply throws.
+        const unappliable = {
+            entityType: 'item' as const,
+            entityId: 'item-broken',
+            opType: 'create' as const,
+            snapshot: { user: USER_ID, status: 'inbox', title: 'Broken', createdTs: '2025-01-01T00:00:00.000Z', updatedTs: '2025-01-01T00:00:00.000Z' },
+        };
+        vi.mocked(fetchSyncOps)
+            .mockResolvedValueOnce(page(['item-p1'], FIRST_PAGE_END, true))
+            .mockResolvedValueOnce({ ops: [unappliable], serverTs: LAST_PAGE_END.ts, serverId: LAST_PAGE_END.id, hasMore: false });
+
+        await expect(pullFromServer(db, USER_ID)).rejects.toThrow();
+
+        expect(await db.get('items', 'item-p1')).toBeDefined();
+        expect(await db.get('syncCursors', USER_ID)).toEqual({ userId: USER_ID, lastSyncedTs: FIRST_PAGE_END.ts, lastSyncedId: FIRST_PAGE_END.id });
+        expect(isVerifiedWithNetwork(USER_ID)).toBe(false);
+    });
+
+    // A slow multi-page pull can outlive the session gate's hard timeout; a queued pass may then
+    // switch the active session, and the next page would go out under another account's cookie.
+    it('stops before the next page when the active session changed mid-pull, leaving the account unverified', async () => {
+        await db.put('accounts', { id: 'user-2', email: 'u2@example.com', name: 'U2', image: null, provider: 'google', addedAt: 2 });
+        // Only one response queued: a second request (under user-2's session) would get none and fail.
+        vi.mocked(fetchSyncOps).mockImplementationOnce(async () => {
+            await db.put('activeAccount', { userId: 'user-2' }, 'active');
+            return page(['item-p1'], FIRST_PAGE_END, true);
+        });
+
+        await pullFromServer(db, USER_ID);
+
+        expect(vi.mocked(fetchSyncOps)).toHaveBeenCalledTimes(1);
+        expect(isVerifiedWithNetwork(USER_ID)).toBe(false);
+    });
+
+    it('stops when a page says more remain but did not move the cursor, rather than asking for it forever', async () => {
+        const stuck = { ts: '1970-01-01T00:00:00.000Z', id: '' };
+        // Only one response queued: a second request would get none and fail the test.
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce(page([], stuck, true));
+        const log = vi.spyOn(console, 'log');
+
+        await pullFromServer(db, USER_ID);
+
+        expect(log).toHaveBeenCalledWith('[sync] pull stopped before the last page', { userId: USER_ID, outcome: 'cursorStalled' });
+
+        expect(vi.mocked(fetchSyncOps)).toHaveBeenCalledTimes(1);
+        expect(isVerifiedWithNetwork(USER_ID)).toBe(false);
+    });
+
+    it('treats a response without hasMore (a server from before paging) as the last page', async () => {
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({ ops: [], serverTs: LAST_PAGE_END.ts, serverId: LAST_PAGE_END.id });
+
+        await pullFromServer(db, USER_ID);
+
+        expect(vi.mocked(fetchSyncOps)).toHaveBeenCalledTimes(1);
+        expect(isVerifiedWithNetwork(USER_ID)).toBe(true);
+    });
+
+    it('stops paging when the account leaves the device mid-pull', async () => {
+        vi.mocked(fetchSyncOps).mockImplementationOnce(async () => {
+            await removeAccountAndData(USER_ID, db);
+            return page(['item-ghost'], FIRST_PAGE_END, true);
+        });
+
+        await pullFromServer(db, USER_ID);
+
+        expect(vi.mocked(fetchSyncOps)).toHaveBeenCalledTimes(1);
+        expect(await db.get('items', 'item-ghost')).toBeUndefined();
+    });
+});
+
+// Two orchestrator passes can overlap past the session gate's timeout on a slow link (a channel's
+// first-open catch-up and the full sync at boot). Each found no cursor and bootstrapped: the whole
+// account downloaded twice, the cursor and device-row writes racing.
+describe('bootstrapFromServerUnguarded — one bootstrap per account at a time', () => {
+    it('lets a concurrent bootstrap for the same account join the running one', async () => {
+        const snapshot = deferred<Awaited<ReturnType<typeof fetchBootstrap>>>();
+        vi.mocked(fetchBootstrap).mockImplementationOnce(() => snapshot.promise);
+
+        const first = bootstrapFromServerUnguarded(db, USER_ID);
+        const second = bootstrapFromServerUnguarded(db, USER_ID);
+        snapshot.resolve({ items: [serverItem('item-boot')], routines: [], people: [], workContexts: [], serverTs: '2025-07-01T00:00:00.000Z', serverId: '' });
+        await Promise.all([first, second]);
+
+        expect(fetchBootstrap).toHaveBeenCalledTimes(1);
+        expect(await db.get('items', 'item-boot')).toBeDefined();
     });
 });

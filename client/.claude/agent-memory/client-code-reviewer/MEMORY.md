@@ -79,3 +79,6 @@
 - [History counters count gesture rows](project_history_counter_counts_gesture_rows.md) — rules over a routine's done/trash history also count type-switch/pause trash rows; list every trash writer.
 - [Lazy chunk count misses node_modules](project_lazy_chunk_inventory_misses_node_modules.md) — CodeMirror language-data adds ~100 dynamic chunks; list build assets before trusting "only N lazy chunks".
 - [Module use() cache lacks test reset](project_module_use_cache_test_reset.md) — version-keyed module promise caches survive between tests; a reset version replays another test's answer.
+- [Pull dedupe joins gate-pending pull](project_pull_inflight_gate_pending_deadlock.md) — pullInFlight registered before the session gate is granted → orchestrator's unguarded pull waits on the gate it holds (10s stall); keep queued-for-gate apart from running.
+- [Request loop outlives session gate](project_multi_request_loop_outlives_session_gate.md) — paging/drain loops keep sending after the 10s gate release; another pass pivots the cookie → wrong-user responses.
+- [Supervisor health-predicate loops](project_supervisor_health_predicate_loops.md) — repair loops wedge on a hung step (shared in-flight pass) or retry forever on reauth/permission states.

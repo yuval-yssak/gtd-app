@@ -1,6 +1,6 @@
 import dayjs from 'dayjs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { closeSseConnections, getConnectedSseUserIds, getOpenSseUserIds, openSseConnections, reopenSseConnections } from '../db/sseClient';
+import { areLiveChannelsUp, closeSseConnections, getConnectedSseUserIds, getOpenSseUserIds, openSseConnections, reopenSseConnections } from '../db/sseClient';
 
 // Mock the API_SERVER constant so URLs are predictable in assertions.
 vi.mock('../constants/globals', () => ({ API_SERVER: 'http://test.local' }));
@@ -302,5 +302,33 @@ describe('getConnectedSseUserIds', () => {
 
         expect(getOpenSseUserIds().sort()).toEqual(['user-a', 'user-b']);
         expect(getConnectedSseUserIds()).toEqual(['user-b']);
+    });
+});
+
+// The connection supervisor keeps repairing until this holds. CONNECTING counts as up: the browser
+// is already retrying that one itself. CLOSED does not: the browser has given up on it for good.
+describe('areLiveChannelsUp', () => {
+    it('is true when every account has a channel that is open or still connecting', () => {
+        openSseConnections({ onUpdate: () => {}, localDeviceId: 'dev-1' }, ['user-a', 'user-b']);
+        const [, connecting] = created;
+        if (!connecting) throw new Error('expected two channels');
+        connecting.readyState = 0;
+
+        expect(areLiveChannelsUp(['user-a', 'user-b'])).toBe(true);
+    });
+
+    it('is false when an account has no channel yet', () => {
+        openSseConnections({ onUpdate: () => {}, localDeviceId: 'dev-1' }, ['user-a']);
+
+        expect(areLiveChannelsUp(['user-a', 'user-b'])).toBe(false);
+    });
+
+    it('is false when the browser gave up on a channel (an error page instead of a stream)', () => {
+        openSseConnections({ onUpdate: () => {}, localDeviceId: 'dev-1' }, ['user-a']);
+        const [gaveUp] = created;
+        if (!gaveUp) throw new Error('expected one channel');
+        gaveUp.readyState = 2;
+
+        expect(areLiveChannelsUp(['user-a'])).toBe(false);
     });
 });

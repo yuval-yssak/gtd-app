@@ -56,38 +56,42 @@ async function waitForItemTitle(page: Page, title: string): Promise<StoredItem> 
 
 test.describe('multi-account sync', () => {
     // A tab's boot sync can fail — another tab pivots the shared session cookie mid-pull, the server
-    // hiccups — and that must not leave the tab without live updates: its channels still open, and
-    // their first-open catch-up retries the sync.
-    test('a failed boot sync still opens the live channels, which then retry the sync', async ({ browser }) => {
+    // hiccups — and that must not leave the tab without live updates or stuck on the failure: its
+    // channels open regardless, and the sync is retried until it lands.
+    test('a failed boot sync still opens the live channels, and the sync is retried until it lands', async ({ browser }) => {
         const stamp = uniqueStamp();
         await withTwoAccountsOnOneDevice(
             browser,
             [`boot-fail-a-${stamp}@example.com`, `boot-fail-b-${stamp}@example.com`],
             async (page, { active, secondary }) => {
-                const failedSyncFetches = { count: 0 };
-                // Fail every pull until a channel has opened: the boot sync fails, the channel's catch-up later succeeds.
-                const isChannelOpen = { value: false };
-                // Only the reloaded document's channels count; the outgoing page's may request before it unloads.
-                page.on('framenavigated', (frame) => {
-                    if (frame === page.mainFrame()) isChannelOpen.value = false;
-                });
-                page.on('request', (request) => {
-                    if (request.url().includes('/sync/events')) isChannelOpen.value = true;
-                });
-                // Bootstrap or pull, whichever the boot sync takes, fails until a channel has opened.
+                const syncFetches = { failed: 0, succeeded: 0 };
+                // The reloaded page's first sync requests fail (one per account), later ones go through.
+                const FAILED_BOOT_FETCHES = 2;
                 await page.route(/\/sync\/(pull|bootstrap)/, async (route) => {
-                    if (isChannelOpen.value) {
-                        await route.continue();
+                    if (syncFetches.failed < FAILED_BOOT_FETCHES) {
+                        syncFetches.failed += 1;
+                        await route.fulfill({ status: 500, body: '{}' });
                         return;
                     }
-                    failedSyncFetches.count += 1;
-                    await route.fulfill({ status: 500, body: '{}' });
+                    syncFetches.succeeded += 1;
+                    await route.continue();
+                });
+
+                // Only the full sync lists calendar integrations (a catch-up pull never does): seeing it
+                // after the failed attempts proves the full sync itself was retried, not just a catch-up.
+                const calendarListings = { count: 0 };
+                page.on('request', (request) => {
+                    if (new URL(request.url()).pathname === '/calendar/integrations' && syncFetches.failed === FAILED_BOOT_FETCHES) {
+                        calendarListings.count += 1;
+                    }
                 });
 
                 await page.reload();
 
                 await expect.poll(() => gtd.sseChannelUserIds(page), { timeout: 15_000 }).toEqual(expect.arrayContaining([active.userId, secondary.userId]));
-                expect(failedSyncFetches.count).toBeGreaterThan(0);
+                await expect.poll(() => syncFetches.succeeded, { timeout: 30_000 }).toBeGreaterThan(0);
+                await expect.poll(() => calendarListings.count, { timeout: 30_000 }).toBeGreaterThan(0);
+                expect(syncFetches.failed).toBe(FAILED_BOOT_FETCHES);
             },
             // page.route cannot intercept requests the service worker makes once it controls the page.
             { serviceWorkers: 'block' },

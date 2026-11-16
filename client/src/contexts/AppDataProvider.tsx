@@ -23,18 +23,19 @@ import { getOrCreateDeviceId } from '../db/deviceId';
 import { evaporateUserAndRecoverGated } from '../db/evaporateUser';
 import { reconcileActiveSessionCookie, syncAllLoggedInUsers, syncSingleUser, withAccountSession } from '../db/multiUserSync';
 import { registerPushSubscriptionIfPermitted } from '../db/pushSubscription';
-import { closeSseConnections, openSseConnections, reopenSseConnections } from '../db/sseClient';
+import { areLiveChannelsUp, closeSseConnections, openSseConnections, reopenSseConnections } from '../db/sseClient';
 import { flushSyncQueue, pullFromServer } from '../db/syncHelpers';
 import { recoverFromBootstrapRequired } from '../db/syncRecovery';
 import { syncThenSeedRoutines } from '../db/syncThenSeedRoutines';
 import { refreshCalendarOptions } from '../hooks/useCalendarOptions';
+import { useConnectionSupervisor } from '../hooks/useConnectionSupervisor';
 import { useOnline } from '../hooks/useOnline';
-import { subscribeToAppResume } from '../lib/appResume';
+import { isAwayLongEnoughToDoubtData, subscribeToAppResume } from '../lib/appResume';
 import { authClient } from '../lib/authClient';
-import { areAccountsCaughtUp, createCatchUpRetrier } from '../lib/catchUpRetry';
 import { coalesceAsync } from '../lib/coalesceAsync';
+import { areAccountsCaughtUp, nextSyncAction } from '../lib/connectionSupervisor';
 import { isBrowserOffline } from '../lib/onlineStatus';
-import { forgetNetworkVerification, isVerifiedWithNetwork, subscribeToSyncFreshness } from '../lib/syncFreshness';
+import { forgetNetworkVerification, isVerifiedWithNetwork } from '../lib/syncFreshness';
 import { shouldRaiseInitialSync } from '../lib/syncIndicators';
 import type {
     MyDB,
@@ -175,7 +176,7 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
     // page reload (see useAccounts), so a setter would be dead code here.
     const account = initial.account;
     const [loggedInAccounts, setLoggedInAccounts] = useState<StoredAccount[]>(initial.loggedInAccounts);
-    // Drives the list-page skeletons. Raised in loadAll() only when the active account has no sync
+    // Drives the list-page skeletons. Raised at mount only when the active account has no sync
     // cursor yet (first launch on this device), and cleared once the first sync settles. Returning
     // devices already have cached items + a cursor, so they never see the skeleton.
     const [isInitialSyncing, setIsInitialSyncing] = useState(false);
@@ -184,7 +185,7 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
     // syncAndRefresh, not just the first.
     const [isCalendarSyncing, setIsCalendarSyncing] = useState(false);
     const isOnline = useOnline();
-    const isFirstOnlineRender = useRef(true); // Skips the first render of the isOnline effect — mount-time handling is done in loadAll()
+    const isFirstOnlineRender = useRef(true); // Skips the first render of the isOnline effect — the connection supervisor handles mount
 
     // Cached id list — stable identity when the account ids didn't change so consumers
     // memoizing on it don't re-run for every accounts-array re-creation.
@@ -211,12 +212,13 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
     // Mirrors Better Auth's device-multi-session list into the IDB `accounts` store before
     // reading from it. Without this seed, only the active session's account row exists at boot
     // (auth.callback.tsx hydrates one), so SSE would open only one channel on a multi-account
-    // device. Skips silently when offline — the IDB cache then represents the last known state.
-    const seedAccountsFromMultiSession = useCallback(async (): Promise<void> => {
+    // device. Resolves false when the server could not be reached (the IDB cache then stands for the
+    // last known state) so the connection supervisor tries again.
+    const seedAccountsFromMultiSession = useCallback(async (): Promise<boolean> => {
         try {
             const { data: sessions } = await authClient.multiSession.listDeviceSessions();
             if (!sessions) {
-                return;
+                return false;
             }
             await Promise.all(
                 sessions.map((s) =>
@@ -234,21 +236,26 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
                     ),
                 ),
             );
+            return true;
         } catch {
             // Offline or server unreachable — fall through to load from IDB cache.
+            return false;
         }
     }, [db]);
 
     // Re-reads accounts from IDB so add/remove-account flows can drive a unified-view
     // refresh without driving a full sync round-trip. Returns the freshly read list so
     // consumers (e.g. boot/online effects) can chain entity refreshes off the new ids.
-    const refreshAccountsInternal = useCallback(async (): Promise<StoredAccount[]> => {
-        await seedAccountsFromMultiSession();
+    const reloadAccountsFromDevice = useCallback(async (): Promise<StoredAccount[]> => {
         const accounts = await getLoggedInAccounts(db);
         setLoggedInAccounts(accounts);
         loggedInUserIdsRef.current = accounts.map((a) => a.id);
         return accounts;
-    }, [db, seedAccountsFromMultiSession]);
+    }, [db]);
+    const refreshAccountsInternal = useCallback(async (): Promise<StoredAccount[]> => {
+        await seedAccountsFromMultiSession();
+        return reloadAccountsFromDevice();
+    }, [seedAccountsFromMultiSession, reloadAccountsFromDevice]);
 
     // Guards against concurrent invocations from three independent paths: boot effect,
     // SSE callback, and SW push message. flushSyncQueue/pullFromServer have their own
@@ -258,6 +265,12 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
     // flag ensures a follow-up sync runs after the current one finishes. Without it, the
     // incoming event would be silently dropped and the user wouldn't see the update.
     const syncRequestedWhileBusy = useRef(false);
+    // Set once a full sync (flush, pull, calendar sync, routine seeding) has succeeded in this page
+    // session. Until then the connection supervisor retries the full sync, not just a catch-up pull.
+    const hasFullSyncSucceededRef = useRef(false);
+    // True while a catch-up pull pass runs (a live channel's first open, an SSE update mid-sync). The
+    // supervisor starts no second orchestrator pass meanwhile — see nextSyncAction.
+    const isCatchingUpRef = useRef(false);
     // Prevents resource-refresh calls from in-flight syncAndRefresh after unmount (e.g.
     // React Strict Mode double-mount, or fast navigation away during a network round-trip).
     const unmountedRef = useRef(false);
@@ -270,8 +283,9 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
     // follow-up pass instead of one pass each.
     const runCatchUpPull = useMemo(
         () =>
-            coalesceAsync(() =>
-                syncAllLoggedInUsers(db)
+            coalesceAsync(() => {
+                isCatchingUpRef.current = true;
+                return syncAllLoggedInUsers(db)
                     .then(() => {
                         if (unmountedRef.current) {
                             return;
@@ -281,8 +295,11 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
                         dispatchSyncIssuesRefresh();
                         void refreshCalendarOptions(db);
                     })
-                    .catch((err) => console.error('[sync] catch-up pull failed:', err)),
-            ),
+                    .catch((err) => console.error('[sync] catch-up pull failed:', err))
+                    .finally(() => {
+                        isCatchingUpRef.current = false;
+                    });
+            }),
         [db],
     );
 
@@ -334,6 +351,7 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             if (await reloadIfTabAccountGone(tabAccountGoneDeps)) {
                 return;
             }
+            hasFullSyncSucceededRef.current = true;
             triggerAppResourceRefresh('all');
             // Tell the SyncIssuesPanel to re-poll. Every sync round-trip is a candidate for new
             // failed ops (server-side rsvp replay marks `syncFailed` during the pushback step).
@@ -347,7 +365,7 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             if (!unmountedRef.current) {
                 setIsCalendarSyncing(false);
                 // The first sync (bootstrap or pull) has now populated IDB — drop the skeleton. No-op on
-                // every later sync since loadAll only raises it on a cursor-less first launch.
+                // every later sync since it is only raised at mount on a cursor-less first launch.
                 setIsInitialSyncing(false);
             }
             if (syncRequestedWhileBusy.current) {
@@ -426,34 +444,15 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             syncRequestedWhileBusy.current = true;
             return;
         }
+        // Before the first full sync has succeeded, the supervisor is about to run (or retry) it, and
+        // it pulls everything a catch-up would. A catch-up now would only start a second orchestrator
+        // pass beside it — and delay the full sync, which alone runs the calendar sync and routines.
+        if (!hasFullSyncSucceededRef.current) {
+            return;
+        }
         void runCatchUpPull();
     }, [runCatchUpPull]);
     const onSseConnected = requestCatchUpPull;
-
-    // While online, keeps retrying the catch-up pull until every account has been checked with the
-    // server — on a choppy connection nothing else retries a failed pull (see lib/catchUpRetry.ts).
-    // Re-armed on every freshness change, so a pull that fails later starts a new retry chain.
-    useEffect(() => {
-        if (!isOnline) {
-            return;
-        }
-        const retrier = createCatchUpRetrier({
-            // A running pass will verify the accounts or fail; the chain's next delay covers a failure,
-            // so queueing a follow-up behind it (as a reconnect does) would only add a redundant pull.
-            attempt: () => {
-                if (!isSyncingRef.current) {
-                    void runCatchUpPull();
-                }
-            },
-            isCaughtUp: () => areAccountsCaughtUp(loggedInUserIds, { isVerified: isVerifiedWithNetwork, needsReauth: isAccountFlaggedForReauth }),
-        });
-        retrier.ensureRunning();
-        const unsubscribe = subscribeToSyncFreshness(retrier.ensureRunning);
-        return () => {
-            unsubscribe();
-            retrier.stop();
-        };
-    }, [isOnline, runCatchUpPull, loggedInUserIds]);
 
     // One handlers object per channel set — the device id is only known asynchronously at each
     // open site, so this builds the object there instead of threading three positional callbacks.
@@ -478,41 +477,71 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
         [syncAndRefresh],
     );
 
-    const loadAll = useCallback(async () => {
-        // Initial state is already populated from getInitialAuthBundle (suspended on above).
-        // This effect's job is to (a) re-seed accounts from the multi-session network endpoint
-        // so a session signed in on another tab shows up here, and (b) kick off the first sync.
-        if (!initial.account) {
-            // No account in IDB — route guard redirects to /login. Nothing to sync.
-            return;
-        }
-        if (navigator.onLine) {
-            // Background only, and before the account round-trip below: a device with an empty
-            // calendar store (first boot after the upgrade) gets its list without waiting a sync pass.
-            void refreshCalendarOptions(db);
-        }
-        await refreshAccountsInternal();
-        if (!navigator.onLine) {
-            return;
-        }
-        // Converge the Better Auth cookie onto IDB's activeAccount BEFORE any sync work — an
-        // offline account switch leaves the cookie pointing at the previous account until this
-        // runs, and every session-scoped request until then would resolve as the wrong user.
-        await reconcileActiveSessionCookie(db);
-        // No cursor for the active account ⇒ this is a first-time bootstrap (the ~20s empty window).
-        // Raise the skeleton flag before kicking off the sync; syncAndRefresh's finally clears it.
-        // Mirrors pullOrBootstrap's cursor check so the flag tracks the same bootstrap decision.
-        const hasCursor = Boolean(await db.get('syncCursors', initial.account.id));
-        if (shouldRaiseInitialSync({ isOnline: navigator.onLine, hasCursor })) {
-            setIsInitialSyncing(true);
-        }
-        // If syncAndRefresh runs the bootstrap directly, its finally clears the flag. If it loses the
-        // isSyncingRef race and bails early (an SSE/push sync already in flight), it sets
-        // syncRequestedWhileBusy, and that in-flight sync's runCatchUpPull is the run that populates
-        // IDB and clears the flag. Either way the clear is tied to the run that actually has the data
-        // — never cleared eagerly while a bootstrap is still mid-flight.
-        await syncAndRefresh();
-    }, [initial.account, refreshAccountsInternal, syncAndRefresh, db]);
+    // No cursor for the active account ⇒ a first-time bootstrap is coming (the ~20s empty window), so
+    // the skeleton/chip goes up at mount, before the supervisor starts the full sync that bootstraps
+    // (a channel's first-open catch-up waits for it). Whichever sync lands first clears it.
+    // Mirrors pullOrBootstrap's cursor check so the flag tracks the same bootstrap decision.
+    const raiseInitialSyncIfNoCursor = useCallback(
+        async (userId: string) => {
+            const hasCursor = Boolean(await db.get('syncCursors', userId));
+            if (shouldRaiseInitialSync({ isOnline: navigator.onLine, hasCursor })) {
+                setIsInitialSyncing(true);
+            }
+        },
+        [db],
+    );
+
+    // The full sync the supervisor runs until one succeeds: at boot, and again after a failed one.
+    // The session cookie was already aligned by the supervisor's preceding step.
+    const startFullSync = useCallback(() => syncAndRefresh(), [syncAndRefresh]);
+
+    const isEveryAccountCaughtUp = useCallback(
+        () => areAccountsCaughtUp(loggedInUserIdsRef.current, { isVerified: isVerifiedWithNetwork, needsReauth: isAccountFlaggedForReauth }),
+        [],
+    );
+    // An account waiting for a fresh sign-in does not count against "channels up": its /sync/events
+    // answers 401 until the user signs in again (which reloads the page), so requiring it would keep
+    // the supervisor retrying forever. Its channel is still opened — a flag raised in error (a
+    // best-effort 401 attribution) must not close a working channel.
+    const syncableUserIds = useCallback(() => loggedInUserIdsRef.current.filter((userId) => !isAccountFlaggedForReauth(userId)), []);
+
+    // Connecting to the server is a set of steps the supervisor keeps repairing while online, rather
+    // than a one-shot boot chain: a step that fails on a spotty network is retried, and never stops
+    // the steps after it (lib/connectionSupervisor.ts).
+    useConnectionSupervisor(isOnline && Boolean(initial.account), {
+        ensureLiveChannels: async () => {
+            const deviceId = await getOrCreateDeviceId(db);
+            // A pass still running when the network dropped must not reopen what the offline effect closed.
+            if (!unmountedRef.current && !isBrowserOffline()) {
+                openSseConnections(sseHandlersFor(deviceId), loggedInUserIdsRef.current);
+            }
+        },
+        areLiveChannelsUp: () => areLiveChannelsUp(syncableUserIds()),
+        seedAccounts: async () => {
+            const isSeeded = await seedAccountsFromMultiSession();
+            await reloadAccountsFromDevice();
+            return isSeeded;
+        },
+        reconcileSessionCookie: () => reconcileActiveSessionCookie(db),
+        registerPush: async () => {
+            await registerPushSubscriptionIfPermitted(db);
+            return true;
+        },
+        syncIfBehind: () => {
+            const action = nextSyncAction({
+                isSyncing: isSyncingRef.current,
+                isCatchingUp: isCatchingUpRef.current,
+                hasFullSyncSucceeded: hasFullSyncSucceededRef.current,
+                isCaughtUp: isEveryAccountCaughtUp(),
+            });
+            if (action === 'fullSync') {
+                startFullSync().catch((err) => console.log('[sync] full sync failed; the connection supervisor retries', { err }));
+            } else if (action === 'catchUp') {
+                void runCatchUpPull();
+            }
+        },
+        isCaughtUp: () => hasFullSyncSucceededRef.current && isEveryAccountCaughtUp(),
+    });
 
     const refreshAccounts = useCallback(async () => {
         await refreshAccountsInternal();
@@ -568,57 +597,39 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
     );
 
     /**
-     * Boot effect: loads cached GTD data from IDB, triggers a server sync when online,
-     * and wires up real-time channels (SSE, Web Push, SW message listener).
+     * Boot effect: wires the SW message listener and tears the live channels down on unmount.
+     * Connecting to the server (channels, accounts, cookie, push, sync) is the supervisor's.
      */
     useEffect(() => {
-        // Prevents the .then() from opening SSE/push after the component has already unmounted
-        // (e.g. React strict-mode double-mount, or fast navigation away during loadAll).
-        let unmounted = false;
+        // Reset for StrictMode's dev remount: the cleanup below set it, and the supervisor's steps read it.
+        unmountedRef.current = false;
         navigator.serviceWorker?.addEventListener('message', onSwMessage);
         // Ensure SW messages are dispatched immediately rather than being buffered until
         // the page's load event. Without this, postMessage from the SW push handler can
         // be lost if it fires before the load event completes.
         navigator.serviceWorker?.startMessages();
-        loadAll()
-            .catch((err) => console.error('[boot] load failed:', err))
-            // Channels open even after a failed boot sync (a server error, or another tab pivoting
-            // the shared active-account pointer mid-pull): a tab without them gets no live updates
-            // at all, and a channel's first open runs a catch-up sync that retries the failed one.
-            .then(() => {
-                if (unmounted) {
-                    return;
-                }
-                if (navigator.onLine) {
-                    getOrCreateDeviceId(db).then((deviceId) => {
-                        if (unmounted) {
-                            return;
-                        }
-                        // Open one SSE channel per logged-in account. loadAll has refreshed
-                        // `loggedInUserIdsRef` from the server's session list (after a failed load it
-                        // still holds the boot bundle's accounts) — single-account devices get one channel.
-                        openSseConnections(sseHandlersFor(deviceId), loggedInUserIdsRef.current);
-                    });
-                    registerPushSubscriptionIfPermitted(db).catch((err) => console.error('[push] registration failed:', err));
-                }
-            })
-            .catch((err) => console.error('[boot] opening live channels failed:', err));
+        if (initial.account && navigator.onLine) {
+            // Background only: a device with an empty calendar store gets its list without waiting
+            // for the supervisor's first sync. Connecting itself is the supervisor's job (below).
+            void refreshCalendarOptions(db);
+            void raiseInitialSyncIfNoCursor(initial.account.id);
+        }
         return () => {
-            unmounted = true; // guards the .then() callback below (local scope)
             unmountedRef.current = true; // guards triggerAppResourceRefresh inside syncAndRefresh (shared scope)
             isFirstOnlineRender.current = true; // reset so the isOnline effect skips correctly on Strict Mode remount
             closeSseConnections();
             navigator.serviceWorker?.removeEventListener('message', onSwMessage);
         };
-    }, [loadAll, onSwMessage, db, sseHandlersFor]);
+    }, [initial.account, onSwMessage, db, raiseInitialSyncIfNoCursor]);
 
     /**
-     * Online/offline effect: when the device comes back online, flushes the sync queue,
-     * re-establishes SSE, and re-registers push. Tears down SSE when going offline.
-     * Skips the initial render — mount-time handling is already done in loadAll().
+     * Online/offline effect: when the device comes back online, aligns the cookie, flushes the sync
+     * queue and runs a full sync (channels and push are the connection supervisor's). Tears down SSE
+     * and forgets verification when going offline.
+     * Skips the initial render — the connection supervisor handles mount.
      */
     useEffect(() => {
-        // Skip the initial render — mount-time online/offline handling is done in loadAll()
+        // Skip the initial render — the connection supervisor handles mount
         if (isFirstOnlineRender.current) {
             isFirstOnlineRender.current = false;
             return;
@@ -652,12 +663,9 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
                     }
                 });
             });
+            // Live channels and push re-registration are the connection supervisor's, which repairs on
+            // every return online.
             syncAndRefresh().catch((err) => console.error('[online] sync failed:', err));
-            getOrCreateDeviceId(db).then((deviceId) => {
-                openSseConnections(sseHandlersFor(deviceId), loggedInUserIdsRef.current);
-            });
-            // Re-register push in case the subscription was lost or expired while offline.
-            registerPushSubscriptionIfPermitted(db).catch((err) => console.error('[push] registration failed:', err));
         } else {
             // Close every SSE channel; they'll be re-opened when online fires
             closeSseConnections();
@@ -676,7 +684,12 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
     // the app sits on stale data until the user force-quits it. See lib/appResume.ts.
     useEffect(() => {
         let unmounted = false;
-        const stopListening = subscribeToAppResume(() => {
+        const stopListening = subscribeToAppResume(({ awayMs }) => {
+            // Back from a long background (an iOS PWA is frozen meanwhile, its live channel dead):
+            // what is on screen is no longer known to match the server until the resume sync lands.
+            if (isAwayLongEnoughToDoubtData(awayMs)) {
+                forgetNetworkVerification();
+            }
             if (isBrowserOffline()) {
                 // Nothing to do while offline, and the isOnline effect already owns the reconnect
                 // for the moment connectivity returns. A resume that finds the device offline is

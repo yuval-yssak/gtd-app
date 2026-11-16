@@ -5,15 +5,22 @@ import {
     fetchBootstrap,
     fetchDeviceStatus,
     fetchSyncOps,
+    fetchVapidConfig,
     PULL_TIMEOUT_MS,
     PUSH_TIMEOUT_MS,
     pushSyncOps,
+    registerPushEndpoint,
     STATUS_PROBE_TIMEOUT_MS,
     SyncAuthError,
 } from '../api/syncClient';
 
 function mockFetchResponse(status: number, body: unknown = {}): void {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: status >= 200 && status < 300, status, json: () => Promise.resolve(body) }));
+}
+
+/** A first-page pull request from `ts`, acknowledging the same cursor. */
+function pullRequest(ts: string) {
+    return { cursor: { ts, id: '' }, acked: { ts, id: '' }, deviceId: 'device-1', limit: 100 };
 }
 
 afterEach(() => {
@@ -41,7 +48,7 @@ describe('syncClient — 401 handling', () => {
 
     it('fetchSyncOps throws SyncAuthError on 401', async () => {
         mockFetchResponse(401);
-        await expect(fetchSyncOps('2025-01-01T00:00:00.000Z', '', '2025-01-01T00:00:00.000Z', '', 'device-1')).rejects.toBeInstanceOf(SyncAuthError);
+        await expect(fetchSyncOps(pullRequest('2025-01-01T00:00:00.000Z'))).rejects.toBeInstanceOf(SyncAuthError);
     });
 });
 
@@ -86,7 +93,7 @@ describe('syncClient — app version report', () => {
 
     it('fetchSyncOps reports the running build’s commit hash alongside the timezone', async () => {
         const fetchSpy = stubOkFetch();
-        await fetchSyncOps('2025-01-01T00:00:00.000Z', '', '2025-01-01T00:00:00.000Z', '', 'device-1');
+        await fetchSyncOps(pullRequest('2025-01-01T00:00:00.000Z'));
         const { searchParams } = requestedUrl(fetchSpy);
         expect(searchParams.get('appVersion')).toBe(__COMMIT_HASH__);
         expect(searchParams.get('timezone')).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
@@ -96,7 +103,7 @@ describe('syncClient — app version report', () => {
 describe('syncClient — reaped-device signals', () => {
     it('fetchSyncOps throws BootstrapRequiredError on 409 (device row missing server-side)', async () => {
         mockFetchResponse(409, { bootstrapRequired: true });
-        await expect(fetchSyncOps('2025-01-01T00:00:00.000Z', '', '2025-01-01T00:00:00.000Z', '', 'device-1')).rejects.toBeInstanceOf(BootstrapRequiredError);
+        await expect(fetchSyncOps(pullRequest('2025-01-01T00:00:00.000Z'))).rejects.toBeInstanceOf(BootstrapRequiredError);
     });
 
     it('fetchDeviceStatus returns the parsed registration flag', async () => {
@@ -160,7 +167,7 @@ function stubHangingFetch() {
 // badges stayed "Not verified". Each idempotent read now gives up on its own deadline.
 describe('syncClient — read deadlines', () => {
     it.each([
-        ['GET /sync/pull', PULL_TIMEOUT_MS, () => fetchSyncOps('1970-01-01T00:00:00.000Z', '', '1970-01-01T00:00:00.000Z', '', 'device-1')],
+        ['GET /sync/pull', PULL_TIMEOUT_MS, () => fetchSyncOps(pullRequest('1970-01-01T00:00:00.000Z'))],
         ['GET /sync/bootstrap', BOOTSTRAP_TIMEOUT_MS, () => fetchBootstrap('device-1')],
         ['GET /sync/device-status', STATUS_PROBE_TIMEOUT_MS, () => fetchDeviceStatus('device-1')],
     ])('%s rejects, naming its deadline, when the server never answers', async (route, deadlineMs, request) => {
@@ -197,9 +204,59 @@ describe('syncClient — read deadlines', () => {
             })),
         );
 
-        const pulled = fetchSyncOps('1970-01-01T00:00:00.000Z', '', '1970-01-01T00:00:00.000Z', '', 'device-1');
+        const pulled = fetchSyncOps(pullRequest('1970-01-01T00:00:00.000Z'));
         await vi.advanceTimersByTimeAsync(PULL_TIMEOUT_MS * 2);
 
         await expect(pulled).resolves.toEqual(payload);
+    });
+});
+
+describe('syncClient — pull paging', () => {
+    it('fetchSyncOps sends the page size as `limit`', async () => {
+        const fetchSpy = vi.fn().mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve({ ops: [], serverTs: '', serverId: '' }) });
+        vi.stubGlobal('fetch', fetchSpy);
+
+        await fetchSyncOps({ ...pullRequest('2025-01-01T00:00:00.000Z'), limit: 37 });
+
+        const [firstCall] = fetchSpy.mock.calls;
+        if (!firstCall) throw new Error('expected one fetch call');
+        expect(new URL(String(firstCall[0])).searchParams.get('limit')).toBe('37');
+    });
+});
+
+// Push registration is a connection-supervisor step: a hang there used to stall every later repair,
+// and a 5xx answer used to count as "registered", so push stayed off for the page session.
+describe('syncClient — push registration requests', () => {
+    const subscription = { endpoint: 'https://push.example/1', keys: { p256dh: 'k', auth: 'a' } };
+
+    it.each([
+        ['GET /sync/config', () => fetchVapidConfig()],
+        ['POST /push/subscribe', () => registerPushEndpoint('device-1', subscription)],
+    ])('%s gives up once its deadline passes', async (route, request) => {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        stubHangingFetch();
+
+        const settled = request().then(
+            () => 'resolved',
+            (err: unknown) => err,
+        );
+        await vi.advanceTimersByTimeAsync(STATUS_PROBE_TIMEOUT_MS);
+
+        expect(String(await settled)).toContain(`${route} timed out after ${STATUS_PROBE_TIMEOUT_MS}ms`);
+    });
+
+    it('fetchVapidConfig throws on an error answer instead of reporting "no push configured"', async () => {
+        mockFetchResponse(503);
+        await expect(fetchVapidConfig()).rejects.toThrow('GET /sync/config 503');
+    });
+
+    it('fetchVapidConfig still reports a server without push keys as such', async () => {
+        mockFetchResponse(200, { vapidPublicKey: null });
+        await expect(fetchVapidConfig()).resolves.toEqual({ vapidPublicKey: null });
+    });
+
+    it('registerPushEndpoint throws on an error answer, so the step is retried', async () => {
+        mockFetchResponse(500);
+        await expect(registerPushEndpoint('device-1', subscription)).rejects.toThrow('POST /push/subscribe 500');
     });
 });

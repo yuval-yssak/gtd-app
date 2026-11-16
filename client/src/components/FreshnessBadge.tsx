@@ -1,6 +1,6 @@
 import { CloudOff, CloudUpload } from 'lucide-react';
 import { Chip, Tooltip } from '../designSystem';
-import type { ItemFreshness } from '../lib/syncFreshness';
+import type { Freshness } from '../lib/syncFreshness';
 import styles from './FreshnessBadge.module.css';
 
 // The label carries the meaning on its own: tooltips never open on touch, and a phone in an
@@ -20,7 +20,7 @@ const BADGES = {
 } as const;
 
 /** Says when the entity on screen is not known to match the server. Renders nothing when it is. */
-export function FreshnessBadge({ freshness }: { freshness: ItemFreshness }) {
+export function FreshnessBadge({ freshness }: { freshness: Freshness }) {
     if (freshness === 'current') {
         return null;
     }

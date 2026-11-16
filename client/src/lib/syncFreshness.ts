@@ -12,7 +12,7 @@
 
 import { isBrowserOffline } from './onlineStatus';
 
-export type ItemFreshness = 'current' | 'unverified' | 'unsynced';
+export type Freshness = 'current' | 'unverified' | 'unsynced';
 
 type Listener = () => void;
 
@@ -85,7 +85,7 @@ export function syncFreshnessVersion(): number {
  * Unsynced outranks unverified: a local change the server has not received is the more specific
  * (and more important) thing to tell the user, whether or not the rest was checked.
  */
-export function itemFreshness({ isOwnerVerified, hasPendingLocalChanges }: { isOwnerVerified: boolean; hasPendingLocalChanges: boolean }): ItemFreshness {
+export function entityFreshness({ isOwnerVerified, hasPendingLocalChanges }: { isOwnerVerified: boolean; hasPendingLocalChanges: boolean }): Freshness {
     if (hasPendingLocalChanges) return 'unsynced';
     return isOwnerVerified ? 'current' : 'unverified';
 }

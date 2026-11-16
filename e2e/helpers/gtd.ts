@@ -348,6 +348,13 @@ const gtdImpl = {
     // ── Device + notifications introspection (Step 1 multi-account work) ─────
     getDeviceId: (page: Page): Promise<string> => page.evaluate(() => (window as unknown as { __gtd: { getDeviceId(): Promise<string> } }).__gtd.getDeviceId()),
 
+    /** Shrinks the ops per /sync/pull page (default PULL_PAGE_SIZE) — see devTools `setPullPageSize`. */
+    setPullPageSize: (page: Page, size: number): Promise<void> =>
+        page.evaluate((pageSize) => (window as unknown as { __gtd: { setPullPageSize(size: number): void } }).__gtd.setPullPageSize(pageSize), size),
+
+    /** Shrinks how long the page must be backgrounded before its data counts as unverified (default 5 min). */
+    setLongAwayMs: (page: Page, ms: number): Promise<void> =>
+        page.evaluate((thresholdMs) => (window as unknown as { __gtd: { setLongAwayMs(ms: number): void } }).__gtd.setLongAwayMs(thresholdMs), ms),
     /** Shrinks the page's session-gate timeout (default 10s) — see devTools `setSessionGateTimeoutMs`. */
     setSessionGateTimeoutMs: (page: Page, ms: number): Promise<void> =>
         page.evaluate(

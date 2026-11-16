@@ -15,7 +15,7 @@ export async function registerPushSubscriptionIfPermitted(db: IDBPDatabase<MyDB>
 // MUST be called from a user gesture (button click): calling requestPermission() outside
 // a gesture triggers Chrome's "quiet notification UI" (a silent bell icon in the address bar)
 // which users routinely dismiss, leaving permission permanently as 'default'.
-// Returns true if permission was granted and the subscription was registered successfully.
+// Returns true only when permission is granted and the server took the subscription.
 export async function requestAndRegisterPushSubscription(db: IDBPDatabase<MyDB>): Promise<boolean> {
     if (!isBrowserPushCapable()) return false;
     if (Notification.permission === 'denied') return false;
@@ -28,8 +28,16 @@ export async function requestAndRegisterPushSubscription(db: IDBPDatabase<MyDB>)
 
     if (Notification.permission !== 'granted') return false;
 
-    await doRegister(db);
-    return true;
+    // Called from a click: a registration the server could not take (an error answer, a hang) must
+    // not escape into the page's error boundary. The caller re-reads its status and shows "not
+    // registered"; the connection supervisor retries registration on its later passes.
+    try {
+        await doRegister(db);
+        return true;
+    } catch (err) {
+        console.log('[push] registration failed; will retry', { err });
+        return false;
+    }
 }
 
 function isBrowserPushCapable(): boolean {
@@ -39,7 +47,7 @@ function isBrowserPushCapable(): boolean {
 async function doRegister(db: IDBPDatabase<MyDB>): Promise<void> {
     const { vapidPublicKey } = await fetchVapidConfig();
     if (!vapidPublicKey) {
-        return; // server has no VAPID keys configured (or request failed — fetchVapidConfig degrades gracefully)
+        return; // server has no VAPID keys configured — a failed request throws instead
     }
 
     const subscription = await getOrCreatePushSubscription(vapidPublicKey);

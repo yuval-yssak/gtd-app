@@ -3,6 +3,7 @@ import dayjs from 'dayjs';
 import { resetServerForEmails, withOneLoggedInDevice, withTwoAccountsOnOneDevice } from './helpers/context';
 import { API_URL, CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
+import { hangApi } from './helpers/networkConditions';
 import { uniqueStamp } from './helpers/uniqueStamp';
 
 /**
@@ -15,23 +16,6 @@ import { uniqueStamp } from './helpers/uniqueStamp';
 
 /** How long a screen may take to render from IndexedDB alone. Far below any network give-up. */
 const LOCAL_RENDER_BUDGET_MS = 5_000;
-
-/** Parks every API request without answering it, while the page stays online. */
-async function hangApi(page: Page) {
-    const parked: Route[] = [];
-    const park = (route: Route) => {
-        parked.push(route);
-    };
-    await page.route(`${API_URL}/**`, park);
-    return {
-        /** Lets the parked requests through and stops parking new ones. */
-        release: async () => {
-            await page.unroute(`${API_URL}/**`, park);
-            // A request parked by a page that has since navigated is gone; continuing it throws.
-            await Promise.all(parked.splice(0).map((route) => route.continue().catch(() => undefined)));
-        },
-    };
-}
 
 /**
  * A choppy connection: every API request fails at once (the connection drops mid-request), except
@@ -183,7 +167,8 @@ test.describe('lie-fi: the API hangs while the browser reports online', () => {
             await gtd.flush(page);
 
             const network = await dropApiRequests(page);
-            const bootSyncGaveUp = page.waitForEvent('console', (message) => message.text().includes('[boot] load failed'));
+            // The boot sequence's first server call failing marks the start of the spotty spell.
+            const bootSyncGaveUp = page.waitForEvent('requestfailed', (request) => request.url().includes('/sync/'));
             await page.goto(`${CLIENT_URL}/item/${item._id}`);
             await expect(page.getByTestId('itemPageWrapper')).toBeVisible({ timeout: LOCAL_RENDER_BUDGET_MS });
             await expect(page.getByTestId('freshnessBadge')).toHaveAttribute('data-freshness', 'unverified');

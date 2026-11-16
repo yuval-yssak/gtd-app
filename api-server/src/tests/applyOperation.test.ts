@@ -499,7 +499,7 @@ describe('applyAndPublishOperation — stale ops against superseded entities (20
         const persisted = await operationsDAO.findOne({ _id: op._id });
         expect(persisted?.notApplied).toBe(true);
         expect(persisted?.syncFailed).toBe(true);
-        expect(await operationsDAO.findOpsAfter(userId, dayjs(0).toISOString(), '')).not.toContainEqual(expect.objectContaining({ _id: op._id }));
+        expect(await operationsDAO.findOpsAfter(userId, { ts: dayjs(0).toISOString(), id: '' })).not.toContainEqual(expect.objectContaining({ _id: op._id }));
     });
 
     it('batch path quarantines a missing-row update while applying the rest of the batch', async () => {
@@ -525,7 +525,7 @@ describe('applyAndPublishOperation — stale ops against superseded entities (20
         const persisted = await operationsDAO.findOne({ _id: goneOp?._id ?? '' });
         expect(persisted?.notApplied).toBe(true);
         // Pull delivers only the applied op.
-        const delivered = await operationsDAO.findOpsAfter(userId, dayjs(0).toISOString(), '');
+        const delivered = await operationsDAO.findOpsAfter(userId, { ts: dayjs(0).toISOString(), id: '' });
         expect(delivered.some((op) => op._id === liveOp?._id)).toBe(true);
         expect(delivered.some((op) => op._id === goneOp?._id)).toBe(false);
     });
@@ -551,7 +551,7 @@ describe('applyAndPublishOperation — stale ops against superseded entities (20
         expect(op.notApplied).toBeUndefined();
         expect(op.syncFailed).toBeUndefined();
         // Still delivered to other devices via pull.
-        const delivered = await operationsDAO.findOpsAfter(userId, dayjs(0).toISOString(), '');
+        const delivered = await operationsDAO.findOpsAfter(userId, { ts: dayjs(0).toISOString(), id: '' });
         expect(delivered.some((delivered0) => delivered0._id === op._id)).toBe(true);
     });
 
@@ -584,7 +584,9 @@ describe('applyAndPublishOperation — stale ops against superseded entities (20
         if (!persisted) throw new Error('expected the skipped op to be logged');
         expect(persisted.notApplied).toBe(true);
         expect(persisted.failureReason).toBe('entity_conflict');
-        expect(await operationsDAO.findOpsAfter(userId, dayjs(0).toISOString(), '')).not.toContainEqual(expect.objectContaining({ _id: persisted._id }));
+        expect(await operationsDAO.findOpsAfter(userId, { ts: dayjs(0).toISOString(), id: '' })).not.toContainEqual(
+            expect.objectContaining({ _id: persisted._id }),
+        );
     });
 });
 
@@ -630,7 +632,7 @@ describe('applyAndPublishOperation — never-applied snapshots stay out of pull 
         expect(orphan?.status).toBe('inbox');
         expect(orphan?.calendarEventId).toBeUndefined();
         // Not delivered to devices — they would otherwise keep a phantom second calendar item.
-        expect(await operationsDAO.findOpsAfter(userId, dayjs(0).toISOString(), '')).not.toContainEqual(expect.objectContaining({ _id: op._id }));
+        expect(await operationsDAO.findOpsAfter(userId, { ts: dayjs(0).toISOString(), id: '' })).not.toContainEqual(expect.objectContaining({ _id: op._id }));
         // And never pushed to Google — the incident overwrote the real event with the orphan's notes.
         expect(pushSpy).not.toHaveBeenCalled();
     });
@@ -653,7 +655,7 @@ describe('applyAndPublishOperation — never-applied snapshots stay out of pull 
         expect(outcome).toBe('skipped_stale');
         expect(op.notApplied).toBeUndefined();
         expect((await itemsDAO.findByOwnerAndId('owner-item', userId))?.title).toBe('Review PR #2241');
-        expect(await operationsDAO.findOpsAfter(userId, dayjs(0).toISOString(), '')).toContainEqual(expect.objectContaining({ _id: op._id }));
+        expect(await operationsDAO.findOpsAfter(userId, { ts: dayjs(0).toISOString(), id: '' })).toContainEqual(expect.objectContaining({ _id: op._id }));
         expect(pushSpy).not.toHaveBeenCalled();
     });
 
@@ -710,7 +712,7 @@ describe('applyAndPublishOperation — never-applied snapshots stay out of pull 
         expect((await operationsDAO.findOne({ _id: conflictOp._id }))?.notApplied).toBe(true);
         expect(staleOp.notApplied).toBeUndefined();
         expect(appliedOp.notApplied).toBeUndefined();
-        const delivered = (await operationsDAO.findOpsAfter(userId, dayjs(0).toISOString(), '')).map((op) => op._id);
+        const delivered = (await operationsDAO.findOpsAfter(userId, { ts: dayjs(0).toISOString(), id: '' })).map((op) => op._id);
         expect(delivered).toContain(staleOp._id);
         expect(delivered).toContain(appliedOp._id);
         expect(delivered).not.toContain(conflictOp._id);

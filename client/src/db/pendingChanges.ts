@@ -1,7 +1,7 @@
 import type { IDBPDatabase } from 'idb';
 import type { EntityType, MyDB } from '../types/MyDB';
 
-interface EntityRef {
+export interface EntityRef {
     entityType: EntityType;
     entityId: string;
 }

@@ -13,11 +13,20 @@ import { evaporateUserAndRecover } from './evaporateUser';
 import { bootstrapFromServerUnguarded, flushSyncQueue, pullFromServerUnguarded, withSessionGate } from './syncHelpers';
 import { countQueuedOpsForUser, isDeviceUnregistered, recoverFromBootstrapRequiredUnderGate } from './syncRecovery';
 
+/** The auth server answered with an error rather than an answer: treat as unreachable, retry later. */
+class AuthServerUnreachableError extends Error {
+    constructor(call: string, status: number) {
+        super(`[multi-sync] ${call} answered ${status}`);
+        this.name = 'AuthServerUnreachableError';
+    }
+}
+
 /**
  * Optional callbacks injected by tests + AppDataProvider so the orchestrator can drive
  * calendar sync per-user without taking a hard dependency on the calendar API module
  * (which would create a circular import — AppDataProvider imports both this and the API).
  */
+
 export interface SyncAllLoggedInUsersOptions {
     /** Called once per pass after pull settles, with the userId being synced. */
     onUserSynced?: (userId: string) => Promise<void> | void;
@@ -258,7 +267,7 @@ export async function withAccountSession<T>(db: IDBPDatabase<MyDB>, userId: stri
 /**
  * Converges the server-side Better Auth active-session cookie onto IDB's `activeAccount` — IDB is
  * the user's intent (the offline-capable account switch writes ONLY IDB and reloads; see
- * `useAccounts.switchToAccount`). Called from AppDataProvider's boot path (before the first
+ * `useAccounts.switchToAccount`). Called by the connection supervisor (before the first
  * `syncAndRefresh`) and from the online-transition path BEFORE the unscoped `flushSyncQueue` —
  * that ordering closes two windows where the drifted cookie caused misattribution: a Service
  * Worker push-driven flush authenticating as the previous account, and the online flush 400-ing
@@ -267,28 +276,36 @@ export async function withAccountSession<T>(db: IDBPDatabase<MyDB>, userId: stri
  * Alignment already correct → no-op (one cheap getSession call). Misaligned → pivot the cookie
  * via `multiSession.setActive` to match IDB. No session for the IDB-active account at all →
  * dispatch the reauth signal so the user gets the dialog/banner instead of silent stale data.
- * Network errors are swallowed: offline means the cookie can't drift further anyway, and the
- * next online pass re-runs this. The sync orchestrator's `restorePreviouslyActiveSession`
- * already converges the cookie on every pass — this is a deterministic front-runner.
+ * The sync orchestrator's `restorePreviouslyActiveSession` already converges the cookie on every
+ * pass — this is a deterministic front-runner.
+ *
+ * Resolves true once the cookie is settled (aligned, nothing to align, or the account needs a fresh
+ * sign-in — which no retry fixes), false when the server could not be reached (offline, a hang, an
+ * error answer), so the connection supervisor tries again.
  */
-export async function reconcileActiveSessionCookie(db: IDBPDatabase<MyDB>): Promise<void> {
+export async function reconcileActiveSessionCookie(db: IDBPDatabase<MyDB>): Promise<boolean> {
     return withSessionGate(async () => {
         const active = await getActiveAccount(db);
         if (!active) {
-            return;
+            return true;
         }
         try {
             await pivotCookieToAccount(active.id);
+            return true;
         } catch (err) {
-            // Offline or server unreachable — reconcile is deferred to the next online transition.
-            console.warn('[multi-sync] reconcileActiveSessionCookie skipped (network unreachable)', err);
+            // Expected on a spotty network, not a failure: the supervisor retries, going online re-runs it.
+            console.log('[multi-sync] reconcileActiveSessionCookie skipped (network unreachable)', { err });
+            return false;
         }
     });
 }
 
 /** The probe-compare-pivot chain of the cookie reconcile. Caller holds the session gate. */
 async function pivotCookieToAccount(activeUserId: string): Promise<void> {
-    const { data: session } = await authClient.getSession();
+    const { data: session, error } = await authClient.getSession();
+    if (error) {
+        throw new AuthServerUnreachableError('getSession', error.status);
+    }
     if (session?.user.id === activeUserId) {
         return;
     }
@@ -320,7 +337,12 @@ async function refreshSessionForUser(userId: string): Promise<DeviceSession | un
 
 /** Reads every device session and indexes it by user id so the orchestrator can pivot in O(1). */
 async function loadDeviceSessionsByUserId(): Promise<Map<string, DeviceSession>> {
-    const { data: sessions } = await authClient.multiSession.listDeviceSessions();
+    const { data: sessions, error } = await authClient.multiSession.listDeviceSessions();
+    // An error answer (a Cloudflare 5xx, an auth-server failure) says nothing about which sessions
+    // exist; read as an empty list, it made a working login look signed out.
+    if (error) {
+        throw new AuthServerUnreachableError('listDeviceSessions', error.status);
+    }
     const map = new Map<string, DeviceSession>();
     for (const s of sessions ?? []) {
         map.set(s.user.id, { sessionToken: s.session.token, userId: s.user.id });

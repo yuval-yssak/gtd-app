@@ -10,16 +10,34 @@
 export function startDeadline(ms: number) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(new DOMException(`No answer within ${ms}ms`, 'TimeoutError')), ms);
-    return { signal: controller.signal, clear: () => clearTimeout(timer) };
+    return { signal: controller.signal, clear: () => clearTimeout(timer), abort: (reason: unknown) => controller.abort(reason) };
 }
 
-/** Fetches, giving up if the response headers have not arrived within `ms`. */
-export async function fetchWithHeadersDeadline(url: string, init: RequestInit & { deadlineMs: number }): Promise<Response> {
-    const { deadlineMs, ...requestInit } = init;
+/**
+ * Fetches, giving up if the response headers have not arrived within `ms`. A caller's own signal
+ * still aborts the request (forwarded by hand: `AbortSignal.any` is newer than the Safari target).
+ */
+export async function fetchWithHeadersDeadline(url: string | URL | Request, init: RequestInit & { deadlineMs: number }): Promise<Response> {
+    const { deadlineMs, signal: callerSignal, ...requestInit } = init;
     const deadline = startDeadline(deadlineMs);
+    const stopForwarding = forwardAbort(callerSignal, deadline.abort);
     try {
         return await fetch(url, { ...requestInit, signal: deadline.signal });
     } finally {
         deadline.clear();
+        stopForwarding();
     }
+}
+
+function forwardAbort(source: AbortSignal | null | undefined, abort: (reason: unknown) => void): () => void {
+    if (!source) {
+        return () => undefined;
+    }
+    if (source.aborted) {
+        abort(source.reason);
+        return () => undefined;
+    }
+    const onAbort = () => abort(source.reason);
+    source.addEventListener('abort', onAbort, { once: true });
+    return () => source.removeEventListener('abort', onAbort);
 }

@@ -3,6 +3,7 @@ import dayjs from 'dayjs';
 import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { recordOperation } from '../lib/operationHelpers.js';
+import { PULL_PAGE_MAX } from '../lib/pullPaging.js';
 import { STALE_DEVICE_DAYS } from '../lib/purgeFloor.js';
 import { sseConnectionCountForUser } from '../lib/sseConnections.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
@@ -108,9 +109,19 @@ async function push(sessionCookie: string, deviceId: string, ops: ReturnType<typ
 
 async function pull(
     sessionCookie: string,
-    opts: { since?: string; sinceId?: string; ackedTs?: string; ackedId?: string; deviceId?: string; timezone?: string; appVersion?: string } = {},
+    opts: {
+        since?: string;
+        sinceId?: string;
+        ackedTs?: string;
+        ackedId?: string;
+        deviceId?: string;
+        timezone?: string;
+        appVersion?: string;
+        limit?: string;
+    } = {},
 ) {
     const params = new URLSearchParams();
+    if (opts.limit !== undefined) params.set('limit', opts.limit);
     if (opts.since !== undefined) params.set('since', opts.since);
     if (opts.sinceId !== undefined) params.set('sinceId', opts.sinceId);
     if (opts.ackedTs !== undefined) params.set('ackedTs', opts.ackedTs);
@@ -1949,5 +1960,212 @@ describe('App version reporting', () => {
 
         const state = await db.collection<DeviceSyncStateInterface>('deviceSyncState').findOne({ _id: `dev-ver::${userId}` });
         expect(state?.appVersion).toBe('8b77e17');
+    });
+});
+
+// ─── GET /sync/pull — paging ────────────────────────────────────────────────
+
+interface PullPage {
+    ops: { _id: string; entityId: string }[];
+    serverTs: string;
+    serverId: string;
+    hasMore?: boolean;
+}
+
+/** Seeds ops straight into the collection so a test controls every (ts, _id) — the cursor's total order. */
+async function seedOps(userId: string, cursors: { ts: string; id: string }[]) {
+    await db.collection<OperationInterface>('operations').insertMany(
+        cursors.map(({ ts, id }) => ({
+            _id: id,
+            user: userId,
+            deviceId: 'dev-writer',
+            ts,
+            entityType: 'item' as const,
+            entityId: `item-${id}`,
+            opType: 'create' as const,
+            snapshot: { _id: `item-${id}`, user: userId, status: 'inbox', title: id, createdTs: ts, updatedTs: ts },
+        })),
+    );
+}
+
+async function pullPage(cookie: string, cursor: { ts: string; id: string }, limit: string) {
+    const res = await pull(cookie, { since: cursor.ts, sinceId: cursor.id, ackedTs: cursor.ts, ackedId: cursor.id, deviceId: 'dev-reader', limit });
+    expect(res.status).toBe(200);
+    return (await res.json()) as PullPage;
+}
+
+/** Follows `hasMore` from the epoch the way the client does, collecting every delivered op id. */
+async function pullAllPages(cookie: string, limit: string) {
+    const delivered: string[] = [];
+    const cursor = { ts: dayjs(0).toISOString(), id: '' };
+    for (let page = 0; page < 20; page += 1) {
+        const body = await pullPage(cookie, cursor, limit);
+        delivered.push(...body.ops.map((op) => op._id));
+        cursor.ts = body.serverTs;
+        cursor.id = body.serverId;
+        if (!body.hasMore) {
+            return { delivered, pages: page + 1 };
+        }
+    }
+    throw new Error('paging never finished');
+}
+
+describe('GET /sync/pull — paging', () => {
+    const T1 = '2025-01-01T00:00:00.001Z';
+    const T2 = '2025-01-01T00:00:00.002Z';
+    const T3 = '2025-01-01T00:00:00.003Z';
+
+    async function signInReader() {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        await registerDevice('dev-reader', userId);
+        return { cookie, userId };
+    }
+
+    it('returns at most `limit` ops, flags hasMore, and points the cursor at the last op returned', async () => {
+        const { cookie, userId } = await signInReader();
+        await seedOps(userId, [
+            { ts: T1, id: 'a' },
+            { ts: T2, id: 'b' },
+            { ts: T3, id: 'c' },
+        ]);
+
+        const body = await pullPage(cookie, { ts: dayjs(0).toISOString(), id: '' }, '2');
+
+        expect(body.ops.map((op) => op._id)).toEqual(['a', 'b']);
+        expect(body.hasMore).toBe(true);
+        expect({ ts: body.serverTs, id: body.serverId }).toEqual({ ts: T2, id: 'b' });
+    });
+
+    it('the last page reports hasMore false', async () => {
+        const { cookie, userId } = await signInReader();
+        await seedOps(userId, [
+            { ts: T1, id: 'a' },
+            { ts: T2, id: 'b' },
+        ]);
+
+        const body = await pullPage(cookie, { ts: T1, id: 'a' }, '2');
+
+        expect(body.ops.map((op) => op._id)).toEqual(['b']);
+        expect(body.hasMore).toBe(false);
+    });
+
+    it('delivers every op exactly once across pages, even when one millisecond is split between two pages', async () => {
+        const { cookie, userId } = await signInReader();
+        const sameMs = '2025-01-01T00:00:00.500Z';
+        await seedOps(userId, [
+            { ts: '2025-01-01T00:00:00.100Z', id: 'a' },
+            { ts: sameMs, id: 'm1' },
+            { ts: sameMs, id: 'm2' },
+            { ts: sameMs, id: 'm3' },
+            { ts: '2025-01-01T00:00:00.900Z', id: 'z' },
+        ]);
+
+        // limit 2: pages are [a, m1], [m2, m3], [z] — the 500ms millisecond straddles pages 1 and 2.
+        const { delivered, pages } = await pullAllPages(cookie, '2');
+
+        expect(delivered).toEqual(['a', 'm1', 'm2', 'm3', 'z']);
+        expect(pages).toBe(3);
+    });
+
+    it('a page reaching into the holdback window carries the whole window, holds the cursor back and ends paging', async () => {
+        setHoldbackSeconds('5');
+        const { cookie, userId } = await signInReader();
+        const fresh = dayjs().subtract(1, 'second').toISOString();
+        await seedOps(userId, [
+            { ts: T1, id: 'a' },
+            { ts: fresh, id: 'f1' },
+            { ts: fresh, id: 'f2' },
+        ]);
+
+        const first = await pullPage(cookie, { ts: dayjs(0).toISOString(), id: '' }, '1');
+        expect(first.ops.map((op) => op._id)).toEqual(['a']);
+        expect(first.hasMore).toBe(true);
+        expect({ ts: first.serverTs, id: first.serverId }).toEqual({ ts: T1, id: 'a' });
+
+        // This page reaches into the holdback window: the cursor is held back (an op could still
+        // commit behind it), so paging ends here — continuing from the held-back cursor would fetch
+        // this same page again. The page therefore carries every op in the window (a few seconds of
+        // writes), or the ones past `limit` would wait for whatever pull happens to come next.
+        const second = await pullPage(cookie, { ts: first.serverTs, id: first.serverId }, '1');
+        expect(second.ops.map((op) => op._id)).toEqual(['f1', 'f2']);
+        expect(second.hasMore).toBe(false);
+        expect(second.serverTs < fresh).toBe(true);
+        expect(second.serverId).toBe('');
+    });
+
+    it('skips quarantined (notApplied) ops before counting the page', async () => {
+        const { cookie, userId } = await signInReader();
+        await seedOps(userId, [
+            { ts: T1, id: 'a' },
+            { ts: T2, id: 'q' },
+            { ts: T3, id: 'b' },
+            { ts: '2025-01-01T00:00:00.004Z', id: 'c' },
+        ]);
+        await db.collection<OperationInterface>('operations').updateOne({ _id: 'q' }, { $set: { notApplied: true } });
+
+        const body = await pullPage(cookie, { ts: dayjs(0).toISOString(), id: '' }, '2');
+
+        expect(body.ops.map((op) => op._id)).toEqual(['a', 'b']);
+        expect(body.hasMore).toBe(true);
+    });
+
+    it('purges acknowledged ops only once the last page is served, not between pages', async () => {
+        const { cookie, userId } = await signInReader();
+        await seedOps(userId, [
+            { ts: T1, id: 'a' },
+            { ts: T2, id: 'b' },
+            { ts: T3, id: 'c' },
+        ]);
+        const isStored = async (id: string) => (await db.collection<OperationInterface>('operations').findOne({ _id: id })) !== null;
+
+        // Page 2 acknowledges page 1 ('a') but more remain: no purge yet.
+        const second = await pullPage(cookie, { ts: T1, id: 'a' }, '1');
+        expect(second.hasMore).toBe(true);
+        await new Promise<void>((r) => setTimeout(r, 200));
+        expect(await isStored('a')).toBe(true);
+
+        // The last page acknowledges 'b' and ends paging: the purge now runs.
+        const last = await pullPage(cookie, { ts: T2, id: 'b' }, '1');
+        expect(last.hasMore).toBe(false);
+        await waitForPurge(async () => !(await isStored('a')));
+        expect(await isStored('a')).toBe(false);
+    });
+
+    it('without `limit` returns everything in one response, as old clients expect', async () => {
+        const { cookie, userId } = await signInReader();
+        await seedOps(userId, [
+            { ts: T1, id: 'a' },
+            { ts: T2, id: 'b' },
+            { ts: T3, id: 'c' },
+        ]);
+
+        const res = await pull(cookie, { since: dayjs(0).toISOString(), deviceId: 'dev-reader' });
+        const body = (await res.json()) as PullPage;
+
+        expect(body.ops.map((op) => op._id)).toEqual(['a', 'b', 'c']);
+        expect(body.hasMore).toBeUndefined();
+    });
+
+    it('caps an oversized limit at the server maximum', async () => {
+        const { cookie, userId } = await signInReader();
+        const cursors = Array.from({ length: PULL_PAGE_MAX + 1 }, (_, index) => ({
+            ts: dayjs('2025-01-01T00:00:00.000Z').add(index, 'ms').toISOString(),
+            id: `op-${String(index).padStart(4, '0')}`,
+        }));
+        await seedOps(userId, cursors);
+
+        const body = await pullPage(cookie, { ts: dayjs(0).toISOString(), id: '' }, String(PULL_PAGE_MAX * 10));
+
+        expect(body.ops).toHaveLength(PULL_PAGE_MAX);
+        expect(body.hasMore).toBe(true);
+    });
+
+    it.each(['0', '-3', 'abc', '2.5'])('rejects limit=%s with 400', async (limit) => {
+        const { cookie } = await signInReader();
+
+        const res = await pull(cookie, { since: dayjs(0).toISOString(), deviceId: 'dev-reader', limit });
+
+        expect(res.status).toBe(400);
     });
 });

@@ -45,22 +45,11 @@ test.describe('cross-account sync cursor (per-user)', () => {
         await resetServerForEmails([emailA, emailB]);
         await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page, { active, secondary }) => {
             await waitForBothSseChannels(page, active.userId, secondary.userId);
-            // The boot effect's syncAllLoggedInUsers writes per-user cursor rows; assert they exist.
-            await page.waitForFunction(
-                ([a, b]) => {
-                    const harness = (
-                        window as unknown as {
-                            __gtd: { syncState(): Promise<{ syncCursors: Array<{ userId: string }> }> };
-                        }
-                    ).__gtd;
-                    return harness.syncState().then(({ syncCursors }) => {
-                        const ids = new Set(syncCursors.map((c) => c.userId));
-                        return ids.has(a as string) && ids.has(b as string);
-                    });
-                },
-                [active.userId, secondary.userId] as const,
-                { timeout: 10_000 },
-            );
+            // The boot sync writes one cursor row per user. Polled from the test side: a waitForFunction
+            // predicate returning a promise counts as truthy at once and would not wait at all.
+            await expect
+                .poll(async () => new Set((await gtd.syncState(page)).syncCursors.filter((c) => c.lastSyncedTs).map((c) => c.userId)), { timeout: 15_000 })
+                .toEqual(new Set([active.userId, secondary.userId]));
 
             const state = await gtd.syncState(page);
             expect(state.deviceMeta?.deviceId).toBeTruthy();
@@ -84,22 +73,11 @@ test.describe('cross-account sync cursor (per-user)', () => {
         await resetServerForEmails([emailA, emailB]);
         await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page, { active, secondary }) => {
             await waitForBothSseChannels(page, active.userId, secondary.userId);
-            // Wait for both per-user rows to land (boot pull writes them).
-            await page.waitForFunction(
-                ([a, b]) => {
-                    const harness = (
-                        window as unknown as {
-                            __gtd: { syncState(): Promise<{ syncCursors: Array<{ userId: string; lastSyncedTs: string }> }> };
-                        }
-                    ).__gtd;
-                    return harness.syncState().then(({ syncCursors }) => {
-                        const ids = new Set(syncCursors.map((c) => c.userId));
-                        return ids.has(a as string) && ids.has(b as string) && syncCursors.every((c) => c.lastSyncedTs);
-                    });
-                },
-                [active.userId, secondary.userId] as const,
-                { timeout: 10_000 },
-            );
+            // The boot sync writes one cursor row per user. Polled from the test side: a waitForFunction
+            // predicate returning a promise counts as truthy at once and would not wait at all.
+            await expect
+                .poll(async () => new Set((await gtd.syncState(page)).syncCursors.filter((c) => c.lastSyncedTs).map((c) => c.userId)), { timeout: 15_000 })
+                .toEqual(new Set([active.userId, secondary.userId]));
 
             const state = await gtd.syncState(page);
             // Both rows exist, keyed by their respective userIds — the v4 schema-split contract.

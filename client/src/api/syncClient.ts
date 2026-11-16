@@ -37,6 +37,27 @@ export interface PullPayload {
     ops: ServerOp[];
     serverTs: string;
     serverId: string; // `_id` of the last returned op (or the echoed `sinceId` when no ops) — next pull's `sinceId`
+    /** More ops wait after this page. Absent from servers that predate paging — treat as false. */
+    hasMore?: boolean;
+}
+
+/** A position in the op log, on the totally-ordered `(ts, _id)` pair. */
+export interface OpCursor {
+    ts: string;
+    id: string;
+}
+
+/**
+ * One page of `/sync/pull`. `cursor` is where to read from; `acked` is the highest cursor the device
+ * has durably stored, which the server records as its purge floor. They are equal in steady state
+ * but distinct by contract, so a lost or partially-applied response never advances the floor.
+ */
+export interface PullPageRequest {
+    cursor: OpCursor;
+    acked: OpCursor;
+    deviceId: string;
+    /** Most ops to return in this page. */
+    limit: number;
 }
 
 // ── Network functions ─────────────────────────────────────────────────────────
@@ -87,17 +108,21 @@ function timezoneReportParam(): Record<string, string> {
 export const PULL_TIMEOUT_MS = 30_000;
 /** Generous: a bootstrap ships the whole account, possibly over a slow link — only a true hang should hit it. */
 export const BOOTSTRAP_TIMEOUT_MS = 120_000;
+/** Small requests: the device-status probe and push registration's config read and subscribe. */
 export const STATUS_PROBE_TIMEOUT_MS = 15_000;
 
-/** A sync read: the route names it in errors and logs, the deadline bounds the wait for headers. */
-interface SyncRead {
+/**
+ * A request that is safe to abort and send again (a read, or an upsert like /push/subscribe). The
+ * route names it in errors and logs; the deadline bounds the wait for headers.
+ */
+interface IdempotentRequest {
     route: string;
     url: string;
     init: RequestInit;
 }
 
-/** Fetches a sync read; a timeout rejects with an Error naming the route, for the sync logs. */
-async function fetchSyncRead({ route, url, init }: SyncRead, deadlineMs: number): Promise<Response> {
+/** Fetches with a headers deadline; a timeout rejects with an Error naming the route, for the sync logs. */
+async function fetchIdempotent({ route, url, init }: IdempotentRequest, deadlineMs: number): Promise<Response> {
     try {
         return await fetchWithHeadersDeadline(url, { ...init, deadlineMs });
     } catch (err) {
@@ -133,7 +158,7 @@ export async function fetchBootstrap(deviceId: string, deviceLabel?: string): Pr
     if (deviceLabel) {
         params.set('deviceLabel', deviceLabel);
     }
-    const res = await fetchSyncRead(
+    const res = await fetchIdempotent(
         {
             route: 'GET /sync/bootstrap',
             url: `${API_SERVER}/sync/bootstrap?${params}`,
@@ -145,14 +170,19 @@ export async function fetchBootstrap(deviceId: string, deviceLabel?: string): Pr
     return res.json() as Promise<BootstrapPayload>;
 }
 
-// The cursor is the compound pair `(since, sinceId)` — ops are paginated on `(ts, _id)` so a same-`ts`
-// batch can't be split across pulls and lose ops. `(ackedTs, ackedId)` is the highest pair the caller
-// has *durably persisted to IndexedDB*; the server records it as the device's purge floor — distinct
-// from `(since, sinceId)` so a lost or partial response never advances the floor past ops the client
-// never committed. In steady state callers pass the ack pair equal to the since pair.
-export async function fetchSyncOps(since: string, sinceId: string, ackedTs: string, ackedId: string, deviceId: string): Promise<PullPayload> {
-    const params = new URLSearchParams({ since, sinceId, ackedTs, ackedId, deviceId, ...deviceReportParams() });
-    const res = await fetchSyncRead(
+// Ops are paginated on the compound `(ts, _id)` cursor, so a same-`ts` batch split across pages loses
+// nothing. See PullPageRequest for the since/ack contract.
+export async function fetchSyncOps({ cursor, acked, deviceId, limit }: PullPageRequest): Promise<PullPayload> {
+    const params = new URLSearchParams({
+        since: cursor.ts,
+        sinceId: cursor.id,
+        ackedTs: acked.ts,
+        ackedId: acked.id,
+        deviceId,
+        limit: String(limit),
+        ...deviceReportParams(),
+    });
+    const res = await fetchIdempotent(
         { route: 'GET /sync/pull', url: `${API_SERVER}/sync/pull?${params}`, init: { credentials: 'include', headers: { [DEVICE_ID_HEADER]: deviceId } } },
         PULL_TIMEOUT_MS,
     );
@@ -173,7 +203,7 @@ export async function fetchSyncOps(since: string, sinceId: string, ackedTs: stri
  */
 export async function fetchDeviceStatus(deviceId: string): Promise<{ registered: boolean }> {
     const params = new URLSearchParams({ deviceId });
-    const res = await fetchSyncRead(
+    const res = await fetchIdempotent(
         {
             route: 'GET /sync/device-status',
             url: `${API_SERVER}/sync/device-status?${params}`,
@@ -185,18 +215,32 @@ export async function fetchDeviceStatus(deviceId: string): Promise<{ registered:
     return res.json() as Promise<{ registered: boolean }>;
 }
 
-// Returns { vapidPublicKey: null } on failure so the caller degrades gracefully without throwing.
+/**
+ * Throws on an error answer or a hang, so the connection supervisor retries push registration; only a
+ * server that has no push keys configured answers `{ vapidPublicKey: null }`.
+ */
 export async function fetchVapidConfig(): Promise<{ vapidPublicKey: string | null }> {
-    const res = await fetch(`${API_SERVER}/sync/config`, { credentials: 'include' });
-    if (!res.ok) return { vapidPublicKey: null };
+    const res = await fetchIdempotent(
+        { route: 'GET /sync/config', url: `${API_SERVER}/sync/config`, init: { credentials: 'include' } },
+        STATUS_PROBE_TIMEOUT_MS,
+    );
+    if (!res.ok) throwForStatus(res, 'GET /sync/config');
     return res.json() as Promise<{ vapidPublicKey: string | null }>;
 }
 
 export async function registerPushEndpoint(deviceId: string, subscription: PushSubscriptionJSON): Promise<void> {
-    await fetch(`${API_SERVER}/push/subscribe`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json', [DEVICE_ID_HEADER]: deviceId },
-        body: JSON.stringify({ deviceId, endpoint: subscription.endpoint, keys: subscription.keys }),
-    });
+    const res = await fetchIdempotent(
+        {
+            route: 'POST /push/subscribe',
+            url: `${API_SERVER}/push/subscribe`,
+            init: {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json', [DEVICE_ID_HEADER]: deviceId },
+                body: JSON.stringify({ deviceId, endpoint: subscription.endpoint, keys: subscription.keys }),
+            },
+        },
+        STATUS_PROBE_TIMEOUT_MS,
+    );
+    if (!res.ok) throwForStatus(res, 'POST /push/subscribe');
 }

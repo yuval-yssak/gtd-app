@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
     _resetSyncFreshnessForTests,
+    entityFreshness,
     forgetNetworkVerification,
     forgetNetworkVerificationFor,
     isAnyAccountVerified,
     isVerifiedWithNetwork,
-    itemFreshness,
     markVerifiedWithNetwork,
     notifySyncQueueChanged,
     subscribeToSyncFreshness,
@@ -98,17 +98,17 @@ describe('change notifications', () => {
     });
 });
 
-describe('itemFreshness', () => {
+describe('entityFreshness', () => {
     it('is current when the owner is verified and nothing is queued', () => {
-        expect(itemFreshness({ isOwnerVerified: true, hasPendingLocalChanges: false })).toBe('current');
+        expect(entityFreshness({ isOwnerVerified: true, hasPendingLocalChanges: false })).toBe('current');
     });
 
     it('is unverified when the owner has not been checked with the server', () => {
-        expect(itemFreshness({ isOwnerVerified: false, hasPendingLocalChanges: false })).toBe('unverified');
+        expect(entityFreshness({ isOwnerVerified: false, hasPendingLocalChanges: false })).toBe('unverified');
     });
 
     it('reports unsynced local changes ahead of verification — they are what the server lacks', () => {
-        expect(itemFreshness({ isOwnerVerified: true, hasPendingLocalChanges: true })).toBe('unsynced');
-        expect(itemFreshness({ isOwnerVerified: false, hasPendingLocalChanges: true })).toBe('unsynced');
+        expect(entityFreshness({ isOwnerVerified: true, hasPendingLocalChanges: true })).toBe('unsynced');
+        expect(entityFreshness({ isOwnerVerified: false, hasPendingLocalChanges: true })).toBe('unsynced');
     });
 });

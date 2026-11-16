@@ -11,6 +11,7 @@ import routinesDAO from '../dataAccess/routinesDAO.js';
 import workContextsDAO from '../dataAccess/workContextsDAO.js';
 import { isDuplicateKeyError } from '../lib/applyEntityOp.js';
 import { applyAndPublishOperations, OperationValidationError, type RawOperation } from '../lib/applyOperation.js';
+import { cutToLimit, isCursorAfter, nextPullCursor, parsePullLimit, shouldCarryRestOfWindow, withRestOfWindow } from '../lib/pullPaging.js';
 import { computePurgeFloor, STALE_DEVICE_DAYS } from '../lib/purgeFloor.js';
 import { type ReassignParams, reassignEntity } from '../lib/reassignEntity.js';
 import { addSseConnection, notifyUserViaSse, removeSseConnection } from '../lib/sseConnections.js';
@@ -115,9 +116,18 @@ function cursorHoldbackBoundary(): { ts: string; id: string } {
     return { ts: dayjs().subtract(cursorHoldbackSeconds(), 'second').toISOString(), id: '' };
 }
 
-/** Strict `>` over the compound `(ts, id)` op-cursor order shared by pull, bootstrap, and purge. */
-function isCursorAfter(a: { ts: string; id: string }, b: { ts: string; id: string }): boolean {
-    return a.ts > b.ts || (a.ts === b.ts && a.id > b.id);
+/**
+ * One page of ops after `cursor`. Reads one op past `limit` to learn whether more remain without a
+ * second query. No limit → every op (old clients), and never `hasMoreOps`. A page cut off inside
+ * the holdback window also carries the rest of the window (see `shouldCarryRestOfWindow`).
+ */
+async function readPullPage(userId: string, request: { cursor: { ts: string; id: string }; limit: number | undefined }, holdback: { ts: string; id: string }) {
+    const { cursor, limit } = request;
+    const page = cutToLimit(await operationsDAO.findOpsAfter(userId, cursor, limit === undefined ? undefined : limit + 1), limit);
+    if (!shouldCarryRestOfWindow(page, holdback) || page.lastOp === undefined) {
+        return page;
+    }
+    return withRestOfWindow(page, await operationsDAO.findOpsAfter(userId, page.lastOp));
 }
 
 async function purgeStaleDevices(userId: string): Promise<void> {
@@ -423,6 +433,12 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
         const sinceId = c.req.query('sinceId') ?? '';
         const ackedId = c.req.query('ackedId');
         const deviceId = c.req.query('deviceId');
+        // Optional page size. Absent (old clients) → everything since the cursor in one response.
+        const parsedLimit = parsePullLimit(c.req.query('limit'));
+        if (!parsedLimit.ok) {
+            return c.json({ error: 'limit must be a positive integer' }, 400);
+        }
+        const { limit } = parsedLimit;
 
         // Reaped-device guard — BEFORE any read or write. Invariant: ops are only purged
         // at-or-below the floor = min acked cursor over REGISTERED rows, so a device whose row
@@ -434,29 +450,23 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
             return c.json({ bootstrapRequired: true }, 409);
         }
 
-        const ops = await operationsDAO.findOpsAfter(user.id, since, sinceId);
-
-        // `serverTs`/`serverId` mark the cursor the client should pull from next. Normally that is
-        // the high-water mark of what we just returned — paginating on the totally-ordered `(ts,_id)`
-        // pair means a same-`ts` batch split across two pulls loses nothing. Two clamps apply:
-        //  - Never advance INTO the holdback window: an op committed late (build→insert gap,
-        //    cross-instance clock skew) inside that window would otherwise land behind the
-        //    forward-only cursor and be skipped forever. Fresh ops are still RETURNED — they are
-        //    just re-checked by the next pull, which is idempotent.
-        //  - Never advertise BELOW the incoming cursor: a client already past the holdback boundary
-        //    (legacy wall-clock bootstrap row, cross-instance skew) must get its own cursor echoed
-        //    back, not a lower one its forward-only guard would reject on every pull.
-        // An empty pull may still advance the cursor up to the holdback boundary: ops can no longer
-        // commit with a `ts` older than that (write-time identity + holdback bound the lag), so the
-        // scanned-and-empty range is provably final and skipping it forward is safe.
-        const lastOp = ops.at(-1);
         const holdback = cursorHoldbackBoundary();
-        const incoming = { ts: since, id: sinceId };
-        const heldBackHighWater =
-            lastOp === undefined || isCursorAfter({ ts: lastOp.ts, id: lastOp._id }, holdback) ? holdback : { ts: lastOp.ts, id: lastOp._id };
-        const boundary = isCursorAfter(heldBackHighWater, incoming) ? heldBackHighWater : incoming;
-        const serverTs = boundary.ts;
-        const serverId = boundary.id;
+        const page = await readPullPage(user.id, { cursor: { ts: since, id: sinceId }, limit }, holdback);
+
+        // `serverTs`/`serverId` mark the cursor the client should pull from next: the high-water mark
+        // of what we just returned, on the totally-ordered `(ts,_id)` pair, so a same-`ts` batch split
+        // across two pulls (or two pages) loses nothing. The holdback and never-below-incoming clamps
+        // are in `nextPullCursor`. An empty pull may still advance the cursor up to the holdback
+        // boundary: ops can no longer commit with a `ts` older than that (write-time identity +
+        // holdback bound the lag), so the scanned-and-empty range is provably final.
+        const { cursor, hasMore } = nextPullCursor({
+            lastOp: page.lastOp,
+            hasMoreOps: page.hasMoreOps,
+            holdback,
+            incoming: { ts: since, id: sinceId },
+        });
+        const serverTs = cursor.ts;
+        const serverId = cursor.id;
 
         if (deviceId) {
             // Track per-(device, user) pull cursor so old operations can eventually be purged.
@@ -483,11 +493,15 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
             }
 
             // Fire-and-forget: purge ops all (device, user) rows have already seen to cap storage growth.
-            // Async so the pull response isn't blocked by the deletion query.
-            purgeOldOperations(user.id).catch(() => {});
+            // Async so the pull response isn't blocked by the deletion query. Once per catch-up, on
+            // its last page — not once per page of a long paged pull.
+            if (!hasMore) {
+                purgeOldOperations(user.id).catch(() => {});
+            }
         }
 
-        return c.json({ ops, serverTs, serverId });
+        // `hasMore` only for clients that asked for pages; an old client's response is unchanged.
+        return c.json({ ops: page.ops, serverTs, serverId, ...(limit === undefined ? {} : { hasMore }) });
     })
 
     // ---------------------------------------------------------------------------

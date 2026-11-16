@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { DetailNotFound } from '../../components/DetailNotFound';
 import { DetailPageHeader } from '../../components/DetailPageHeader';
+import { EntityFreshnessBadge } from '../../components/EntityFreshnessBadge';
 import { ListSkeleton } from '../../components/ListSkeleton';
 import { PersonEditorBody } from '../../components/people/PersonEditorBody';
 import { useAppData } from '../../contexts/AppDataProvider';
@@ -51,7 +52,12 @@ function PersonPage() {
 
     return (
         <div className={styles.page} data-testid="personPageWrapper">
-            <DetailPageHeader title="Edit person" onBack={goBack} idForCopy={person._id} />
+            <DetailPageHeader
+                title="Edit person"
+                onBack={goBack}
+                idForCopy={person._id}
+                badge={<EntityFreshnessBadge db={db} entity={{ entityType: 'person', entityId: person._id, userId: person.userId }} />}
+            />
             <Card padding="none" className={styles.card}>
                 {/* key: re-seed the form state when navigating between person pages */}
                 <PersonEditorBody key={person._id} db={db} person={person} showAccountPicker chrome="page" onClose={goBack} />

@@ -83,13 +83,14 @@ class OperationsDAO extends AbstractDAO<OperationInterface> {
      * re-checks the whole boundary ms — safe (applies are idempotent) and strictly better than the
      * old `$gt ts` that skipped it.
      */
-    async findOpsAfter(userId: string, since: string, sinceId: string): Promise<OperationInterface[]> {
+    async findOpsAfter(userId: string, cursor: { ts: string; id: string }, limit?: number): Promise<OperationInterface[]> {
+        const { ts: since, id: sinceId } = cursor;
         // `notApplied` quarantine: ops whose apply was skipped (target row gone — deleted or
         // reassigned away) are never delivered; replaying them would resurrect the entity
         // client-side. They stay in the collection for audit + the SyncIssuesPanel.
         return await this.findArray(
             { user: userId, notApplied: { $exists: false }, $or: [{ ts: { $gt: since } }, { ts: since, _id: { $gt: sinceId } } as never] },
-            { sort: { ts: 1, _id: 1 } },
+            { sort: { ts: 1, _id: 1 }, ...(limit === undefined ? {} : { limit }) },
         );
     }
 

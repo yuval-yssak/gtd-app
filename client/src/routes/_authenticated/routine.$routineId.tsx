@@ -4,6 +4,7 @@ import { ArrowRight, CircleCheck } from 'lucide-react';
 import { useState, useTransition } from 'react';
 import { DetailNotFound } from '../../components/DetailNotFound';
 import { DetailPageHeader } from '../../components/DetailPageHeader';
+import { EntityFreshnessBadge } from '../../components/EntityFreshnessBadge';
 import { FutureDoneConfirmDialog, useFutureDoneConfirm } from '../../components/FutureDoneConfirmDialog';
 import { RoutineEditorBody } from '../../components/routineEditor/RoutineEditorBody';
 import { useAppData } from '../../contexts/AppDataProvider';
@@ -119,7 +120,12 @@ function RoutinePage() {
 
     return (
         <div className={styles.page} data-testid="routinePageWrapper">
-            <DetailPageHeader title="Edit routine" onBack={goBack} idForCopy={routine._id} />
+            <DetailPageHeader
+                title="Edit routine"
+                onBack={goBack}
+                idForCopy={routine._id}
+                badge={<EntityFreshnessBadge db={db} entity={{ entityType: 'routine', entityId: routine._id, userId: routine.userId }} />}
+            />
             <NextItemLink routine={routine} items={allItems} />
             <Card padding="none" className={styles.card}>
                 <RoutineEditorBody

@@ -37,7 +37,7 @@ import {
     syncSingleUser,
     withAccountSession,
 } from '../db/multiUserSync';
-import { readSettledActiveAccount, setSessionGateTimeoutMs } from '../db/syncHelpers';
+import { DEFAULT_SESSION_GATE_TIMEOUT_MS, readSettledActiveAccount, setSessionGateTimeoutMs } from '../db/syncHelpers';
 import { performLocalAccountSwitch } from '../hooks/useAccounts';
 import { authClient } from '../lib/authClient';
 import type { MyDB } from '../types/MyDB';
@@ -964,7 +964,7 @@ describe('withAccountSession', () => {
         const setActiveCalls = vi.mocked(authClient.multiSession.setActive).mock.calls.map((c) => c[0]?.sessionToken);
         // Serialized: [pivot-b, restore-a, pivot-b, restore-a] — never [pivot-b, pivot-b, …].
         expect(setActiveCalls).toEqual(['token-b', 'token-a', 'token-b', 'token-a']);
-        setSessionGateTimeoutMs(10_000);
+        setSessionGateTimeoutMs(DEFAULT_SESSION_GATE_TIMEOUT_MS);
     });
 });
 
@@ -1018,11 +1018,52 @@ describe('reconcileActiveSessionCookie', () => {
         const dispatchSpy = vi.fn();
         vi.stubGlobal('window', { dispatchEvent: dispatchSpy } as unknown as Window);
 
-        await expect(reconcileActiveSessionCookie(db)).resolves.toBeUndefined();
+        // Reported as not done, so the connection supervisor retries it.
+        await expect(reconcileActiveSessionCookie(db)).resolves.toBe(false);
 
         expect(authClient.multiSession.setActive).not.toHaveBeenCalled();
         expect(dispatchSpy.mock.calls.filter(([e]) => (e as CustomEvent).type === ACCOUNT_NEEDS_REAUTH_EVENT)).toHaveLength(0);
         vi.unstubAllGlobals();
+        warnSpy.mockRestore();
+    });
+
+    it('reports success once the cookie is aligned', async () => {
+        await seedAccount(db, 'user-a', 'a@example.com');
+        await db.put('activeAccount', { userId: 'user-a' }, 'active');
+
+        await expect(reconcileActiveSessionCookie(db)).resolves.toBe(true);
+    });
+
+    // A Cloudflare 5xx or an auth-server error answers instead of failing the fetch. Read as "no
+    // session", it raised the "sign in again" prompt for an account whose login was fine.
+    it('treats an error answer from the auth server as unreachable, never as a signed-out account', async () => {
+        await seedAccount(db, 'user-b', 'b@example.com');
+        await db.put('activeAccount', { userId: 'user-b' }, 'active');
+        vi.mocked(authClient.getSession).mockResolvedValueOnce({ data: { user: { id: 'user-a' } } });
+        vi.mocked(authClient.multiSession.listDeviceSessions).mockResolvedValueOnce({
+            data: null,
+            error: { status: 503, statusText: 'Service Unavailable' },
+        } as never);
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        const dispatchSpy = vi.fn();
+        vi.stubGlobal('window', { dispatchEvent: dispatchSpy } as unknown as Window);
+
+        await expect(reconcileActiveSessionCookie(db)).resolves.toBe(false);
+
+        expect(dispatchSpy.mock.calls.filter(([e]) => (e as CustomEvent).type === ACCOUNT_NEEDS_REAUTH_EVENT)).toHaveLength(0);
+        vi.unstubAllGlobals();
+        warnSpy.mockRestore();
+    });
+
+    it('treats an error answer to the session check as unreachable too', async () => {
+        await seedAccount(db, 'user-b', 'b@example.com');
+        await db.put('activeAccount', { userId: 'user-b' }, 'active');
+        vi.mocked(authClient.getSession).mockResolvedValueOnce({ data: null, error: { status: 503, statusText: 'Service Unavailable' } } as never);
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+        await expect(reconcileActiveSessionCookie(db)).resolves.toBe(false);
+
+        expect(authClient.multiSession.setActive).not.toHaveBeenCalled();
         warnSpy.mockRestore();
     });
 
@@ -1107,7 +1148,7 @@ describe("a user's account switch during a sync pass", () => {
     });
 
     afterEach(() => {
-        setSessionGateTimeoutMs(10_000);
+        setSessionGateTimeoutMs(DEFAULT_SESSION_GATE_TIMEOUT_MS);
     });
 
     it('the settled active-account read reports the account the user is on, not the one a timed-out pass is syncing', async () => {
@@ -1216,5 +1257,36 @@ describe("a user's account switch during a sync pass", () => {
 
         expect(await activeUserId()).toBe('user-c');
         expect(lastCookiePivot()).toBe('token-c');
+    });
+});
+
+// A Cloudflare 5xx or an auth-server failure answers `{ data: null, error }` instead of failing the
+// fetch. Read as an empty session list it made logged-in accounts look session-less: a multi-account
+// pass skipped them as dead sessions, and withAccountSession ran its task under the ambient cookie.
+describe('an error answer to the device-session list', () => {
+    const errorAnswer = { data: null, error: { status: 503, statusText: 'Service Unavailable' } } as never;
+
+    it('fails a multi-account sync pass as unreachable — no account is skipped or flagged as signed out', async () => {
+        await seedAccount(db, 'user-a', 'a@example.com');
+        await seedAccount(db, 'user-b', 'b@example.com');
+        await db.put('activeAccount', { userId: 'user-a' }, 'active');
+        vi.mocked(authClient.multiSession.listDeviceSessions).mockResolvedValue(errorAnswer);
+
+        await expect(syncAllLoggedInUsers(db)).rejects.toThrow('listDeviceSessions answered 503');
+
+        expect(getReauthFlaggedUserIds()).toEqual([]);
+        expect(fetchSyncOps).not.toHaveBeenCalled();
+    });
+
+    it("refuses withAccountSession's task rather than running it under whichever session the cookie holds", async () => {
+        await seedAccount(db, 'user-a', 'a@example.com');
+        await seedAccount(db, 'user-b', 'b@example.com');
+        await db.put('activeAccount', { userId: 'user-a' }, 'active');
+        vi.mocked(authClient.multiSession.listDeviceSessions).mockResolvedValueOnce(errorAnswer);
+        const task = vi.fn(async () => 'ran');
+
+        await expect(withAccountSession(db, 'user-b', task)).rejects.toThrow('listDeviceSessions answered 503');
+
+        expect(task).not.toHaveBeenCalled();
     });
 });

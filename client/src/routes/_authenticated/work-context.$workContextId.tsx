@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { DetailNotFound } from '../../components/DetailNotFound';
 import { DetailPageHeader } from '../../components/DetailPageHeader';
+import { EntityFreshnessBadge } from '../../components/EntityFreshnessBadge';
 import { ListSkeleton } from '../../components/ListSkeleton';
 import { WorkContextEditorBody } from '../../components/workContexts/WorkContextEditorBody';
 import { useAppData } from '../../contexts/AppDataProvider';
@@ -51,7 +52,12 @@ function WorkContextPage() {
 
     return (
         <div className={styles.page} data-testid="workContextPageWrapper">
-            <DetailPageHeader title="Edit context" onBack={goBack} idForCopy={workContext._id} />
+            <DetailPageHeader
+                title="Edit context"
+                onBack={goBack}
+                idForCopy={workContext._id}
+                badge={<EntityFreshnessBadge db={db} entity={{ entityType: 'workContext', entityId: workContext._id, userId: workContext.userId }} />}
+            />
             <Card padding="none" className={styles.card}>
                 {/* key: re-seed the form state when navigating between context pages */}
                 <WorkContextEditorBody key={workContext._id} db={db} workContext={workContext} chrome="page" onClose={goBack} />

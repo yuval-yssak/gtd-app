@@ -121,7 +121,7 @@ The admin equivalent is `npx tsx --env-file=.env src/scripts/deleteUser.ts --ema
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `GET` | `/sync/bootstrap` | Yes | Full snapshot of all entities for new/re-syncing devices |
-| `GET` | `/sync/pull?since=<ISO>&deviceId=<UUID>` | Yes | Incremental — operations since timestamp |
+| `GET` | `/sync/pull?since=<ISO>&sinceId=<id>&deviceId=<UUID>&limit=<n>` | Yes | Incremental — operations after the `(ts, _id)` cursor; with `limit`, one page plus `hasMore` |
 | `POST` | `/sync/push` | Yes | Client pushes `{ deviceId, ops[] }` — last-write-wins |
 | `GET` | `/sync/events` | Yes | SSE stream — real-time change notifications |
 | `GET` | `/sync/config` | No | Returns `{ vapidPublicKey }` for Web Push |
@@ -242,9 +242,11 @@ Every mutation to any entity is recorded as an `OperationInterface` document sto
 4. Notifies other devices via SSE + Web Push
 
 **Client pull flow:**
-1. Client calls `GET /sync/pull?since=<lastSyncedTs>`
-2. Server returns all operations with `ts > since`
-3. Client applies them locally (last-write-wins)
+1. Client calls `GET /sync/pull?since=<ts>&sinceId=<id>&limit=<n>` with its compound cursor
+2. Server returns up to `limit` operations after `(since, sinceId)` in `(ts, _id)` order (capped at `PULL_PAGE_MAX`, `lib/pullPaging.ts`), the next cursor (`serverTs`/`serverId`) and `hasMore`
+3. Client applies the page locally (last-write-wins), stores the cursor, and repeats while `hasMore`
+
+Without `limit` (clients built before paging) the route returns every op since the cursor in one response and omits `hasMore`. The next cursor never enters the holdback window. A page cut off inside that window carries every remaining op in the window (so `limit` is a soft cap there — the window holds a few seconds of writes), holds the cursor back and ends paging (`hasMore: false`); its fresh ops are re-delivered by the next pull. Acknowledged ops are purged once per catch-up, on its last page.
 
 ### 2. Real-time Notifications
 
