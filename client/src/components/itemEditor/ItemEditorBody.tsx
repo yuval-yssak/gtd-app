@@ -290,7 +290,7 @@ export function ItemEditorBody({
     hasPositionRow = renderActions === undefined,
     onPositionMoved,
 }: ItemEditorBodyProps) {
-    const { options: calendarOptions } = useCalendarOptions();
+    const { options: calendarOptions } = useCalendarOptions(db);
     // all* (unfiltered) sets: the live-row lookup and routine-link resolution must keep working
     // when this item's owner account is toggled out of view (editor reached via deep link).
     const { loggedInAccounts, allRoutines, allItems, allWorkContexts, allPeople, allItemBriefs, refreshItemBriefs } = useAppData();

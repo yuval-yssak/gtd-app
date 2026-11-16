@@ -8,7 +8,7 @@ interface OpenAppDBOptions {
 }
 
 export async function openAppDB(options?: OpenAppDBOptions): Promise<IDBPDatabase<MyDB>> {
-    const db = await openDB<MyDB>('gtd-app', 9, {
+    const db = await openDB<MyDB>('gtd-app', 10, {
         async upgrade(db, oldVersion, _newVersion, tx) {
             // Version 1: core stores
             if (oldVersion < 1) {
@@ -96,6 +96,13 @@ export async function openAppDB(options?: OpenAppDBOptions): Promise<IDBPDatabas
             if (oldVersion < 9) {
                 const itemBriefs = db.createObjectStore('itemBriefs', { keyPath: '_id' });
                 itemBriefs.createIndex('userId', 'userId', { unique: false });
+            }
+
+            // Version 10: the calendar picker's options, one row per account. They were only ever
+            // held in memory, so an editor opened on a hanging network waited for the request
+            // before it could render. Device-local (never synced); refetched in the background.
+            if (oldVersion < 10) {
+                db.createObjectStore('calendarOptions', { keyPath: 'userId' });
             }
         },
         // Without this, a version bump deadlocks silently when any older connection stays open

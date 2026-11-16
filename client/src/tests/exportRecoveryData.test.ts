@@ -101,6 +101,26 @@ describe('buildLocalSnapshotExportFile', () => {
     });
 });
 
+describe('buildLocalSnapshotExportFile — calendar list', () => {
+    it("includes the user's stored calendar list and leaves other accounts' lists out", async () => {
+        const workCalendar = {
+            configId: 'cfg-a',
+            integrationId: 'int-a',
+            userId: 'user-a',
+            accountEmail: 'a@example.com',
+            displayName: 'Work',
+            isDefault: true,
+        };
+        await db.put('calendarOptions', { userId: 'user-a', accountEmail: 'a@example.com', options: [workCalendar], fetchedTs: '2026-01-01T00:00:00.000Z' });
+        await db.put('calendarOptions', { userId: 'user-b', accountEmail: 'b@example.com', options: [], fetchedTs: '2026-01-01T00:00:00.000Z' });
+
+        const { summary, payload } = parseExport((await buildLocalSnapshotExportFile(db, 'user-a')).content);
+
+        expect(summary).toContain('calendarOptions: 1');
+        expect((payload as { calendarOptions: unknown[] }).calendarOptions).toEqual([workCalendar]);
+    });
+});
+
 describe('downloadRecoveryExports', () => {
     it('triggers exactly two downloads — pending queue + local snapshot — via object URLs', async () => {
         const clickedDownloads: string[] = [];

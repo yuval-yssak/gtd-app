@@ -1,11 +1,23 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BootstrapRequiredError, fetchBootstrap, fetchDeviceStatus, fetchSyncOps, PUSH_TIMEOUT_MS, pushSyncOps, SyncAuthError } from '../api/syncClient';
+import {
+    BOOTSTRAP_TIMEOUT_MS,
+    BootstrapRequiredError,
+    fetchBootstrap,
+    fetchDeviceStatus,
+    fetchSyncOps,
+    PULL_TIMEOUT_MS,
+    PUSH_TIMEOUT_MS,
+    pushSyncOps,
+    STATUS_PROBE_TIMEOUT_MS,
+    SyncAuthError,
+} from '../api/syncClient';
 
 function mockFetchResponse(status: number, body: unknown = {}): void {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: status >= 200 && status < 300, status, json: () => Promise.resolve(body) }));
 }
 
 afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
 });
 
@@ -127,5 +139,67 @@ describe('syncClient — push deadline', () => {
         const networkFailure = new TypeError('Failed to fetch');
         vi.stubGlobal('fetch', vi.fn().mockRejectedValue(networkFailure));
         await expect(pushSyncOps('device-1', [])).rejects.toBe(networkFailure);
+    });
+});
+
+/** A network that never answers ("lie-fi"), but honours an abort the way the browser's fetch does. */
+function stubHangingFetch() {
+    vi.stubGlobal(
+        'fetch',
+        vi.fn(
+            (_url: string, init?: RequestInit) =>
+                new Promise((_resolve, reject) => {
+                    init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+                }),
+        ),
+    );
+}
+
+// A pull that never answers held the sync orchestrator's in-flight guard and the session gate until
+// the browser gave up — minutes — so even after the network recovered nothing synced and the item
+// badges stayed "Not verified". Each idempotent read now gives up on its own deadline.
+describe('syncClient — read deadlines', () => {
+    it.each([
+        ['GET /sync/pull', PULL_TIMEOUT_MS, () => fetchSyncOps('1970-01-01T00:00:00.000Z', '', '1970-01-01T00:00:00.000Z', '', 'device-1')],
+        ['GET /sync/bootstrap', BOOTSTRAP_TIMEOUT_MS, () => fetchBootstrap('device-1')],
+        ['GET /sync/device-status', STATUS_PROBE_TIMEOUT_MS, () => fetchDeviceStatus('device-1')],
+    ])('%s rejects, naming its deadline, when the server never answers', async (route, deadlineMs, request) => {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        stubHangingFetch();
+
+        const settled = request().then(
+            () => 'resolved',
+            (err: unknown) => err,
+        );
+        await vi.advanceTimersByTimeAsync(deadlineMs);
+
+        const outcome = await settled;
+        expect(outcome).toBeInstanceOf(Error);
+        expect(String(outcome)).toContain(`${route} timed out after ${deadlineMs}ms`);
+    });
+
+    // The pull is unpaginated: a device back from weeks offline downloads a large body over a slow
+    // link. The deadline guards the hang (no headers ever), never a long but progressing download.
+    it('GET /sync/pull still succeeds when headers arrive in time but the body takes longer than the deadline', async () => {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        const payload = { ops: [], serverTs: '2026-11-16T10:00:00.000Z', serverId: '' };
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async (_url: string, init?: RequestInit) => ({
+                ok: true,
+                status: 200,
+                // Like the browser's body stream, the read dies if the request's signal aborts mid-download.
+                json: () =>
+                    new Promise((resolve, reject) => {
+                        setTimeout(() => resolve(payload), PULL_TIMEOUT_MS * 2);
+                        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+                    }),
+            })),
+        );
+
+        const pulled = fetchSyncOps('1970-01-01T00:00:00.000Z', '', '1970-01-01T00:00:00.000Z', '', 'device-1');
+        await vi.advanceTimersByTimeAsync(PULL_TIMEOUT_MS * 2);
+
+        await expect(pulled).resolves.toEqual(payload);
     });
 });

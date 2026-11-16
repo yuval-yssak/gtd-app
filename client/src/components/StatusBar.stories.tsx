@@ -2,6 +2,7 @@ import type { Decorator, Meta, StoryObj } from '@storybook/react';
 import type { IDBPDatabase } from 'idb';
 import { useEffect, useState } from 'react';
 import { openAppDB } from '../db/indexedDB';
+import { forgetNetworkVerification, markVerifiedWithNetwork } from '../lib/syncFreshness';
 import type { MyDB } from '../types/MyDB';
 import { StatusBar } from './StatusBar';
 
@@ -41,7 +42,18 @@ type Story = StoryObj<typeof meta>;
  * Online state — shows when navigator.onLine is true.
  * In most environments (browser, Storybook) this is the default.
  */
-export const Online: Story = {};
+export const Online: Story = {
+    beforeEach: () => {
+        markVerifiedWithNetwork('user-1');
+        return () => forgetNetworkVerification();
+    },
+};
+
+/**
+ * Online, but no pull has reached the server yet — the first sync is still running, or the network
+ * is so slow ("lie-fi") that requests never answer while the browser still reports online.
+ */
+export const OnlineWaitingForServer: Story = {};
 
 /**
  * Offline state — patches navigator.onLine to false via a mounted component so the value

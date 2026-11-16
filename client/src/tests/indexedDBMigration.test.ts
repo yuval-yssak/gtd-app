@@ -358,3 +358,36 @@ describe('indexedDB v6 → v7 migration (drafts store)', () => {
         });
     });
 });
+
+describe('indexedDB v9 → v10 migration (calendarOptions store)', () => {
+    it('creates the calendarOptions store on upgrade without touching existing data', async () => {
+        await withFreshIDB(async () => {
+            const v9 = await openAppDBAtVersion9();
+            await v9.put('syncCursors', { userId: 'u1', lastSyncedTs: '2026-01-01T00:00:00.000Z', lastSyncedId: 'op1' });
+            v9.close();
+
+            const upgraded = await openAppDB();
+            expect([...upgraded.objectStoreNames]).toContain('calendarOptions');
+            expect(await upgraded.get('syncCursors', 'u1')).toEqual({ userId: 'u1', lastSyncedTs: '2026-01-01T00:00:00.000Z', lastSyncedId: 'op1' });
+            expect(await upgraded.getAll('calendarOptions')).toEqual([]);
+            upgraded.close();
+        });
+    });
+});
+
+/** The full v9 schema, created directly so the v10 step runs alone. */
+function openAppDBAtVersion9() {
+    return openDB<MyDB>('gtd-app', 9, {
+        upgrade(db) {
+            db.createObjectStore('accounts', { keyPath: 'id' }).createIndex('email', 'email', { unique: true });
+            db.createObjectStore('activeAccount');
+            for (const store of ['items', 'routines', 'people', 'workContexts', 'reviewInboxes', 'itemBriefs'] as const) {
+                db.createObjectStore(store, { keyPath: '_id' }).createIndex('userId', 'userId', { unique: false });
+            }
+            db.createObjectStore('syncOperations', { autoIncrement: true, keyPath: 'id' });
+            db.createObjectStore('deviceMeta', { keyPath: '_id' });
+            db.createObjectStore('syncCursors', { keyPath: 'userId' });
+            db.createObjectStore('drafts', { keyPath: 'key' });
+        },
+    });
+}

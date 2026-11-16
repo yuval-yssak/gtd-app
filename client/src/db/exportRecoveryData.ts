@@ -50,14 +50,16 @@ export async function buildPendingOpsExportFile(db: IDBPDatabase<MyDB>, userId: 
 
 export async function buildLocalSnapshotExportFile(db: IDBPDatabase<MyDB>, userId: string): Promise<RecoveryExportFile> {
     // All entity stores index by userId, so the snapshot is scoped to the recovering account.
-    const [items, routines, people, workContexts, reviewInboxes, itemBriefs] = await Promise.all([
+    const [items, routines, people, workContexts, reviewInboxes, itemBriefs, storedCalendars] = await Promise.all([
         db.getAllFromIndex('items', 'userId', userId),
         db.getAllFromIndex('routines', 'userId', userId),
         db.getAllFromIndex('people', 'userId', userId),
         db.getAllFromIndex('workContexts', 'userId', userId),
         db.getAllFromIndex('reviewInboxes', 'userId', userId),
         db.getAllFromIndex('itemBriefs', 'userId', userId),
+        db.get('calendarOptions', userId),
     ]);
+    const calendarOptions = storedCalendars?.options ?? [];
     const summaryLines = [
         `${APP_NAME} local data snapshot export`,
         `User: ${userId}`,
@@ -68,10 +70,11 @@ export async function buildLocalSnapshotExportFile(db: IDBPDatabase<MyDB>, userI
         `workContexts: ${workContexts.length}`,
         `reviewInboxes: ${reviewInboxes.length}`,
         `itemBriefs: ${itemBriefs.length}`,
+        `calendarOptions: ${calendarOptions.length}`,
     ];
     return {
         filename: `gtd-local-snapshot-${userId}-${dayjs().format('YYYY-MM-DD')}.txt`,
-        content: buildExportContent(summaryLines, { items, routines, people, workContexts, reviewInboxes, itemBriefs }),
+        content: buildExportContent(summaryLines, { items, routines, people, workContexts, reviewInboxes, itemBriefs, calendarOptions }),
     };
 }
 

@@ -1,6 +1,7 @@
 import { API_SERVER } from '../constants/globals';
 import type { EntityType, OpType, SyncOperation } from '../types/MyDB';
 import { BootstrapRequiredError } from './bootstrapRequiredError';
+import { fetchWithHeadersDeadline } from './deadlineSignal';
 import { SyncAuthError } from './syncAuthError';
 import { PUSH_TIMEOUT_MS } from './syncPushLimits';
 
@@ -76,6 +77,34 @@ function timezoneReportParam(): Record<string, string> {
     }
 }
 
+/**
+ * Deadlines for the idempotent sync reads, bounding the wait for response HEADERS only (the pull is
+ * unpaginated — a long catch-up body over a slow link must still finish). On a network that never
+ * answers ("lie-fi") the browser keeps a request open for minutes, and a hung pull holds the orchestrator's in-flight guard and the
+ * session gate the whole time — so after the network recovers nothing syncs until it dies. Aborting
+ * a read is safe: the next pass simply asks again. (`/sync/push` keeps its own, longer, deadline.)
+ */
+export const PULL_TIMEOUT_MS = 30_000;
+/** Generous: a bootstrap ships the whole account, possibly over a slow link — only a true hang should hit it. */
+export const BOOTSTRAP_TIMEOUT_MS = 120_000;
+export const STATUS_PROBE_TIMEOUT_MS = 15_000;
+
+/** A sync read: the route names it in errors and logs, the deadline bounds the wait for headers. */
+interface SyncRead {
+    route: string;
+    url: string;
+    init: RequestInit;
+}
+
+/** Fetches a sync read; a timeout rejects with an Error naming the route, for the sync logs. */
+async function fetchSyncRead({ route, url, init }: SyncRead, deadlineMs: number): Promise<Response> {
+    try {
+        return await fetchWithHeadersDeadline(url, { ...init, deadlineMs });
+    } catch (err) {
+        throw isTimeoutAbort(err) ? new Error(`${route} timed out after ${deadlineMs}ms`) : err;
+    }
+}
+
 export async function pushSyncOps(deviceId: string, ops: SyncOperation[]): Promise<void> {
     const res = await fetch(`${API_SERVER}/sync/push`, {
         method: 'POST',
@@ -104,10 +133,14 @@ export async function fetchBootstrap(deviceId: string, deviceLabel?: string): Pr
     if (deviceLabel) {
         params.set('deviceLabel', deviceLabel);
     }
-    const res = await fetch(`${API_SERVER}/sync/bootstrap?${params}`, {
-        credentials: 'include',
-        headers: { [DEVICE_ID_HEADER]: deviceId },
-    });
+    const res = await fetchSyncRead(
+        {
+            route: 'GET /sync/bootstrap',
+            url: `${API_SERVER}/sync/bootstrap?${params}`,
+            init: { credentials: 'include', headers: { [DEVICE_ID_HEADER]: deviceId } },
+        },
+        BOOTSTRAP_TIMEOUT_MS,
+    );
     if (!res.ok) throwForStatus(res, 'GET /sync/bootstrap');
     return res.json() as Promise<BootstrapPayload>;
 }
@@ -119,10 +152,10 @@ export async function fetchBootstrap(deviceId: string, deviceLabel?: string): Pr
 // never committed. In steady state callers pass the ack pair equal to the since pair.
 export async function fetchSyncOps(since: string, sinceId: string, ackedTs: string, ackedId: string, deviceId: string): Promise<PullPayload> {
     const params = new URLSearchParams({ since, sinceId, ackedTs, ackedId, deviceId, ...deviceReportParams() });
-    const res = await fetch(`${API_SERVER}/sync/pull?${params}`, {
-        credentials: 'include',
-        headers: { [DEVICE_ID_HEADER]: deviceId },
-    });
+    const res = await fetchSyncRead(
+        { route: 'GET /sync/pull', url: `${API_SERVER}/sync/pull?${params}`, init: { credentials: 'include', headers: { [DEVICE_ID_HEADER]: deviceId } } },
+        PULL_TIMEOUT_MS,
+    );
     // 409 = the server has no deviceSyncState row for this (device, user): the device was reaped
     // while offline and its cursor can no longer be trusted (ops may be purged). Typed error so
     // callers route into the bootstrap-recovery flow instead of retrying the pull forever.
@@ -140,10 +173,14 @@ export async function fetchSyncOps(since: string, sinceId: string, ackedTs: stri
  */
 export async function fetchDeviceStatus(deviceId: string): Promise<{ registered: boolean }> {
     const params = new URLSearchParams({ deviceId });
-    const res = await fetch(`${API_SERVER}/sync/device-status?${params}`, {
-        credentials: 'include',
-        headers: { [DEVICE_ID_HEADER]: deviceId },
-    });
+    const res = await fetchSyncRead(
+        {
+            route: 'GET /sync/device-status',
+            url: `${API_SERVER}/sync/device-status?${params}`,
+            init: { credentials: 'include', headers: { [DEVICE_ID_HEADER]: deviceId } },
+        },
+        STATUS_PROBE_TIMEOUT_MS,
+    );
     if (!res.ok) throwForStatus(res, 'GET /sync/device-status');
     return res.json() as Promise<{ registered: boolean }>;
 }

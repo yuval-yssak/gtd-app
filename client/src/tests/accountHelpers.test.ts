@@ -334,6 +334,16 @@ describe('wipeUserData', () => {
         expect(ops[0]?.entityId).toBe('itemB1');
     });
 
+    it("drops only the target user's stored calendar list", async () => {
+        await db.put('calendarOptions', { userId: 'userA', accountEmail: 'a@example.com', options: [], fetchedTs: '2026-01-01T00:00:00.000Z' });
+        await db.put('calendarOptions', { userId: 'userB', accountEmail: 'b@example.com', options: [], fetchedTs: '2026-01-01T00:00:00.000Z' });
+
+        await wipeUserData('userA', db);
+
+        expect(await db.get('calendarOptions', 'userA')).toBeUndefined();
+        expect(await db.get('calendarOptions', 'userB')).toBeDefined();
+    });
+
     it('preserves deviceMeta', async () => {
         await seedTwoUsersData();
         await wipeUserData('userA', db);

@@ -18,3 +18,15 @@
         background-color: var(--color-status-success);
     }
 }
+
+/* Appears only if the first pull is still pending after a beat, so a normal page load or reconnect
+   does not flash it (same timing as the item page's "Not verified" badge). */
+.awaitingServer {
+    animation: appear var(--duration-fast) ease-out calc(var(--duration-slow) * 2) backwards;
+}
+
+@keyframes appear {
+    from {
+        opacity: 0;
+    }
+}

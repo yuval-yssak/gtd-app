@@ -31,6 +31,7 @@ import {
     withSessionGate,
 } from '../db/syncHelpers';
 import { __resetUnconfirmedDeletesForTests, entityKey, isAwaitingDeleteEcho } from '../db/unconfirmedDeletes';
+import { _resetSyncFreshnessForTests, isVerifiedWithNetwork, subscribeToSyncFreshness } from '../lib/syncFreshness';
 // StoredPerson/Routine/WorkContext are still needed for the db.put() casts below
 import type { MyDB, StoredItem, StoredItemBrief, StoredPerson, StoredRoutine, StoredWorkContext, SyncOperation } from '../types/MyDB';
 import { openTestDB } from './openTestDB';
@@ -102,6 +103,7 @@ beforeEach(async () => {
 
 afterEach(() => {
     __resetUnconfirmedDeletesForTests();
+    _resetSyncFreshnessForTests();
     __resetPushAttemptedForTests();
     // clearAllMocks resets call history on vi.fn() instances while preserving their default
     // implementations (unlike restoreAllMocks which is for vi.spyOn() spies).
@@ -1930,5 +1932,79 @@ describe('withSessionGate — self-healing timeout', () => {
         // Next task should run normally — the rejection released the gate via finally().
         const next = await withSessionGate(() => Promise.resolve('after-reject'));
         expect(next).toBe('after-reject');
+    });
+});
+
+describe('network verification — what the "Not verified" badge reads', () => {
+    const EMPTY_PULL = { ops: [], serverTs: '2025-06-01T00:00:00.000Z', serverId: '' };
+
+    it('marks the account verified once a pull from the server has been applied', async () => {
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce(EMPTY_PULL);
+
+        await pullFromServer(db, USER_ID);
+
+        expect(isVerifiedWithNetwork(USER_ID)).toBe(true);
+    });
+
+    it('marks the account verified once a bootstrap snapshot has been applied', async () => {
+        vi.mocked(fetchBootstrap).mockResolvedValueOnce({
+            items: [],
+            routines: [],
+            people: [],
+            workContexts: [],
+            serverTs: '2025-06-01T00:00:00.000Z',
+            serverId: '',
+        });
+
+        await bootstrapFromServer(db, USER_ID);
+
+        expect(isVerifiedWithNetwork(USER_ID)).toBe(true);
+    });
+
+    it('withdraws an earlier verification when a later pull fails — the device now knows it may be behind', async () => {
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce(EMPTY_PULL);
+        await pullFromServer(db, USER_ID);
+        vi.mocked(fetchSyncOps).mockRejectedValueOnce(new Error('GET /sync/pull timed out after 30000ms'));
+
+        await expect(pullFromServer(db, USER_ID)).rejects.toThrow('timed out');
+
+        expect(isVerifiedWithNetwork(USER_ID)).toBe(false);
+    });
+
+    it('leaves the account unverified when the pull fails', async () => {
+        vi.mocked(fetchSyncOps).mockRejectedValueOnce(new Error('GET /sync/pull 503'));
+
+        await expect(pullFromServer(db, USER_ID)).rejects.toThrow('503');
+
+        expect(isVerifiedWithNetwork(USER_ID)).toBe(false);
+    });
+
+    it('announces a queued change, so an open item can show it is not synced yet', async () => {
+        const listener = vi.fn();
+        subscribeToSyncFreshness(listener);
+
+        await queueSyncOp(db, { opType: 'create', entityType: 'item', entityId: 'item-q', snapshot: makeItem('item-q') });
+
+        // Asserted before the fire-and-forget flush can reach a push, so only the queueing can have announced.
+        expect(listener).toHaveBeenCalled();
+        await waitForPendingFlush();
+    });
+
+    it('announces a push that emptied the queue, so the "Not synced" badge can clear', async () => {
+        await db.add('syncOperations', {
+            userId: USER_ID,
+            opType: 'create',
+            entityType: 'item',
+            entityId: 'item-p',
+            queuedAt: '2025-01-01T00:00:00.000Z',
+            snapshot: makeItem('item-p'),
+        });
+        const listener = vi.fn();
+        subscribeToSyncFreshness(listener);
+
+        await flushSyncQueue(db);
+
+        expect(await db.getAll('syncOperations')).toEqual([]);
+        expect(listener).toHaveBeenCalled();
     });
 });

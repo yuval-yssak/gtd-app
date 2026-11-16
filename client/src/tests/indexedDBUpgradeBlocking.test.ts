@@ -18,14 +18,14 @@ async function withFreshIDB<T>(fn: () => Promise<T>): Promise<T> {
 // turns that regression into a fast, descriptive failure instead of a suite-timeout that reads
 // like flake. The timer is cleared when the open wins so the losing branch can't surface as an
 // unhandled rejection after the test passes.
-async function openV10OrFailFast() {
+async function openNextVersionOrFailFast() {
     // let: the timer handle must escape the promise executor so the finally can clear it
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error('v10 open stayed blocked — the existing connection was never released')), 1000);
+        timer = setTimeout(() => reject(new Error('v11 open stayed blocked — the existing connection was never released')), 1000);
     });
     try {
-        return await Promise.race([openDB('gtd-app', 10, { upgrade() {} }), timeout]);
+        return await Promise.race([openDB('gtd-app', 11, { upgrade() {} }), timeout]);
     } finally {
         clearTimeout(timer);
     }
@@ -44,7 +44,7 @@ describe('openAppDB upgrade blocking', () => {
 
             staleConnection.close();
             const db = await opening;
-            expect(db.version).toBe(9);
+            expect(db.version).toBe(10);
             db.close();
         });
     });
@@ -61,8 +61,8 @@ describe('openAppDB upgrade blocking', () => {
     it('closes its own connection when a newer version elsewhere requests an upgrade', async () => {
         await withFreshIDB(async () => {
             const ours = await openAppDB();
-            const upgraded = await openV10OrFailFast();
-            expect(upgraded.version).toBe(10);
+            const upgraded = await openNextVersionOrFailFast();
+            expect(upgraded.version).toBe(11);
             // Proves the release came from our `blocking` handler closing the connection —
             // a transaction on a closed connection throws InvalidStateError synchronously.
             expect(() => ours.transaction('accounts')).toThrow();
@@ -79,9 +79,9 @@ describe('withAppDB', () => {
                     throw new Error('boom');
                 }),
             ).rejects.toThrow('boom');
-            // A v10 open completing proves nothing is still holding the v9 connection.
-            const upgraded = await openV10OrFailFast();
-            expect(upgraded.version).toBe(10);
+            // A v11 open completing proves nothing is still holding the v10 connection.
+            const upgraded = await openNextVersionOrFailFast();
+            expect(upgraded.version).toBe(11);
             upgraded.close();
         });
     });
@@ -89,9 +89,9 @@ describe('withAppDB', () => {
     it('runs the task against the opened DB and releases on success', async () => {
         await withFreshIDB(async () => {
             const version = await withAppDB(async (db) => db.version);
-            expect(version).toBe(9);
-            const upgraded = await openV10OrFailFast();
-            expect(upgraded.version).toBe(10);
+            expect(version).toBe(10);
+            const upgraded = await openNextVersionOrFailFast();
+            expect(upgraded.version).toBe(11);
             upgraded.close();
         });
     });

@@ -1,6 +1,7 @@
 import { API_SERVER } from '../constants/globals';
 import { authClient } from '../lib/authClient';
 import type { GCalResponseStatus, StoredCalendarSyncConfig, StoredItem } from '../types/MyDB';
+import { fetchWithHeadersDeadline } from './deadlineSignal';
 
 export type UnlinkAction = 'keepLinkedEntities' | 'removeLinkedEntities';
 
@@ -28,9 +29,13 @@ export interface GoogleCalendar {
 
 export type CalendarSyncConfig = StoredCalendarSyncConfig;
 
-async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+/** `deadlineMs` bounds the wait for response headers — set it on background reads a hanging network must not pin. */
+async function apiFetch(path: string, init: RequestInit & { deadlineMs?: number } = {}): Promise<Response> {
+    const { deadlineMs, ...requestInit } = init;
+    const url = `${API_SERVER}${path}`;
     // credentials: 'include' — required so the Better Auth session cookie is sent cross-origin (client ≠ API domain).
-    const response = await fetch(`${API_SERVER}${path}`, { credentials: 'include', ...init });
+    const request: RequestInit = { credentials: 'include', ...requestInit };
+    const response = await (deadlineMs === undefined ? fetch(url, request) : fetchWithHeadersDeadline(url, { ...request, deadlineMs }));
     if (!response.ok) {
         throw new Error(`Calendar API error ${response.status}: ${await response.text()}`);
     }
@@ -140,8 +145,8 @@ export interface AccountSyncConfigsBundle {
  * calendar picker to enumerate every connected calendar across every logged-in account
  * without driving an active-session pivot per account.
  */
-export async function getAllSyncConfigs(): Promise<AccountSyncConfigsBundle[]> {
-    const res = await apiFetch('/calendar/all-sync-configs');
+export async function getAllSyncConfigs(headersDeadlineMs?: number): Promise<AccountSyncConfigsBundle[]> {
+    const res = await apiFetch('/calendar/all-sync-configs', headersDeadlineMs === undefined ? {} : { deadlineMs: headersDeadlineMs });
     return res.json();
 }
 

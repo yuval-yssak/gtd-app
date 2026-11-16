@@ -45,7 +45,7 @@
 - [Legal text claims vs code](feedback_legal_text_claims_vs_code.md) — Policy copy promises controls that are missing or display-only (brief opt-out, empty trash); grep every "you can" claim.
 - [Failure label assumes one entity type](feedback_failure_label_assumes_entity_type.md) — New FAILURE_LABELS wording names "item"/"calendar event" though the generic server path also fires for routines/externalId.
 - [aria-label collides with getByLabel](feedback_aria_label_collides_with_getbylabel.md) — 'Clear <label>' buttons make getByLabel('<label>') strict-fail; name icon buttons via title=, not aria-label/Tooltip.
-- [Push deadline retry amplification](project_push_deadline_retry_amplification.md) — client abort on non-idempotent /sync/push + unbounded batch = server applies, client retries forever; demand chunking.
+- [Sync deadline vs unbounded payload](project_push_deadline_retry_amplification.md) — push: apply+retry forever; pull: unpaginated + whole-request deadline = never catches up. Demand chunking or TTFB deadline.
 - [wasActive read inside session pivot](feedback_wasactive_read_inside_session_pivot.md) — decisions inside a sync pass read the PIVOTED activeAccount; evaporation reloaded + switched user to remaining[0]. Need 3-acct test.
 - [Fallback navigation clobbers the specific one](feedback_fallback_navigation_clobbers_specific_one.md) — caller's post-pass `href='/'` overrides a callee's `/login`; demand callee return `{ navigated }`.
 - [Deferred side effect lost on loop throw](feedback_deferred_side_effect_lost_on_loop_throw.md) — collect-ids-then-act-after-finally drops collected work when a later pass throws; test pass-1 outcome + pass-2 reject.
@@ -78,3 +78,4 @@
 - [Switch choice vs mid-pass pivot](project_switch_choice_vs_midpass_pivot.md) — switch-race fixes guard the pass's restore but later per-user pivots still overwrite the choice before the reload.
 - [History counters count gesture rows](project_history_counter_counts_gesture_rows.md) — rules over a routine's done/trash history also count type-switch/pause trash rows; list every trash writer.
 - [Lazy chunk count misses node_modules](project_lazy_chunk_inventory_misses_node_modules.md) — CodeMirror language-data adds ~100 dynamic chunks; list build assets before trusting "only N lazy chunks".
+- [Module use() cache lacks test reset](project_module_use_cache_test_reset.md) — version-keyed module promise caches survive between tests; a reset version replays another test's answer.

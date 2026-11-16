@@ -4,6 +4,7 @@ import type { ServerOp } from '#api/syncClient';
 import { fetchBootstrap, fetchSyncOps, PUSH_BATCH_MAX, PUSH_TIMEOUT_MS, pushSyncOps } from '#api/syncClient';
 import type { ServerItemBriefSnapshot } from '../api/briefApi';
 import { describeDevice } from '../lib/deviceLabel';
+import { forgetNetworkVerificationFor, markVerifiedWithNetwork, notifySyncQueueChanged } from '../lib/syncFreshness';
 import { hasAtLeastOne } from '../lib/typeUtils';
 import type {
     EntityType,
@@ -172,6 +173,9 @@ export async function queueSyncOp(db: IDBPDatabase<MyDB>, op: SyncOpParams): Pro
         // only readable on the entity-write arm.
         ...(op.opType === 'rsvp' ? { rsvp: op.rsvp } : op.gcalMeta ? { gcalMeta: op.gcalMeta } : {}),
     });
+    // The early returns above skip this on purpose: a merge leaves the entity's op queued (its badge
+    // already says unsynced), and an annihilated create means the entity is gone.
+    notifySyncQueueChanged();
 
     // Attempt an immediate flush. Safari and Firefox don't support the Background Sync API,
     // so without this the op would sit in IDB until the next mount or online event.
@@ -412,6 +416,7 @@ async function deleteSentOps(db: IDBPDatabase<MyDB>, sent: SyncOperation[]): Pro
     const tx = db.transaction('syncOperations', 'readwrite');
     await Promise.all([...queuedOpIds(sent).map((id) => tx.store.delete(id)), tx.done]);
     forgetPushAttempted(sent);
+    notifySyncQueueChanged();
 }
 
 /**
@@ -510,6 +515,7 @@ export async function bootstrapFromServerUnguarded(db: IDBPDatabase<MyDB>, userI
         // payload requires serverId); '' keeps the safe re-check-the-boundary-ms semantics if it ever
         // fires — the legacy MAX_OP_ID sentinel would skip that ms, the exact loss the holdback closes.
         await setSyncCursor(db, userId, serverTs, serverId ?? '');
+        markVerifiedWithNetwork(userId);
     });
 }
 
@@ -633,7 +639,11 @@ async function doPull(db: IDBPDatabase<MyDB>, userId: string): Promise<void> {
     // don't reach today; this protocol makes the contract explicit so we can split them later if
     // needed). Crucially we never advance the server's purge floor past what we've written to IDB.
     const cursor = await getSyncCursor(db, userId);
-    const { ops, serverTs, serverId } = await fetchSyncOps(cursor.ts, cursor.id, cursor.ts, cursor.id, deviceId);
+    const { ops, serverTs, serverId } = await fetchSyncOps(cursor.ts, cursor.id, cursor.ts, cursor.id, deviceId).catch((err: unknown) => {
+        // The device may have missed changes — its badges say so, and the catch-up retrier tries again.
+        forgetNetworkVerificationFor(userId);
+        throw err;
+    });
 
     console.log(
         `[debug-gcal-sync][client] doPull | userId=${userId} since=${cursor.ts}/${cursor.id} serverTs=${serverTs}/${serverId} opCount=${ops.length}`,
@@ -654,6 +664,7 @@ async function doPull(db: IDBPDatabase<MyDB>, userId: string): Promise<void> {
         }
         await applyPulledOps(db, userId, ops);
         await advanceSyncCursor(db, userId, serverTs, serverId ?? '');
+        markVerifiedWithNetwork(userId);
     });
 }
 

@@ -412,6 +412,29 @@ export interface SyncOperation {
     rsvp?: StoredRsvpOpPayload;
 }
 
+/** One calendar the item/routine editors can put an event on — a flattened, enabled sync config. */
+export interface CalendarOption {
+    configId: string;
+    integrationId: string;
+    /** Better Auth user ID — owner of the calendar. Lets the picker group by account and lets save-time logic record where to push. */
+    userId: string;
+    /** Email of the owning account — used as the group label in the picker UI. */
+    accountEmail: string;
+    /** Calendar display name (e.g. "Work", "Holidays"). Picker shows this as the row label. */
+    displayName: string;
+    /** True when this is the owning account's default calendar. */
+    isDefault: boolean;
+}
+
+/** The last calendar list fetched for one account — what the editors read, network or not. */
+export interface StoredCalendarOptions {
+    userId: string;
+    accountEmail: string;
+    options: CalendarOption[];
+    /** ISO datetime of the fetch that produced `options`. */
+    fetchedTs: string;
+}
+
 export interface MyDB extends DBSchema {
     // All known accounts across all sign-ins
     accounts: {
@@ -479,5 +502,10 @@ export interface MyDB extends DBSchema {
     drafts: {
         key: string; // StoredDraft.key
         value: StoredDraft;
+    };
+    // Last fetched calendar picker options, one row per account. Device-local, refreshed in the background.
+    calendarOptions: {
+        key: string; // StoredCalendarOptions.userId
+        value: StoredCalendarOptions;
     };
 }

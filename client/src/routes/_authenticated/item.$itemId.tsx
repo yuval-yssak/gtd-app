@@ -2,6 +2,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
 import { DetailNotFound } from '../../components/DetailNotFound';
 import { DetailPageHeader } from '../../components/DetailPageHeader';
+import { ItemFreshnessBadge } from '../../components/ItemFreshnessBadge';
 import { ItemEditorBody } from '../../components/itemEditor/ItemEditorBody';
 import type { EditableStatus } from '../../components/itemEditor/itemEditorLogic';
 import { useAppData } from '../../contexts/AppDataProvider';
@@ -134,7 +135,7 @@ function ItemPage() {
 
     return (
         <div className={styles.page} data-testid="itemPageWrapper">
-            <DetailPageHeader title="Edit item" onBack={goBack} idForCopy={item._id} />
+            <DetailPageHeader title="Edit item" onBack={goBack} idForCopy={item._id} badge={<ItemFreshnessBadge db={db} item={item} />} />
             <Card padding="none" className={styles.card}>
                 <ItemEditorBody
                     key={item._id}

@@ -1,0 +1,11 @@
+/* "Not verified" shows up only if the check is still pending after a beat, so the routine pull on
+   every page load does not flash it. "Not synced" follows the user's own edit, so it appears at once. */
+.badge[data-freshness="unverified"] {
+    animation: appear var(--duration-fast) ease-out calc(var(--duration-slow) * 2) backwards;
+}
+
+@keyframes appear {
+    from {
+        opacity: 0;
+    }
+}

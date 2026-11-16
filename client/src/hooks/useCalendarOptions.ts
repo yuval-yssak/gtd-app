@@ -1,68 +1,34 @@
-import dayjs, { type Dayjs } from 'dayjs';
-import { use } from 'react';
-import { type AccountSyncConfigsBundle, type CalendarSyncConfig, getAllSyncConfigs } from '../api/calendarApi';
+import type { IDBPDatabase } from 'idb';
+import { use, useSyncExternalStore } from 'react';
+import { getAllSyncConfigs } from '../api/calendarApi';
+import { readStoredCalendarOptions, storeCalendarOptionBundles } from '../db/calendarOptionsStore';
+import type { CalendarOption, MyDB } from '../types/MyDB';
 
-export interface CalendarOption {
-    configId: string;
-    integrationId: string;
-    /** Better Auth user ID — owner of the calendar. Lets the picker group by account and lets save-time logic record where to push. */
-    userId: string;
-    /** Email of the owning account — used as the group label in the picker UI. */
-    accountEmail: string;
-    /** Calendar display name (e.g. "Work", "Holidays"). Picker shows this as the row label. */
-    displayName: string;
-    /** True when this is the owning account's default calendar. */
-    isDefault: boolean;
-}
-
-// Cached so two dialogs opening at once suspend on the same network round-trip and the result
-// stays warm across navigation. The cache survives until the page reloads — accounts are added
-// via reload-triggering flows so staleness here can't outlive a session.
-let cached: Promise<CalendarOption[]> | null = null;
-// When the last load failed. A failed load settles on an empty list and stays cached: dropping it
-// would make every re-render of a use() reader start a new request and suspend again, so the editor
-// never mounts and the request repeats forever.
-let failedAt: Dayjs | null = null;
-
-/** How long a failed load is served (as no options) before a read retries it in the background. */
-export const CALENDAR_OPTIONS_RETRY_AFTER_FAILURE_MS = 30_000;
-
-function isRetryDue(): boolean {
-    return failedAt !== null && dayjs().diff(failedAt) > CALENDAR_OPTIONS_RETRY_AFTER_FAILURE_MS;
-}
-
-function loadCalendarOptions(): Promise<CalendarOption[]> {
-    if (cached && isRetryDue()) {
-        revalidateInBackground();
-    }
-    cached ??= fetchCalendarOptions();
-    return cached;
-}
-
-function fetchCalendarOptions(): Promise<CalendarOption[]> {
-    return getAllSyncConfigs()
-        .then((bundles) => bundles.flatMap(toOptionsForBundle))
-        .catch(() => {
-            // Best-effort — if the round-trip fails, the picker simply has no options until a
-            // read after the retry window fetches again.
-            failedAt = dayjs();
-            return [];
-        });
-}
+export type { CalendarOption } from '../types/MyDB';
 
 /**
- * Stale-while-revalidate: mounted readers keep the settled (empty) result while the retry runs —
- * handing use() a pending promise would suspend every open editor behind its fallback, and offline
- * that would recur every retry window. A failed retry re-arms `failedAt` and keeps the old result.
+ * A background refresh stops waiting after this long. Without it a request on a hanging network
+ * stays in flight for minutes, and every later refresh joins it instead of trying again.
  */
-function revalidateInBackground(): void {
-    failedAt = null;
-    const retry = fetchCalendarOptions();
-    void retry.then((options) => {
-        if (failedAt === null) {
-            cached = settledPromise(options);
-        }
-    });
+export const CALENDAR_OPTIONS_FETCH_DEADLINE_MS = 15_000;
+
+type Listener = () => void;
+
+// The editors render from IndexedDB, never from the network: `stored` is the device's list (one IDB
+// read per page, then replaced by each successful refresh), and `listeners` re-render readers when a
+// refresh lands. Module state so every editor shares one read.
+const cache: { stored: Promise<CalendarOption[]> | null; refreshInFlight: Promise<void> | null; version: number } = {
+    stored: null,
+    refreshInFlight: null,
+    version: 0,
+};
+const listeners = new Set<Listener>();
+
+function loadStoredCalendarOptions(db: IDBPDatabase<MyDB>): Promise<CalendarOption[]> {
+    // A failed read settles on no options and stays cached: dropping it would make every render of
+    // a use() reader start a new read and suspend again.
+    cache.stored ??= readStoredCalendarOptions(db).catch(() => []);
+    return cache.stored;
 }
 
 /**
@@ -73,46 +39,58 @@ function settledPromise<T>(value: T) {
     return Object.assign(Promise.resolve(value), { status: 'fulfilled' as const, value });
 }
 
-/**
- * Suspends until /calendar/all-sync-configs returns; a Suspense boundary around the call site
- * decides what shows meanwhile. Result is module-cached so reopening an editor reuses the
- * resolved options.
- */
-export function useCalendarOptions(): { options: CalendarOption[] } {
-    const options = use(loadCalendarOptions());
-    return { options };
+function announceRefresh(options: CalendarOption[]): void {
+    cache.stored = settledPromise(options);
+    cache.version += 1;
+    for (const listener of listeners) {
+        listener();
+    }
+}
+
+async function fetchAndStoreCalendarOptions(db: IDBPDatabase<MyDB>): Promise<void> {
+    try {
+        await storeCalendarOptionBundles(db, await getAllSyncConfigs(CALENDAR_OPTIONS_FETCH_DEADLINE_MS));
+        announceRefresh(await readStoredCalendarOptions(db));
+    } catch (err) {
+        // Best-effort: the stored list stays on screen, and the next sync refreshes again.
+        console.log('[calendarOptions] refresh failed; keeping the stored list', { err });
+    }
 }
 
 /**
- * Kicks the network round-trip off in the background so editors that later call
- * useCalendarOptions() find the cache warm. Called from the auth-layer boot effect — by the
- * time the user opens an item or routine editor, the options are usually already resolved.
- * Safe to call multiple times; subsequent calls return the cached promise.
+ * Fetches the calendar list in the background and stores it on the device; mounted editors pick the
+ * new list up without suspending. Never rejects. Overlapping calls share one request.
  */
-export function prefetchCalendarOptions(): void {
-    void loadCalendarOptions();
+export function refreshCalendarOptions(db: IDBPDatabase<MyDB>): Promise<void> {
+    cache.refreshInFlight ??= fetchAndStoreCalendarOptions(db).finally(() => {
+        cache.refreshInFlight = null;
+    });
+    return cache.refreshInFlight;
+}
+
+function subscribe(listener: Listener): () => void {
+    listeners.add(listener);
+    return () => {
+        listeners.delete(listener);
+    };
+}
+
+/**
+ * The calendars the item and routine editors offer, read from IndexedDB. Suspends only for that
+ * local read — never on the network, so an editor renders the same on a hanging connection as
+ * offline. A refresh that lands later re-renders the reader with the new list.
+ */
+export function useCalendarOptions(db: IDBPDatabase<MyDB>): { options: CalendarOption[] } {
+    // Subscribed for the re-render only; the list itself comes from the cached promise below.
+    useSyncExternalStore(subscribe, () => cache.version);
+    const options = use(loadStoredCalendarOptions(db));
+    return { options };
 }
 
 /** Test-only — drops the module cache so each spec starts cold. */
 export function _resetCalendarOptionsCacheForTests(): void {
-    cached = null;
-    failedAt = null;
-}
-
-/** Flattens one account bundle into options. Filters out disabled configs at this layer so callers don't have to. */
-function toOptionsForBundle(bundle: AccountSyncConfigsBundle): CalendarOption[] {
-    return bundle.integrations.flatMap((integration) =>
-        integration.syncConfigs.filter((config) => config.enabled).map((config) => toOption(config, bundle.userId, bundle.accountEmail)),
-    );
-}
-
-function toOption(config: CalendarSyncConfig, userId: string, accountEmail: string): CalendarOption {
-    return {
-        configId: config._id,
-        integrationId: config.integrationId,
-        userId,
-        accountEmail,
-        displayName: config.displayName ?? config.calendarId,
-        isDefault: config.isDefault,
-    };
+    cache.stored = null;
+    cache.refreshInFlight = null;
+    cache.version = 0;
+    listeners.clear();
 }

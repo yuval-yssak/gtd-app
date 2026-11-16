@@ -27,12 +27,14 @@ import { closeSseConnections, openSseConnections, reopenSseConnections } from '.
 import { flushSyncQueue, pullFromServer } from '../db/syncHelpers';
 import { recoverFromBootstrapRequired } from '../db/syncRecovery';
 import { syncThenSeedRoutines } from '../db/syncThenSeedRoutines';
-import { prefetchCalendarOptions } from '../hooks/useCalendarOptions';
+import { refreshCalendarOptions } from '../hooks/useCalendarOptions';
 import { useOnline } from '../hooks/useOnline';
 import { subscribeToAppResume } from '../lib/appResume';
 import { authClient } from '../lib/authClient';
+import { areAccountsCaughtUp, createCatchUpRetrier } from '../lib/catchUpRetry';
 import { coalesceAsync } from '../lib/coalesceAsync';
 import { isBrowserOffline } from '../lib/onlineStatus';
+import { forgetNetworkVerification, isVerifiedWithNetwork, subscribeToSyncFreshness } from '../lib/syncFreshness';
 import { shouldRaiseInitialSync } from '../lib/syncIndicators';
 import type {
     MyDB,
@@ -277,6 +279,7 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
                         setIsInitialSyncing(false);
                         triggerAppResourceRefresh('all');
                         dispatchSyncIssuesRefresh();
+                        void refreshCalendarOptions(db);
                     })
                     .catch((err) => console.error('[sync] catch-up pull failed:', err)),
             ),
@@ -335,6 +338,10 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             // Tell the SyncIssuesPanel to re-poll. Every sync round-trip is a candidate for new
             // failed ops (server-side rsvp replay marks `syncFailed` during the pushback step).
             dispatchSyncIssuesRefresh();
+            // Background only — the editors read the stored list. Calendars connected or toggled
+            // elsewhere reach this device on the same cadence as entity changes (boot, reconnect,
+            // resume, push).
+            void refreshCalendarOptions(db);
         } finally {
             isSyncingRef.current = false;
             if (!unmountedRef.current) {
@@ -411,16 +418,42 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
         [db],
     );
 
-    // A channel (re)connected: broadcasts sent while it was down reached no one, so catch up. Never a
-    // per-channel sync — a pass already running owns the catch-up (and its session pivots), and
-    // otherwise every channel connecting at once shares one coalesced orchestrated pull.
-    const onSseConnected = useCallback(() => {
+    // Asks for a catch-up pull: a channel (re)connected and missed broadcasts while down, or the retrier
+    // found the device still behind. Never a per-channel sync — a pass already running owns the
+    // catch-up (and its session pivots), and otherwise concurrent requests share one coalesced pull.
+    const requestCatchUpPull = useCallback(() => {
         if (isSyncingRef.current) {
             syncRequestedWhileBusy.current = true;
             return;
         }
         void runCatchUpPull();
     }, [runCatchUpPull]);
+    const onSseConnected = requestCatchUpPull;
+
+    // While online, keeps retrying the catch-up pull until every account has been checked with the
+    // server — on a choppy connection nothing else retries a failed pull (see lib/catchUpRetry.ts).
+    // Re-armed on every freshness change, so a pull that fails later starts a new retry chain.
+    useEffect(() => {
+        if (!isOnline) {
+            return;
+        }
+        const retrier = createCatchUpRetrier({
+            // A running pass will verify the accounts or fail; the chain's next delay covers a failure,
+            // so queueing a follow-up behind it (as a reconnect does) would only add a redundant pull.
+            attempt: () => {
+                if (!isSyncingRef.current) {
+                    void runCatchUpPull();
+                }
+            },
+            isCaughtUp: () => areAccountsCaughtUp(loggedInUserIds, { isVerified: isVerifiedWithNetwork, needsReauth: isAccountFlaggedForReauth }),
+        });
+        retrier.ensureRunning();
+        const unsubscribe = subscribeToSyncFreshness(retrier.ensureRunning);
+        return () => {
+            unsubscribe();
+            retrier.stop();
+        };
+    }, [isOnline, runCatchUpPull, loggedInUserIds]);
 
     // One handlers object per channel set — the device id is only known asynchronously at each
     // open site, so this builds the object there instead of threading three positional callbacks.
@@ -453,8 +486,11 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             // No account in IDB — route guard redirects to /login. Nothing to sync.
             return;
         }
-        // Pre-warm dialog-only caches so the first dialog open doesn't suspend the whole route.
-        prefetchCalendarOptions();
+        if (navigator.onLine) {
+            // Background only, and before the account round-trip below: a device with an empty
+            // calendar store (first boot after the upgrade) gets its list without waiting a sync pass.
+            void refreshCalendarOptions(db);
+        }
         await refreshAccountsInternal();
         if (!navigator.onLine) {
             return;
@@ -625,6 +661,8 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
         } else {
             // Close every SSE channel; they'll be re-opened when online fires
             closeSseConnections();
+            // Whatever is on screen can no longer be checked with the server — the badges say so.
+            forgetNetworkVerification();
         }
         // No cleanup: the boot effect's cleanup already resets isFirstOnlineRender on unmount
         // for Strict Mode remounts. If this effect returned a cleanup that also reset it, the

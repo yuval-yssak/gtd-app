@@ -542,7 +542,7 @@ export function RoutineEditorBody({
     const isEdit = routine !== undefined;
     const [form, setForm] = useState<FormState>(() => initFormState(routine));
     const [isSaving, startSaving] = useTransition();
-    const { options: calendarOptions } = useCalendarOptions();
+    const { options: calendarOptions } = useCalendarOptions(db);
     // all* (unfiltered) sets: the live-row lookup and assigned-tag resolution must keep working
     // when this routine's owner account is toggled out of view (editor reached via deep link).
     const { loggedInAccounts, allRoutines, allWorkContexts, allPeople, syncAndRefresh } = useAppData();
