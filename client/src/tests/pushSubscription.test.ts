@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('#api/syncClient', async () => await import('../api/syncClient.mock.ts'));
 
 import { fetchVapidConfig } from '#api/syncClient';
-import { requestAndRegisterPushSubscription } from '../db/pushSubscription';
+import { requestAndRegisterPushSubscription, SERVICE_WORKER_READY_DEADLINE_MS } from '../db/pushSubscription';
 import { openTestDB } from './openTestDB';
 
 const originalServiceWorker = Object.getOwnPropertyDescriptor(navigator, 'serviceWorker');
@@ -21,6 +21,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+    vi.useRealTimers();
     if (originalServiceWorker) {
         Object.defineProperty(navigator, 'serviceWorker', originalServiceWorker);
     } else {
@@ -40,6 +41,20 @@ describe('requestAndRegisterPushSubscription', () => {
 
         await expect(requestAndRegisterPushSubscription(db)).resolves.toBe(false);
 
+        db.close();
+    });
+
+    // A service worker that failed to install never becomes `ready`; the Settings button used to
+    // spin on "Requesting…" for the page's life.
+    it('gives up when the service worker never becomes ready', async () => {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        vi.mocked(fetchVapidConfig).mockResolvedValueOnce({ vapidPublicKey: 'BAAA' });
+        const db = await openTestDB();
+
+        const registered = requestAndRegisterPushSubscription(db);
+        await vi.advanceTimersByTimeAsync(SERVICE_WORKER_READY_DEADLINE_MS);
+
+        await expect(registered).resolves.toBe(false);
         db.close();
     });
 });

@@ -55,8 +55,23 @@ async function doRegister(db: IDBPDatabase<MyDB>): Promise<void> {
     await registerPushEndpoint(deviceId, subscription.toJSON());
 }
 
+/**
+ * How long registration waits for the service worker. `ready` never resolves when its install failed
+ * (e.g. a precache 404 after a deploy): the Settings button spun forever, and the background step
+ * relied on the supervisor's own step deadline.
+ */
+export const SERVICE_WORKER_READY_DEADLINE_MS = 10_000;
+
+function serviceWorkerReadyWithin(ms: number): Promise<ServiceWorkerRegistration> {
+    const deadline: { timer?: ReturnType<typeof setTimeout> } = {};
+    const giveUp = new Promise<never>((_resolve, reject) => {
+        deadline.timer = setTimeout(() => reject(new Error(`[push] service worker not ready within ${ms}ms`)), ms);
+    });
+    return Promise.race([navigator.serviceWorker.ready, giveUp]).finally(() => clearTimeout(deadline.timer));
+}
+
 async function getOrCreatePushSubscription(vapidPublicKey: string): Promise<PushSubscription> {
-    const registration = await navigator.serviceWorker.ready;
+    const registration = await serviceWorkerReadyWithin(SERVICE_WORKER_READY_DEADLINE_MS);
     const existing = await registration.pushManager.getSubscription();
 
     if (existing) {

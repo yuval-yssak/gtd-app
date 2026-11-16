@@ -10,6 +10,7 @@ import {
     PUSH_TIMEOUT_MS,
     pushSyncOps,
     registerPushEndpoint,
+    SessionUserMismatchError,
     STATUS_PROBE_TIMEOUT_MS,
     SyncAuthError,
 } from '../api/syncClient';
@@ -20,7 +21,19 @@ function mockFetchResponse(status: number, body: unknown = {}): void {
 
 /** A first-page pull request from `ts`, acknowledging the same cursor. */
 function pullRequest(ts: string) {
-    return { cursor: { ts, id: '' }, acked: { ts, id: '' }, deviceId: 'device-1', limit: 100 };
+    return { cursor: { ts, id: '' }, acked: { ts, id: '' }, deviceId: 'device-1', limit: 100, expectUserId: 'user-1' };
+}
+
+function stubOkFetch() {
+    const fetchSpy = vi.fn().mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve({}) });
+    vi.stubGlobal('fetch', fetchSpy);
+    return fetchSpy;
+}
+
+function requestedUrl(fetchSpy: ReturnType<typeof vi.fn>): URL {
+    const [call] = fetchSpy.mock.calls;
+    if (!call) throw new Error('expected one fetch call');
+    return new URL(String(call[0]));
 }
 
 afterEach(() => {
@@ -43,7 +56,7 @@ describe('syncClient — 401 handling', () => {
 
     it('fetchBootstrap throws SyncAuthError on 401', async () => {
         mockFetchResponse(401);
-        await expect(fetchBootstrap('device-1')).rejects.toBeInstanceOf(SyncAuthError);
+        await expect(fetchBootstrap({ deviceId: 'device-1', expectUserId: 'user-1' })).rejects.toBeInstanceOf(SyncAuthError);
     });
 
     it('fetchSyncOps throws SyncAuthError on 401', async () => {
@@ -56,7 +69,7 @@ describe('syncClient — bootstrap deviceLabel', () => {
     it('fetchBootstrap sends deviceLabel as a query param when provided', async () => {
         const fetchSpy = vi.fn().mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve({}) });
         vi.stubGlobal('fetch', fetchSpy);
-        await fetchBootstrap('device-1', 'Chrome on macOS');
+        await fetchBootstrap({ deviceId: 'device-1', deviceLabel: 'Chrome on macOS', expectUserId: 'user-1' });
         const [url] = fetchSpy.mock.calls[0] as [string];
         expect(url).toContain('deviceId=device-1');
         // URLSearchParams form-encodes spaces as '+'
@@ -66,28 +79,16 @@ describe('syncClient — bootstrap deviceLabel', () => {
     it('fetchBootstrap omits deviceLabel from the URL when not provided', async () => {
         const fetchSpy = vi.fn().mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve({}) });
         vi.stubGlobal('fetch', fetchSpy);
-        await fetchBootstrap('device-1');
+        await fetchBootstrap({ deviceId: 'device-1', expectUserId: 'user-1' });
         const [url] = fetchSpy.mock.calls[0] as [string];
         expect(url).not.toContain('deviceLabel');
     });
 });
 
 describe('syncClient — app version report', () => {
-    function stubOkFetch() {
-        const fetchSpy = vi.fn().mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve({}) });
-        vi.stubGlobal('fetch', fetchSpy);
-        return fetchSpy;
-    }
-
-    function requestedUrl(fetchSpy: ReturnType<typeof vi.fn>): URL {
-        const [call] = fetchSpy.mock.calls;
-        if (!call) throw new Error('expected one fetch call');
-        return new URL(String(call[0]));
-    }
-
     it('fetchBootstrap reports the running build’s commit hash', async () => {
         const fetchSpy = stubOkFetch();
-        await fetchBootstrap('device-1');
+        await fetchBootstrap({ deviceId: 'device-1', expectUserId: 'user-1' });
         expect(requestedUrl(fetchSpy).searchParams.get('appVersion')).toBe(__COMMIT_HASH__);
     });
 
@@ -168,7 +169,7 @@ function stubHangingFetch() {
 describe('syncClient — read deadlines', () => {
     it.each([
         ['GET /sync/pull', PULL_TIMEOUT_MS, () => fetchSyncOps(pullRequest('1970-01-01T00:00:00.000Z'))],
-        ['GET /sync/bootstrap', BOOTSTRAP_TIMEOUT_MS, () => fetchBootstrap('device-1')],
+        ['GET /sync/bootstrap', BOOTSTRAP_TIMEOUT_MS, () => fetchBootstrap({ deviceId: 'device-1', expectUserId: 'user-1' })],
         ['GET /sync/device-status', STATUS_PROBE_TIMEOUT_MS, () => fetchDeviceStatus('device-1')],
     ])('%s rejects, naming its deadline, when the server never answers', async (route, deadlineMs, request) => {
         vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
@@ -258,5 +259,29 @@ describe('syncClient — push registration requests', () => {
     it('registerPushEndpoint throws on an error answer, so the step is retried', async () => {
         mockFetchResponse(500);
         await expect(registerPushEndpoint('device-1', subscription)).rejects.toThrow('POST /push/subscribe 500');
+    });
+});
+
+// Each sync request names the account it syncs; the server refuses (412) a session that resolved to
+// another account — a cookie switched mid-sync on a multi-account device.
+describe('syncClient — expected account', () => {
+    it.each([
+        ['fetchSyncOps', () => fetchSyncOps(pullRequest('1970-01-01T00:00:00.000Z'))],
+        ['fetchBootstrap', () => fetchBootstrap({ deviceId: 'device-1', expectUserId: 'user-1' })],
+    ])('%s names the account it syncs', async (_name, request) => {
+        const fetchSpy = stubOkFetch();
+
+        await request();
+
+        expect(requestedUrl(fetchSpy).searchParams.get('expectUserId')).toBe('user-1');
+    });
+
+    it.each([
+        ['fetchSyncOps', () => fetchSyncOps(pullRequest('1970-01-01T00:00:00.000Z'))],
+        ['fetchBootstrap', () => fetchBootstrap({ deviceId: 'device-1', expectUserId: 'user-1' })],
+    ])('%s throws SessionUserMismatchError when the session belongs to another account', async (_name, request) => {
+        mockFetchResponse(412, { error: 'session_user_mismatch' });
+
+        await expect(request()).rejects.toBeInstanceOf(SessionUserMismatchError);
     });
 });

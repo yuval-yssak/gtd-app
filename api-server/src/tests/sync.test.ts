@@ -118,10 +118,12 @@ async function pull(
         timezone?: string;
         appVersion?: string;
         limit?: string;
+        expectUserId?: string;
     } = {},
 ) {
     const params = new URLSearchParams();
     if (opts.limit !== undefined) params.set('limit', opts.limit);
+    if (opts.expectUserId !== undefined) params.set('expectUserId', opts.expectUserId);
     if (opts.since !== undefined) params.set('since', opts.since);
     if (opts.sinceId !== undefined) params.set('sinceId', opts.sinceId);
     if (opts.ackedTs !== undefined) params.set('ackedTs', opts.ackedTs);
@@ -1114,7 +1116,13 @@ describe('Stale device cleanup', () => {
         await tick();
         await pull(cookie, { deviceId: 'dev-active' });
 
-        await waitForPurge(async () => (await db.collection<DeviceSyncStateInterface>('deviceSyncState').countDocuments({ deviceId: 'dev-stale' })) === 0);
+        // The reap deletes the sync row, then the device-user join row, then the push subscription, one
+        // after another in a fire-and-forget purge — wait for the last of them, not just the first.
+        const countStaleRows = async () =>
+            (await db.collection<DeviceSyncStateInterface>('deviceSyncState').countDocuments({ deviceId: 'dev-stale' })) +
+            (await db.collection<PushSubscriptionRecord>('pushSubscriptions').countDocuments({ _id: 'dev-stale' })) +
+            (await db.collection<DeviceUserInterface>('deviceUsers').countDocuments({ deviceId: 'dev-stale' }));
+        await waitForPurge(async () => (await countStaleRows()) === 0);
         expect(await db.collection<DeviceSyncStateInterface>('deviceSyncState').countDocuments({ deviceId: 'dev-stale' })).toBe(0);
         expect(await db.collection<PushSubscriptionRecord>('pushSubscriptions').countDocuments({ _id: 'dev-stale' })).toBe(0);
         expect(await db.collection<DeviceUserInterface>('deviceUsers').countDocuments({ deviceId: 'dev-stale' })).toBe(0);
@@ -2167,5 +2175,70 @@ describe('GET /sync/pull — paging', () => {
         const res = await pull(cookie, { since: dayjs(0).toISOString(), deviceId: 'dev-reader', limit });
 
         expect(res.status).toBe(400);
+    });
+});
+
+// ─── Session/user guard ─────────────────────────────────────────────────────
+
+// The client's sync names the account it is syncing. On a multi-account device another pass can
+// switch the session cookie mid-sync (between `setActive` and the client's own active-account
+// pointer); a pull then answered as the other account wrote its ops under the wrong user and
+// recorded the wrong device row's acknowledgement. The server now refuses before reading anything.
+describe('expectUserId guard', () => {
+    it('refuses a pull whose session belongs to another account, without touching the device row', async () => {
+        const aliceCookie = await loginAsAlice();
+        const bobCookie = await loginAsBob();
+        const bobId = await getUserId(bobCookie);
+        const aliceId = await getUserId(aliceCookie);
+        await registerDevice('dev-guard', aliceId);
+        const rowBefore = await db.collection<DeviceSyncStateInterface>('deviceSyncState').findOne({ _id: `dev-guard::${aliceId}` });
+
+        const res = await pull(aliceCookie, { deviceId: 'dev-guard', expectUserId: bobId, ackedTs: '2030-01-01T00:00:00.000Z', ackedId: 'x' });
+
+        expect(res.status).toBe(412);
+        expect(await res.json()).toEqual({ error: 'session_user_mismatch' });
+        expect(await db.collection<DeviceSyncStateInterface>('deviceSyncState').findOne({ _id: `dev-guard::${aliceId}` })).toEqual(rowBefore);
+    });
+
+    it('serves the pull when the session belongs to the expected account', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+
+        const res = await pull(cookie, { expectUserId: userId });
+
+        expect(res.status).toBe(200);
+    });
+
+    // An empty value would otherwise answer 412 forever, a silent retry loop for the caller.
+    it('rejects an empty expectUserId as a malformed request', async () => {
+        const cookie = await loginAsAlice();
+
+        const res = await pull(cookie, { expectUserId: '' });
+
+        expect(res.status).toBe(400);
+    });
+
+    it('serves an old client that names no account exactly as before', async () => {
+        const cookie = await loginAsAlice();
+
+        const res = await pull(cookie);
+
+        expect(res.status).toBe(200);
+    });
+
+    it('refuses a bootstrap whose session belongs to another account, without registering the device', async () => {
+        const aliceCookie = await loginAsAlice();
+        const bobId = await getUserId(await loginAsBob());
+        const aliceId = await getUserId(aliceCookie);
+
+        const res = await authenticatedRequest(app, {
+            method: 'GET',
+            path: `/sync/bootstrap?deviceId=dev-guard-boot&expectUserId=${encodeURIComponent(bobId)}`,
+            sessionCookie: aliceCookie,
+        });
+
+        expect(res.status).toBe(412);
+        expect(await res.json()).toEqual({ error: 'session_user_mismatch' });
+        expect(await db.collection<DeviceSyncStateInterface>('deviceSyncState').countDocuments({ _id: `dev-guard-boot::${aliceId}` })).toBe(0);
     });
 });

@@ -116,6 +116,21 @@ function cursorHoldbackBoundary(): { ts: string; id: string } {
     return { ts: dayjs().subtract(cursorHoldbackSeconds(), 'second').toISOString(), id: '' };
 }
 
+/** Error code a guarded sync request answers when the session belongs to another account. */
+const SESSION_USER_MISMATCH = 'session_user_mismatch';
+
+/**
+ * A client names the account it is syncing (`expectUserId`). On a multi-account device another pass
+ * can switch the session cookie mid-sync, and the request would be answered as that other account.
+ * Old clients name none and are served as before. An empty value is malformed — answering it 412
+ * would loop the caller forever. A mismatch is an expected outcome, not an error: no log.
+ */
+function checkExpectedUser(expectUserId: string | undefined, sessionUserId: string): 'ok' | 'malformed' | 'mismatch' {
+    if (expectUserId === undefined) return 'ok';
+    if (expectUserId === '') return 'malformed';
+    return expectUserId === sessionUserId ? 'ok' : 'mismatch';
+}
+
 /**
  * One page of ops after `cursor`. Reads one op past `limit` to learn whether more remain without a
  * second query. No limit → every op (old clients), and never `hasMoreOps`. A page cut off inside
@@ -242,6 +257,15 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
     // incremental pull from that point forward without replaying any ops.
     .get('/bootstrap', authenticateRequest, async (c) => {
         const { user } = c.get('session');
+        // Before any sync read or write: a mismatched bootstrap must neither ship the other account's
+        // snapshot nor register this device under it.
+        const expectedUser = checkExpectedUser(c.req.query('expectUserId'), user.id);
+        if (expectedUser === 'malformed') {
+            return c.json({ error: 'expectUserId must not be empty' }, 400);
+        }
+        if (expectedUser === 'mismatch') {
+            return c.json({ error: SESSION_USER_MISMATCH }, 412);
+        }
         const deviceId = c.req.query('deviceId');
         // Client-derived display label ("Chrome on macOS") for the connected-devices list. Length-capped
         // server-side — it's a raw user-agent derivative, not a validated field.
@@ -420,6 +444,15 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
     // ---------------------------------------------------------------------------
     .get('/pull', authenticateRequest, async (c) => {
         const { user } = c.get('session');
+        // Before any sync read or write: a mismatched pull must neither return the other account's ops
+        // nor record its acknowledgement on the other account's device row.
+        const expectedUser = checkExpectedUser(c.req.query('expectUserId'), user.id);
+        if (expectedUser === 'malformed') {
+            return c.json({ error: 'expectUserId must not be empty' }, 400);
+        }
+        if (expectedUser === 'mismatch') {
+            return c.json({ error: SESSION_USER_MISMATCH }, 412);
+        }
         const since = c.req.query('since') ?? dayjs(0).toISOString();
         // Explicit acknowledgement: the highest ts the client has *durably persisted to IndexedDB*.
         // Distinct from `since` (which ops to fetch) so that a lost or partially-applied pull

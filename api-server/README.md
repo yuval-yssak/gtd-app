@@ -120,7 +120,7 @@ The admin equivalent is `npx tsx --env-file=.env src/scripts/deleteUser.ts --ema
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/sync/bootstrap` | Yes | Full snapshot of all entities for new/re-syncing devices |
+| `GET` | `/sync/bootstrap` | Yes | Full snapshot of all entities for new/re-syncing devices (`expectUserId` → 412 on a session for another account) |
 | `GET` | `/sync/pull?since=<ISO>&sinceId=<id>&deviceId=<UUID>&limit=<n>` | Yes | Incremental — operations after the `(ts, _id)` cursor; with `limit`, one page plus `hasMore` |
 | `POST` | `/sync/push` | Yes | Client pushes `{ deviceId, ops[] }` — last-write-wins |
 | `GET` | `/sync/events` | Yes | SSE stream — real-time change notifications |
@@ -247,6 +247,8 @@ Every mutation to any entity is recorded as an `OperationInterface` document sto
 3. Client applies the page locally (last-write-wins), stores the cursor, and repeats while `hasMore`
 
 Without `limit` (clients built before paging) the route returns every op since the cursor in one response and omits `hasMore`. The next cursor never enters the holdback window. A page cut off inside that window carries every remaining op in the window (so `limit` is a soft cap there — the window holds a few seconds of writes), holds the cursor back and ends paging (`hasMore: false`); its fresh ops are re-delivered by the next pull. Acknowledged ops are purged once per catch-up, on its last page.
+
+`/sync/pull` and `/sync/bootstrap` also take `expectUserId` — the account the client is syncing. When the session cookie resolves to a different account (another sync pass switched the active session mid-sync on a multi-account device), the route answers `412 { error: 'session_user_mismatch' }` before reading or writing any sync data; the client retries on its next pass. An empty `expectUserId` is a 400. Requests without it (older clients) are served as before.
 
 ### 2. Real-time Notifications
 

@@ -2,10 +2,12 @@ import { API_SERVER } from '../constants/globals';
 import type { EntityType, OpType, SyncOperation } from '../types/MyDB';
 import { BootstrapRequiredError } from './bootstrapRequiredError';
 import { fetchWithHeadersDeadline } from './deadlineSignal';
+import { SessionUserMismatchError } from './sessionUserMismatchError';
 import { SyncAuthError } from './syncAuthError';
 import { PUSH_TIMEOUT_MS } from './syncPushLimits';
 
 export { BootstrapRequiredError } from './bootstrapRequiredError';
+export { SessionUserMismatchError } from './sessionUserMismatchError';
 export { SyncAuthError } from './syncAuthError';
 export { PUSH_BATCH_MAX, PUSH_TIMEOUT_MS } from './syncPushLimits';
 
@@ -58,6 +60,17 @@ export interface PullPageRequest {
     deviceId: string;
     /** Most ops to return in this page. */
     limit: number;
+    /** The account being synced; the server refuses a session that resolved to another one. */
+    expectUserId: string;
+}
+
+/** What a bootstrap identifies itself with. */
+export interface BootstrapRequest {
+    deviceId: string;
+    /** "Chrome on macOS" — displayed in Settings → Connected devices. */
+    deviceLabel?: string | undefined;
+    /** The account being synced; the server refuses a session that resolved to another one. */
+    expectUserId: string;
 }
 
 // ── Network functions ─────────────────────────────────────────────────────────
@@ -67,6 +80,13 @@ export interface PullPageRequest {
 // Sent on every authenticated request so the auth middleware can keep `deviceUsers`
 // fresh — see api-server/src/auth/middleware.ts.
 const DEVICE_ID_HEADER = 'X-Device-Id';
+
+/** 412 = the session resolved to another account than the one named in `expectUserId`. */
+function throwIfSessionUserMismatch(res: Response, context: string): void {
+    if (res.status === 412) {
+        throw new SessionUserMismatchError(context);
+    }
+}
 
 function throwForStatus(res: Response, context: string): never {
     if (res.status === 401) {
@@ -148,13 +168,13 @@ function isTimeoutAbort(err: unknown): boolean {
     return err instanceof DOMException && err.name === 'TimeoutError';
 }
 
-export async function fetchBootstrap(deviceId: string, deviceLabel?: string): Promise<BootstrapPayload> {
+export async function fetchBootstrap({ deviceId, deviceLabel, expectUserId }: BootstrapRequest): Promise<BootstrapPayload> {
     // Sending deviceId in the query string lets the server register a deviceSyncState row at
     // bootstrap time, so its purge floor is established before any sibling device pulls. Without
     // it the floor could drop below ops this device still needs (sync race).
     // deviceLabel ("Chrome on macOS") rides along so the row is displayable in Settings →
     // Connected devices; bootstrap is the row's sole creation path, so this is the one chance.
-    const params = new URLSearchParams({ deviceId, ...deviceReportParams() });
+    const params = new URLSearchParams({ deviceId, expectUserId, ...deviceReportParams() });
     if (deviceLabel) {
         params.set('deviceLabel', deviceLabel);
     }
@@ -166,13 +186,14 @@ export async function fetchBootstrap(deviceId: string, deviceLabel?: string): Pr
         },
         BOOTSTRAP_TIMEOUT_MS,
     );
+    throwIfSessionUserMismatch(res, 'GET /sync/bootstrap');
     if (!res.ok) throwForStatus(res, 'GET /sync/bootstrap');
     return res.json() as Promise<BootstrapPayload>;
 }
 
 // Ops are paginated on the compound `(ts, _id)` cursor, so a same-`ts` batch split across pages loses
 // nothing. See PullPageRequest for the since/ack contract.
-export async function fetchSyncOps({ cursor, acked, deviceId, limit }: PullPageRequest): Promise<PullPayload> {
+export async function fetchSyncOps({ cursor, acked, deviceId, limit, expectUserId }: PullPageRequest): Promise<PullPayload> {
     const params = new URLSearchParams({
         since: cursor.ts,
         sinceId: cursor.id,
@@ -180,6 +201,7 @@ export async function fetchSyncOps({ cursor, acked, deviceId, limit }: PullPageR
         ackedId: acked.id,
         deviceId,
         limit: String(limit),
+        expectUserId,
         ...deviceReportParams(),
     });
     const res = await fetchIdempotent(
@@ -192,6 +214,7 @@ export async function fetchSyncOps({ cursor, acked, deviceId, limit }: PullPageR
     if (res.status === 409) {
         throw new BootstrapRequiredError('GET /sync/pull');
     }
+    throwIfSessionUserMismatch(res, 'GET /sync/pull');
     if (!res.ok) throwForStatus(res, 'GET /sync/pull');
     return res.json() as Promise<PullPayload>;
 }

@@ -1,7 +1,16 @@
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import type { OpCursor, PullPayload, ServerOp } from '#api/syncClient';
-import { BootstrapRequiredError, fetchBootstrap, fetchSyncOps, PUSH_BATCH_MAX, PUSH_TIMEOUT_MS, pushSyncOps, SyncAuthError } from '#api/syncClient';
+import {
+    BootstrapRequiredError,
+    fetchBootstrap,
+    fetchSyncOps,
+    PUSH_BATCH_MAX,
+    PUSH_TIMEOUT_MS,
+    pushSyncOps,
+    SessionUserMismatchError,
+    SyncAuthError,
+} from '#api/syncClient';
 import type { ServerItemBriefSnapshot } from '../api/briefApi';
 import { describeDevice } from '../lib/deviceLabel';
 import { forgetNetworkVerificationFor, markVerifiedWithNetwork, notifySyncQueueChanged } from '../lib/syncFreshness';
@@ -488,10 +497,11 @@ async function runBootstrap(db: IDBPDatabase<MyDB>, userId: string): Promise<voi
 
     // describeDevice gives the row a human-readable label for Settings → Connected devices.
     // navigator.userAgent exists in both window and Service Worker globals.
-    const { items, routines, people, workContexts, reviewInboxes, itemBriefs, serverTs, serverId } = await fetchBootstrap(
+    const { items, routines, people, workContexts, reviewInboxes, itemBriefs, serverTs, serverId } = await fetchBootstrap({
         deviceId,
-        describeDevice(navigator.userAgent),
-    );
+        deviceLabel: describeDevice(navigator.userAgent),
+        expectUserId: userId,
+    });
 
     const mappedItems = items.map((doc) => remapUser(doc) as unknown as StoredItem);
     const mappedRoutines = routines.map((doc) => remapUser(doc) as unknown as StoredRoutine);
@@ -686,7 +696,7 @@ function runTrackedPull(db: IDBPDatabase<MyDB>, userId: string): Promise<void> {
 
 /** A failure a second request would hit in exactly the same way — no point in a follow-up. */
 function isTerminalPullFailure(err: unknown): boolean {
-    return err instanceof SyncAuthError || err instanceof BootstrapRequiredError;
+    return err instanceof SyncAuthError || err instanceof BootstrapRequiredError || err instanceof SessionUserMismatchError;
 }
 
 function followUpPull(db: IDBPDatabase<MyDB>, userId: string, running: Promise<void>): Promise<void> {
@@ -776,7 +786,7 @@ async function* pullPages(db: IDBPDatabase<MyDB>, userId: string, deviceId: stri
         // From the first request on, the server's answer may predate a write: a pull requested now
         // gets a follow-up instead of joining this one (see UserPullState). Cleared by the wrapper.
         pullStateOf(userId).isReading = true;
-        const page = await fetchSyncOps({ cursor: requestedFrom, acked: requestedFrom, deviceId, limit: pullPaging.pageSize });
+        const page = await fetchSyncOps({ cursor: requestedFrom, acked: requestedFrom, deviceId, limit: pullPaging.pageSize, expectUserId: userId });
         console.log('[sync] pull page', {
             userId,
             since: requestedFrom,

@@ -35,6 +35,7 @@ import { authClient } from '../lib/authClient';
 import { coalesceAsync } from '../lib/coalesceAsync';
 import { areAccountsCaughtUp, nextSyncAction } from '../lib/connectionSupervisor';
 import { isBrowserOffline } from '../lib/onlineStatus';
+import { logSyncFailure } from '../lib/syncFailureLog';
 import { forgetNetworkVerification, isVerifiedWithNetwork } from '../lib/syncFreshness';
 import { shouldRaiseInitialSync } from '../lib/syncIndicators';
 import type {
@@ -295,7 +296,7 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
                         dispatchSyncIssuesRefresh();
                         void refreshCalendarOptions(db);
                     })
-                    .catch((err) => console.error('[sync] catch-up pull failed:', err))
+                    .catch((err) => logSyncFailure('[sync] catch-up pull failed', err))
                     .finally(() => {
                         isCatchingUpRef.current = false;
                     });
@@ -417,7 +418,7 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
                         await recoverFromBootstrapRequired(db, userId);
                         return;
                     }
-                    console.error('[sse] per-user sync failed:', err);
+                    logSyncFailure('[sse] per-user sync failed', err);
                 }
             })();
         },

@@ -7,6 +7,7 @@ import type * as actual from './syncClient.ts';
 // module being mocked pulls its runtime code into the mock's module graph and wedges Vitest's
 // module resolution across the whole suite (observed as every worker hanging with near-zero CPU).
 export { BootstrapRequiredError } from './bootstrapRequiredError';
+export { SessionUserMismatchError } from './sessionUserMismatchError';
 export { SyncAuthError } from './syncAuthError';
 // Plain constants — real values so the flush under test chunks and times out exactly like production.
 export { PUSH_BATCH_MAX, PUSH_TIMEOUT_MS } from './syncPushLimits';

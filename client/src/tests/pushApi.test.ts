@@ -2,7 +2,7 @@
  *  pass `X-Device-Id` correctly and degrade gracefully on server errors so the Settings UI
  *  never crashes the page. */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getPushStatus, signOutDevice } from '../api/pushApi';
+import { getPushStatus, PUSH_STATUS_DEADLINE_MS, signOutDevice } from '../api/pushApi';
 
 // VITE_API_SERVER from .env is inlined at build time — pushApi.ts targets `${API_SERVER}/...`.
 // Resolve dynamically so tests pass whether the env var is set, empty, or different across CI envs.
@@ -28,6 +28,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
 });
 
@@ -80,6 +81,29 @@ describe('getPushStatus', () => {
 
         const result = await getPushStatus('dev-down');
         expect(result).toEqual({ registered: false });
+    });
+
+    // Settings awaits this in the "Enable" button's finally: a network failure escaped into the page's
+    // error boundary, and a request that never answered left the button on "Requesting…".
+    it('falls back to { registered: false } when the request fails on the network', async () => {
+        fetchSpy.mockImplementationOnce(() => Promise.reject(new TypeError('Failed to fetch')));
+
+        await expect(getPushStatus('dev-offline')).resolves.toEqual({ registered: false });
+    });
+
+    it('falls back to { registered: false } when the server never answers', async () => {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        fetchSpy.mockImplementationOnce(
+            (_url: string, init?: RequestInit) =>
+                new Promise((_resolve, reject) => {
+                    init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+                }),
+        );
+
+        const status = getPushStatus('dev-liefi');
+        await vi.advanceTimersByTimeAsync(PUSH_STATUS_DEADLINE_MS);
+
+        await expect(status).resolves.toEqual({ registered: false });
     });
 });
 

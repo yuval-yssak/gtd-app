@@ -13,7 +13,7 @@ vi.mock('../db/multiUserSync', () => ({
 }));
 
 import dayjs from 'dayjs';
-import { BootstrapRequiredError, fetchBootstrap, fetchSyncOps, PUSH_BATCH_MAX, pushSyncOps, SyncAuthError } from '#api/syncClient';
+import { BootstrapRequiredError, fetchBootstrap, fetchSyncOps, PUSH_BATCH_MAX, pushSyncOps, SessionUserMismatchError, SyncAuthError } from '#api/syncClient';
 import { removeAccountAndData } from '../db/accountHelpers';
 import { SYNC_APPLY_LOCK, SYNC_FLUSH_LOCK } from '../db/crossContextLock';
 import { syncSingleUser } from '../db/multiUserSync';
@@ -2093,6 +2093,7 @@ describe('pullFromServer — a request made while a pull is in flight', () => {
     it.each([
         ['an expired session', () => new SyncAuthError('GET /sync/pull')],
         ['a reaped device', () => new BootstrapRequiredError('GET /sync/pull')],
+        ['a session switched to another account', () => new SessionUserMismatchError('GET /sync/pull')],
     ])('skips the follow-up when the in-flight pull failed on %s — a second request fails the same way', async (_cause, makeError) => {
         const first = holdFirstFetch();
         const failure = makeError();
@@ -2334,5 +2335,55 @@ describe('bootstrapFromServerUnguarded — one bootstrap per account at a time',
 
         expect(fetchBootstrap).toHaveBeenCalledTimes(1);
         expect(await db.get('items', 'item-boot')).toBeDefined();
+    });
+});
+
+/** The request a mocked network call was last made with; throws when it was never called. */
+function lastRequest<T>(calls: T[][]): T {
+    const last = calls.at(-1);
+    if (!last) {
+        throw new Error('expected a request');
+    }
+    const [request] = last;
+    if (request === undefined) {
+        throw new Error('expected the request argument');
+    }
+    return request;
+}
+
+describe('pull and bootstrap name the account they sync', () => {
+    it('sends the pulling account as the expected user', async () => {
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({ ops: [], serverTs: '2025-06-01T00:00:00.000Z', serverId: '' });
+
+        await pullFromServer(db, USER_ID);
+
+        expect(lastRequest(vi.mocked(fetchSyncOps).mock.calls)).toMatchObject({ expectUserId: USER_ID });
+    });
+
+    it('sends the bootstrapping account as the expected user', async () => {
+        vi.mocked(fetchBootstrap).mockResolvedValueOnce({
+            items: [],
+            routines: [],
+            people: [],
+            workContexts: [],
+            serverTs: '2025-06-01T00:00:00.000Z',
+            serverId: '',
+        });
+
+        await bootstrapFromServer(db, USER_ID);
+
+        expect(lastRequest(vi.mocked(fetchBootstrap).mock.calls)).toMatchObject({ expectUserId: USER_ID });
+    });
+
+    // The session switched to another account mid-sync: nothing was applied, and what the device
+    // shows for this account is no longer known to match the server — the next repair retries.
+    it('leaves the account unverified when the server says the session belongs to someone else', async () => {
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({ ops: [], serverTs: '2025-06-01T00:00:00.000Z', serverId: '' });
+        await pullFromServer(db, USER_ID);
+        vi.mocked(fetchSyncOps).mockRejectedValueOnce(new SessionUserMismatchError('GET /sync/pull'));
+
+        await expect(pullFromServer(db, USER_ID)).rejects.toBeInstanceOf(SessionUserMismatchError);
+
+        expect(isVerifiedWithNetwork(USER_ID)).toBe(false);
     });
 });
