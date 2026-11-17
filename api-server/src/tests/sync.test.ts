@@ -167,13 +167,13 @@ function setHoldbackSeconds(value: string): void {
 }
 
 /**
- * Polls a predicate against MongoDB until it returns true or the timeout elapses, then runs
- * one final attempt so the eventual `expect(...)` reports a meaningful diff instead of "false".
- * Use this for assertions that depend on the fire-and-forget purge in /sync/pull — a fixed
- * `tick()` after pull is racy under CPU load (purge is multiple awaits), but polling lets the
- * test pass as fast as the purge actually completes while staying flake-free under load.
+ * Polls a predicate against MongoDB until it returns true or the timeout elapses. Returns silently
+ * on timeout, so the caller's own `expect(...)` reports the meaningful diff.
+ * Use this for assertions on fire-and-forget writes the response does not await — the purge and
+ * stale-device reap in /sync/pull, the auth middleware's deviceUsers upsert. A fixed `tick()` is
+ * racy under CPU load (each is several awaits); polling passes as soon as the write lands.
  */
-async function waitForPurge(predicate: () => Promise<boolean>, timeoutMs = 2000): Promise<void> {
+async function waitUntil(predicate: () => Promise<boolean>, timeoutMs = 2000): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
         if (await predicate()) {
@@ -952,7 +952,7 @@ describe('Purge logic', () => {
         });
 
         // Purge is fire-and-forget — poll until it converges instead of guessing a fixed delay.
-        await waitForPurge(async () => (await db.collection<OperationInterface>('operations').countDocuments()) === 0);
+        await waitUntil(async () => (await db.collection<OperationInterface>('operations').countDocuments()) === 0);
         expect(await db.collection<OperationInterface>('operations').countDocuments()).toBe(0);
     });
 
@@ -972,7 +972,7 @@ describe('Purge logic', () => {
         // Second pull acknowledges the previous response (both components) — server advances the floor.
         await pull(cookie, { since: first.serverTs, sinceId: first.serverId, ackedTs: first.serverTs, ackedId: first.serverId, deviceId: 'dev-1' });
 
-        await waitForPurge(async () => (await db.collection<OperationInterface>('operations').countDocuments()) === 0);
+        await waitUntil(async () => (await db.collection<OperationInterface>('operations').countDocuments()) === 0);
         expect(await db.collection<OperationInterface>('operations').countDocuments()).toBe(0);
     });
 
@@ -996,13 +996,13 @@ describe('Purge logic', () => {
         // deleteOlderThan must delete only op1 (_id <= op1._id at ts T), leaving op2/op3 — the dual
         // of the pull bug: a naive `ts <= T` purge would wipe the unacked survivors.
         await pull(cookie, { ackedTs: op1!.ts, ackedId: op1!._id, deviceId: 'dev-1' });
-        await waitForPurge(async () => (await db.collection<OperationInterface>('operations').countDocuments()) === 2);
+        await waitUntil(async () => (await db.collection<OperationInterface>('operations').countDocuments()) === 2);
         expect(await db.collection<OperationInterface>('operations').countDocuments()).toBe(2);
         expect(await db.collection<OperationInterface>('operations').countDocuments({ _id: op1!._id })).toBe(0);
 
         // Once the device acks through op3, the rest of the ms purges.
         await pull(cookie, { ackedTs: op3!.ts, ackedId: op3!._id, deviceId: 'dev-1' });
-        await waitForPurge(async () => (await db.collection<OperationInterface>('operations').countDocuments()) === 0);
+        await waitUntil(async () => (await db.collection<OperationInterface>('operations').countDocuments()) === 0);
         expect(await db.collection<OperationInterface>('operations').countDocuments()).toBe(0);
     });
 
@@ -1031,7 +1031,7 @@ describe('Purge logic', () => {
         await pull(cookie, { ackedTs: T, ackedId: op1!._id, deviceId: 'dev-A' });
         await pull(cookie, { ackedTs: T, ackedId: op3!._id, deviceId: 'dev-B' });
 
-        await waitForPurge(async () => (await db.collection<OperationInterface>('operations').countDocuments()) === 2);
+        await waitUntil(async () => (await db.collection<OperationInterface>('operations').countDocuments()) === 2);
         expect(await db.collection<OperationInterface>('operations').countDocuments()).toBe(2);
         expect(await db.collection<OperationInterface>('operations').countDocuments({ _id: op1!._id })).toBe(0);
     });
@@ -1063,7 +1063,7 @@ describe('Purge logic', () => {
         // purge. The legacy row is what holds them: floor = min((T, ''), (T, op2._id)) = (T, ''), whose
         // boundary clause deletes nothing at T. Confirms the `?? ''` legacy path is strictly conservative.
         await pull(cookie, { ackedTs: T, ackedId: op2!._id, deviceId: 'dev-active' });
-        await waitForPurge(async () => (await db.collection<OperationInterface>('operations').countDocuments()) < 2, 300);
+        await waitUntil(async () => (await db.collection<OperationInterface>('operations').countDocuments()) < 2, 300);
         expect(await db.collection<OperationInterface>('operations').countDocuments()).toBe(2);
     });
 
@@ -1122,7 +1122,7 @@ describe('Stale device cleanup', () => {
             (await db.collection<DeviceSyncStateInterface>('deviceSyncState').countDocuments({ deviceId: 'dev-stale' })) +
             (await db.collection<PushSubscriptionRecord>('pushSubscriptions').countDocuments({ _id: 'dev-stale' })) +
             (await db.collection<DeviceUserInterface>('deviceUsers').countDocuments({ deviceId: 'dev-stale' }));
-        await waitForPurge(async () => (await countStaleRows()) === 0);
+        await waitUntil(async () => (await countStaleRows()) === 0);
         expect(await db.collection<DeviceSyncStateInterface>('deviceSyncState').countDocuments({ deviceId: 'dev-stale' })).toBe(0);
         expect(await db.collection<PushSubscriptionRecord>('pushSubscriptions').countDocuments({ _id: 'dev-stale' })).toBe(0);
         expect(await db.collection<DeviceUserInterface>('deviceUsers').countDocuments({ deviceId: 'dev-stale' })).toBe(0);
@@ -1177,7 +1177,7 @@ describe('Stale device cleanup', () => {
 
         // Purge runs in two phases: first the abandoned device row is removed, then the now-
         // unblocked operations purge fires. Wait for the second phase since it's the slower one.
-        await waitForPurge(async () => (await db.collection<OperationInterface>('operations').countDocuments()) === 0);
+        await waitUntil(async () => (await db.collection<OperationInterface>('operations').countDocuments()) === 0);
         // Abandoned (device, user) row pruned, so ops can be purged
         expect(await db.collection<DeviceSyncStateInterface>('deviceSyncState').countDocuments({ deviceId: 'dev-abandoned' })).toBe(0);
         expect(await db.collection<OperationInterface>('operations').countDocuments()).toBe(0);
@@ -1244,9 +1244,7 @@ describe('Stale device cleanup', () => {
         await tick();
         await pull(aliceCookie, { deviceId: 'dev-alice-active' });
 
-        await waitForPurge(
-            async () => (await db.collection<DeviceSyncStateInterface>('deviceSyncState').countDocuments({ _id: `dev-multi::${aliceId}` })) === 0,
-        );
+        await waitUntil(async () => (await db.collection<DeviceSyncStateInterface>('deviceSyncState').countDocuments({ _id: `dev-multi::${aliceId}` })) === 0);
         expect(await db.collection<DeviceSyncStateInterface>('deviceSyncState').countDocuments({ _id: `dev-multi::${aliceId}` })).toBe(0);
         expect(await db.collection<DeviceSyncStateInterface>('deviceSyncState').countDocuments({ _id: `dev-multi::${bobId}` })).toBe(1);
         // bob still uses dev-multi → push subscription survives
@@ -1316,7 +1314,7 @@ describe('Reaped-device bootstrap guard', () => {
         // The active device's pull fires the (fire-and-forget) stale-device reaper.
         const activeRes = await pull(cookie, { deviceId: 'dev-active' });
         expect(activeRes.status).toBe(200);
-        await waitForPurge(async () => (await db.collection<DeviceSyncStateInterface>('deviceSyncState').countDocuments({ deviceId: 'dev-dormant' })) === 0);
+        await waitUntil(async () => (await db.collection<DeviceSyncStateInterface>('deviceSyncState').countDocuments({ deviceId: 'dev-dormant' })) === 0);
         expect(await db.collection<DeviceSyncStateInterface>('deviceSyncState').countDocuments({ deviceId: 'dev-dormant' })).toBe(0);
 
         // The reaped device comes back online and pulls from its stale cursor → forced bootstrap.
@@ -1499,7 +1497,7 @@ describe('Multi-device round-trip', () => {
         });
 
         // Both devices have now pulled past all ops → purge fires → operations collection empty
-        await waitForPurge(async () => (await db.collection<OperationInterface>('operations').countDocuments()) === 0);
+        await waitUntil(async () => (await db.collection<OperationInterface>('operations').countDocuments()) === 0);
         expect(await db.collection<OperationInterface>('operations').countDocuments()).toBe(0);
     });
 });
@@ -1706,13 +1704,13 @@ describe('Auth middleware deviceUsers upsert', () => {
         const cookie = await loginAsAlice();
         const userId = await getUserId(cookie);
 
-        // The middleware's upsert is fire-and-forget — poll briefly because the request resolves
-        // before the upsert completes.
+        // The middleware's upsert is fire-and-forget: the request resolves before it lands.
         const res = await pullWithDeviceHeader(cookie, 'dev-via-header');
         expect(res.status).toBe(200);
-        await tick();
+        const findRow = () => db.collection<DeviceUserInterface>('deviceUsers').findOne({ _id: `dev-via-header:${userId}` });
+        await waitUntil(async () => (await findRow()) !== null);
 
-        const row = await db.collection<DeviceUserInterface>('deviceUsers').findOne({ _id: `dev-via-header:${userId}` });
+        const row = await findRow();
         expect(row).not.toBeNull();
         expect(row?.deviceId).toBe('dev-via-header');
         expect(row?.userId).toBe(userId);
@@ -2136,7 +2134,7 @@ describe('GET /sync/pull — paging', () => {
         // The last page acknowledges 'b' and ends paging: the purge now runs.
         const last = await pullPage(cookie, { ts: T2, id: 'b' }, '1');
         expect(last.hasMore).toBe(false);
-        await waitForPurge(async () => !(await isStored('a')));
+        await waitUntil(async () => !(await isStored('a')));
         expect(await isStored('a')).toBe(false);
     });
 
