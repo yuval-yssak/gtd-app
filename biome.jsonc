@@ -59,9 +59,10 @@
             "trailingCommas": "all"
         }
     },
-    // Biome 2.6 started formatting Markdown and YAML by default; docs and workflows are hand-formatted.
+    // Biome 2.6's Markdown formatter changes meaning, not just layout: it de-indents nested YAML front matter
+    // (agent-memory `metadata:` blocks), turns `*` inside front matter into `_`, and folds ordered lists into prose.
     "markdown": { "formatter": { "enabled": false } },
-    "yaml": { "formatter": { "enabled": false } },
+    "yaml": { "formatter": { "quoteStyle": "single" } },
     "css": {
         "parser": {
             "cssModules": true

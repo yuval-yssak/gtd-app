@@ -48,6 +48,6 @@ jobs:
             # zod / MCP SDK imports from mcp-server/node_modules. --ignore-scripts skips its `prepare` build.
             - run: npm install --ignore-scripts
               working-directory: mcp-server
-            - run: npm run typecheck   # tsrs --noEmit (source + src/tests)
-            - run: npm run lint        # biome lint + format
-            - run: npm test          # vitest
+            - run: npm run typecheck # tsrs --noEmit (source + src/tests)
+            - run: npm run lint # biome lint + format
+            - run: npm test # vitest
