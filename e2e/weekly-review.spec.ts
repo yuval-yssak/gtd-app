@@ -3,6 +3,7 @@ import dayjs from 'dayjs';
 import type { ReviewStageId } from '../client/src/components/weeklyReview/reviewFlowState';
 import { resetServerForEmails, withOneLoggedInDevice, withTwoAccountsOnOneDevice } from './helpers/context';
 import { evaluateWithHarness, gtd } from './helpers/gtd';
+import { openReviewDetailsForm } from './helpers/itemEditorLocators';
 import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Weekly Review wizard: guided multi-step flow — inbox checklist (seeded user-defined external
@@ -278,9 +279,19 @@ test.describe('weekly review', () => {
                 expect(docOverflow).toBeLessThanOrEqual(1);
             };
 
+            // The review-start sweep briefs the long notes (fake model), which folds them behind
+            // "Show notes" — and with the details summarised the folded card fits. Unfold them, so
+            // the long item really overflows the stage area this test is about.
+            const unfoldLongNotes = async () => {
+                if ((await focusStage.getByRole('textbox', { name: 'Title' }).inputValue()) !== 'Long dossier') return;
+                await focusStage.getByTestId('showNotesButton').click();
+                await expect(focusStage.getByTestId('pageNotesPreview')).toBeVisible();
+            };
+
             // Item 1: primary button fully visible with zero scrolling, and living in the pinned
             // bar — NOT inside the scrolling stage area (pins the portal destination).
             await expect(focusStage.getByRole('textbox', { name: 'Title' })).toBeVisible();
+            await unfoldLongNotes();
             await expect(page.getByTestId('focusKeep')).toBeInViewport();
             await expect(page.getByTestId('stageActionBar').getByTestId('focusKeep')).toBeVisible();
             const barOnFirstItem = await page.getByTestId('stageActionBar').boundingBox();
@@ -300,10 +311,12 @@ test.describe('weekly review', () => {
             const leftGap = travelPrevBox.x - barOnFirstItem.x;
             const rightGap = barOnFirstItem.x + barOnFirstItem.width - (travelNextBox.x + travelNextBox.width);
             expect(Math.abs(leftGap - rightGap)).toBeLessThanOrEqual(1);
+            const firstTitle = await focusStage.getByRole('textbox', { name: 'Title' }).inputValue();
             await page.getByTestId('focusKeep').click();
 
             // Item 2 (the other length): the bar has not moved a pixel.
-            await expect(focusStage.getByRole('textbox', { name: 'Title' })).toBeVisible();
+            await expect(focusStage.getByRole('textbox', { name: 'Title' })).not.toHaveValue(firstTitle);
+            await unfoldLongNotes();
             const barOnSecondItem = await page.getByTestId('stageActionBar').boundingBox();
             expect(barOnSecondItem?.y).toBeCloseTo(barOnFirstItem.y, 0);
             const secondItemOverflow = await stageScrollOverflow();
@@ -737,6 +750,7 @@ test.describe('weekly review', () => {
                 // Owner change in the embedded editor → "Save & next" routes the save to a reassign.
                 const focusStage = page.getByTestId('focusStage');
                 await expect(focusStage.getByRole('textbox', { name: 'Title' })).toHaveValue('Moving away');
+                await openReviewDetailsForm(focusStage);
                 await focusStage.getByTestId('accountPicker').click();
                 await page.getByRole('option', { name: new RegExp(emailB) }).click();
                 await expect(page.getByTestId('focusKeep')).toHaveText('Save & next');
@@ -1100,6 +1114,7 @@ test.describe('weekly review', () => {
             // series' first undone occurrence — the routine distinction lives in the banner.
             const cardTitle = routineCard.getByRole('textbox', { name: 'Title' });
             await expect(cardTitle).toHaveValue('Morning gym');
+            await openReviewDetailsForm(routineCard);
             await expect(routineCard.getByLabel('Start time', { exact: true })).toHaveValue('06:00');
             await expect(routineCard.getByTestId('reviewRoutineBanner')).toContainText('Routine · Every day at 06:00');
 
@@ -1114,6 +1129,7 @@ test.describe('weekly review', () => {
 
             // The weekly routine's card: its first open occurrence's time, the schedule and the
             // series tail in the banner (the exception counts apart), the occurrence's notes.
+            await openReviewDetailsForm(routineCard);
             await expect(routineCard.getByLabel('Start time', { exact: true })).toHaveValue('18:00');
             await expect(routineCard.getByTestId('reviewRoutineBanner')).toContainText('Every Thu at 18:00');
             await expect(routineCard.getByTestId('reviewRoutineBanner')).toContainText(`${poolOccurrences.length - 2} more after this one`);
@@ -1249,6 +1265,7 @@ test.describe('weekly review', () => {
             const [earliest] = seeded;
             if (!earliest) throw new Error('expected an aged earliest occurrence');
             const routineCard = page.getByTestId('routineReviewCard');
+            await openReviewDetailsForm(routineCard);
             await expect(routineCard.getByRole('textbox', { name: 'Date', exact: true })).toHaveValue(
                 dayjs().subtract(seeded.length, 'day').format('YYYY-MM-DD'),
             );
@@ -1274,6 +1291,7 @@ test.describe('weekly review', () => {
 
             await openCalendarStage(page);
             const routineCard = page.getByTestId('routineReviewCard');
+            await openReviewDetailsForm(routineCard);
             await expect(routineCard.getByRole('textbox', { name: 'Date', exact: true })).toHaveValue(dayjs().format('YYYY-MM-DD'));
 
             await page.getByTestId('routineCardDone').click();
@@ -1376,6 +1394,7 @@ test.describe('weekly review', () => {
             // Same occurrence the live card showed (today's ended one), still open — so the Date field is there.
             const revisit = page.getByTestId('revisitDecisionCard');
             await expect(revisit.getByTestId('reviewRoutineBanner')).toBeVisible();
+            await openReviewDetailsForm(revisit);
             await expect(revisit.getByRole('textbox', { name: 'Date', exact: true })).toHaveValue(dayjs(endedToday.timeStart).format('YYYY-MM-DD'));
             await expect(page.getByTestId('revisitUndoDecision')).toBeEnabled(); // "Looks good" is a bare requeue
 
@@ -1396,6 +1415,7 @@ test.describe('weekly review', () => {
 
             await openCalendarStage(page);
             const routineCard = page.getByTestId('routineReviewCard');
+            await openReviewDetailsForm(routineCard);
             await routineCard.getByLabel('Start time', { exact: true }).fill('16:00');
             await routineCard.getByLabel('End time', { exact: true }).fill('16:15');
             await expect(page.getByTestId('routineCardLooksGood')).toHaveText('Save & next');

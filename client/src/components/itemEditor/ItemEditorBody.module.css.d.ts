@@ -8,6 +8,7 @@ declare const styles: {
     readonly briefRow: string;
     readonly briefText: string;
     readonly createdAt: string;
+    readonly details: string;
     readonly inlineActions: string;
     readonly itemId: string;
     readonly keyScope: string;
@@ -16,6 +17,7 @@ declare const styles: {
     readonly notesLabel: string;
     readonly pagePreview: string;
     readonly replaceConfirm: string;
+    readonly statusChip: string;
     readonly statusChips: string;
     readonly statusFields: string;
     readonly statusLabel: string;

@@ -1,0 +1,33 @@
+/* Facts on the left, the pencil pinned to the first line on the right — the brief row's shape. */
+.summary {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+}
+
+/* Inline label/value pairs that wrap as whole pairs, so a card-wide row holds four or five facts. */
+.facts {
+    display: flex;
+    flex: 1;
+    flex-wrap: wrap;
+    gap: var(--space-1) var(--space-4);
+    margin: 0;
+
+    /* Padded to the pencil's height so a one-line summary centres beside it. */
+    padding-block: 0.3125rem;
+}
+
+.fact {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-1);
+
+    & dd {
+        margin: 0;
+    }
+}
+
+.empty {
+    flex: 1;
+    padding-block: 0.3125rem;
+}

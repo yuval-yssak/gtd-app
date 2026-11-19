@@ -14,8 +14,9 @@ import type { StoredItem } from '../types/MyDB';
 import { AccountChip } from './AccountChip';
 import { AccountSyncChip } from './AccountSyncChip';
 import styles from './ArchivedItemsView.module.css';
-import { buildDoneContextLookups, type DoneContextLookups, doneContextSummary, doneItemContext } from './doneItemContextLogic';
+import { doneContextSummary, doneItemContext } from './doneItemContextLogic';
 import { CopyIdButton } from './itemEditor/CopyIdButton';
+import { buildItemFactLookups, type ItemFactLookups } from './itemFactsLogic';
 import { ListRowShell } from './ListRowShell';
 import { ListSearchButton, ListSearchField } from './ListSearch';
 import { ListSkeleton } from './ListSkeleton';
@@ -55,7 +56,7 @@ interface ArchivedRowProps {
     sortKey: ItemSortKey;
     routineTitle: string | undefined;
     /** Stable across renders, so the memoized row still skips; the summary is derived per MOUNTED row. */
-    doneContextLookups: DoneContextLookups;
+    doneContextLookups: ItemFactLookups;
     isGhost: boolean;
     onGhostExited: (itemId: string) => void;
     hasDivider: boolean;
@@ -109,7 +110,7 @@ export function ArchivedItemsView({ status, title, emptyIcon, emptyMessage, urlQ
     const sorted = useMemo(() => sortItems(filtered, sortKey, sortDir), [filtered, sortKey, sortDir]);
     const routineTitleById = useMemo(() => new Map(routines.map((r) => [r._id, r.title])), [routines]);
     // Cross-account lists: a row's references resolve by id whichever visible account owns it.
-    const doneContextLookups = useMemo(() => buildDoneContextLookups(allPeople, allWorkContexts), [allPeople, allWorkContexts]);
+    const doneContextLookups = useMemo(() => buildItemFactLookups(allPeople, allWorkContexts), [allPeople, allWorkContexts]);
 
     // Ghosts are fading leftovers of items that just left this archive — count live rows only.
     const liveCount = filtered.filter((item) => !isGhost(item)).length;
@@ -206,7 +207,7 @@ export function ArchivedItemsView({ status, title, emptyIcon, emptyMessage, urlQ
     );
 }
 
-function doneRowSummary(item: StoredItem, lookups: DoneContextLookups) {
+function doneRowSummary(item: StoredItem, lookups: ItemFactLookups) {
     const context = doneItemContext(item, lookups);
     return context ? doneContextSummary(context) : null;
 }

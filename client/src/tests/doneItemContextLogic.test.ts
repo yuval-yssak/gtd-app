@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { buildDoneContextLookups, doneContextSummary, doneItemContext, priorStatusOf } from '../components/doneItemContextLogic';
+import { doneContextSummary, doneItemContext, priorStatusOf } from '../components/doneItemContextLogic';
+import { buildItemFactLookups } from '../components/itemFactsLogic';
 import type { OpenItemStatus, StoredItem, StoredPerson, StoredWorkContext } from '../types/MyDB';
 
 const person = (id: string, name: string): StoredPerson => ({
@@ -17,7 +18,7 @@ const workContext = (id: string, name: string): StoredWorkContext => ({
     updatedTs: '2026-01-01T00:00:00.000Z',
 });
 
-const LOOKUPS = buildDoneContextLookups(
+const LOOKUPS = buildItemFactLookups(
     [person('p-dana', 'Dana'), person('p-omer', 'Omer')],
     [workContext('c-phone', 'Phone'), workContext('c-office', 'Office')],
 );

@@ -42,7 +42,7 @@ export const WithMarkdownNotes: Story = {
     args: { item: sampleNextActionWithNotes },
 };
 
-/** A next action — energy, time and context fields under the selected status chip. */
+/** A next action — the dates, contexts, energy and time grid under the selected status chip, notes below it. */
 export const NextActionItem: Story = {
     args: { item: sampleNextActionItem },
 };
@@ -60,4 +60,19 @@ export const WaitingForItem: Story = {
 /** An inbox item opened from a status chip — the editor opens preset to that status. */
 export const PresetFromChip: Story = {
     args: { initialStatus: 'calendar' },
+};
+
+/** Weekly review card: the next action's details rest as a read-only summary; the pencil opens the form. */
+export const ReviewSummary: Story = {
+    args: { item: sampleNextActionItem, presentation: 'review' },
+};
+
+/** Weekly review card for a calendar item: when it happens, under the status chips. */
+export const ReviewCalendarSummary: Story = {
+    args: { item: sampleCalendarItem, presentation: 'review' },
+};
+
+/** Weekly review card with no notes: the notes rest as their header and pencil alone. */
+export const ReviewInboxNoNotes: Story = {
+    args: { item: sampleInboxItem, presentation: 'review' },
 };

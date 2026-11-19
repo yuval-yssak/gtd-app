@@ -29,8 +29,32 @@
 .statusChips {
     display: flex;
     flex-wrap: wrap;
-    gap: var(--space-2);
-    margin-block-start: var(--space-2);
+    gap: var(--space-1);
+    margin-block-start: var(--space-1);
+}
+
+/* A notch tighter than the DS chip's own padding: at the review card's width the eight status
+ * chips then hold one line instead of wrapping Trash onto a second. */
+.statusChip {
+    padding-inline: var(--space-1-5);
+
+    /* A finger needs the bigger target the tight row saves on a desktop pointer. */
+    @media (pointer: coarse) {
+        block-size: 2rem;
+    }
+}
+
+/* The per-status detail form as one block that keeps the body's own section rhythm, so the
+ * summary/form swap is a single child of the body. */
+.details {
+    display: flex;
+    flex-direction: column;
+    gap: inherit;
+}
+
+/* Nothing to show (an inbox or trash item has no detail form) — don't leave a gap for it. */
+.details:empty {
+    display: none;
 }
 
 /* The per-status forms under a status (someday/maybe, routine): an explainer line, then fields. */

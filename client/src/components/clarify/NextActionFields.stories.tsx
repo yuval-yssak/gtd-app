@@ -21,27 +21,17 @@ function ControlledNextActionFields({
     initial,
     workContexts = [],
     people = [],
-    dense = false,
 }: {
     initial: NextActionFormState;
     workContexts?: (typeof sampleWorkContexts)[number][];
     people?: (typeof samplePeople)[number][];
-    dense?: boolean;
 }) {
     const [value, setValue] = useState<NextActionFormState>(initial);
-    return (
-        <NextActionFields
-            value={value}
-            onChange={(patch) => setValue((prev) => ({ ...prev, ...patch }))}
-            workContexts={workContexts}
-            people={people}
-            dense={dense}
-        />
-    );
+    return <NextActionFields value={value} onChange={(patch) => setValue((prev) => ({ ...prev, ...patch }))} workContexts={workContexts} people={people} />;
 }
 
 /**
- * The dense layout is a container query on the fields' own width, and a size container has no
+ * The grid layout is a container query on the fields' own width, and a size container has no
  * intrinsic width — under the centered layout it would collapse to nothing. These give it the
  * review card's content width, and one narrower than the 34rem breakpoint.
  */
@@ -80,20 +70,20 @@ export const WithTickler: Story = {
     ),
 };
 
-/** Weekly review (dense): the five small controls flow three to a row at the review card's width. */
+/** At the review card's width (the item page is wider still): the five small controls flow three to a row. */
 export const DenseReviewCard: Story = {
     render: () => (
         <div style={{ inlineSize: REVIEW_CARD_CONTENT_WIDTH }}>
-            <ControlledNextActionFields initial={filledNextActionState} workContexts={sampleWorkContexts} people={samplePeople} dense />
+            <ControlledNextActionFields initial={filledNextActionState} workContexts={sampleWorkContexts} people={samplePeople} />
         </div>
     ),
 };
 
-/** Weekly review (dense) on a narrow card: below 34rem the single column stands. */
+/** On a narrow card: below 34rem the single column stands. */
 export const DenseNarrowCard: Story = {
     render: () => (
         <div style={{ inlineSize: NARROW_CARD_WIDTH }}>
-            <ControlledNextActionFields initial={filledNextActionState} workContexts={sampleWorkContexts} people={samplePeople} dense />
+            <ControlledNextActionFields initial={filledNextActionState} workContexts={sampleWorkContexts} people={samplePeople} />
         </div>
     ),
 };

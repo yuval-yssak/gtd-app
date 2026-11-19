@@ -4,13 +4,13 @@
     gap: var(--space-4);
 }
 
-/* Dense (weekly review) layout: the five small controls — tickler and expected-by dates, energy
- * toggle, time estimate, urgent checkbox — are far narrower than the card, so they flow three to a
- * row, reclaiming vertical space without shrinking any control (labels above the inputs made two
- * columns too tall for the review card at 929px). A container query, not a media query: the card is
+/* The five small controls — tickler and expected-by dates, energy toggle, time estimate, urgent
+ * checkbox — are far narrower than the editor, so they flow three to a row, reclaiming vertical space
+ * without shrinking any control (labels above the inputs made two columns too tall for the review
+ * card at 929px). A container query, not a media query: the item page and the review card are both
  * capped narrower than the viewport, and below ~34rem three columns would squeeze the date inputs,
  * so the column stands. `auto` tracks size to the controls; the last takes what is left. */
-.root[data-dense] {
+.root {
     container: next-action-fields / inline-size;
 }
 
@@ -23,19 +23,14 @@
     }
 }
 
-/* The chip clouds opt out of the dense grid: they genuinely use the full width, and a wider row
- * wraps less. Applied only in the dense layout — there is no grid to span in the single column. */
+/* The chip clouds opt out of the grid: they genuinely use the full width, and a wider row wraps less.
+ * Harmless in the narrow single column, where there is no grid to span. */
 .fullSpan {
     grid-column: 1 / -1;
 }
 
 .caption {
     display: block;
-}
-
-.explainer {
-    display: block;
-    margin-block-end: var(--space-1);
 }
 
 .timeField {

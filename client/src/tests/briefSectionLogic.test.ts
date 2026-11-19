@@ -11,6 +11,7 @@ import {
     isBriefFirst,
     isBriefPinnedError,
     isDeclinedNoteVisible,
+    isNotesFoldedByDefault,
     isReplaceConfirmNeeded,
 } from '../components/itemEditor/briefSectionLogic';
 
@@ -48,6 +49,19 @@ describe('isBriefFirst', () => {
     it('never leads with a declined row — there is no brief line, only a caption, so the notes preview must stay', () => {
         expect(isBriefFirst('review', true, 'declined')).toBe(false);
         expect(isBriefFirst('edit', true, 'declined')).toBe(false);
+    });
+});
+
+describe('isNotesFoldedByDefault', () => {
+    it('folds the notes behind "Show notes" wherever a brief is on show — the item page as much as the review', () => {
+        expect(isNotesFoldedByDefault(true, 'fresh')).toBe(true);
+        expect(isNotesFoldedByDefault(true, 'pinnedStale')).toBe(true);
+    });
+
+    it('keeps the notes open when there is no brief line to stand in for them, or briefs are switched off', () => {
+        expect(isNotesFoldedByDefault(true, 'none')).toBe(false);
+        expect(isNotesFoldedByDefault(true, 'declined')).toBe(false);
+        expect(isNotesFoldedByDefault(false, 'fresh')).toBe(false);
     });
 });
 

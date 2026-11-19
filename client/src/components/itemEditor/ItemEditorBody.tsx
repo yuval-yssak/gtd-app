@@ -64,19 +64,22 @@ import {
 } from '../clarify/types';
 import { WaitingForFields } from '../clarify/WaitingForFields';
 import { DisabledCapableTooltip } from '../DisabledCapableTooltip';
-import { buildDoneContextLookups, doneItemContext } from '../doneItemContextLogic';
+import { doneItemContext } from '../doneItemContextLogic';
 import { FutureDoneConfirmDialog, useFutureDoneConfirm } from '../FutureDoneConfirmDialog';
+import { buildItemFactLookups } from '../itemFactsLogic';
 import { NextActionPositionRow } from '../nextActions/NextActionPositionRow';
 import { RoutineIndicator } from '../RoutineIndicator';
 import { RoutineScheduleFields } from '../routineEditor/RoutineScheduleFields';
 import type { FormState as RoutineFormState } from '../routineEditor/routineFormState';
 import { UnsavedChangesDialog } from '../UnsavedChangesDialog';
 import { BriefSection } from './BriefSection';
-import { decideBriefCommit, type EditorPresentation, isBriefableItemStatus, isBriefFirst } from './briefSectionLogic';
+import { decideBriefCommit, type EditorPresentation, isBriefableItemStatus, isBriefFirst, isNotesFoldedByDefault } from './briefSectionLogic';
 import { CalendarEventLinks } from './CalendarEventLinks';
 import { CopyIdButton } from './CopyIdButton';
 import { DoneItemContextSection } from './DoneItemContextSection';
+import { ItemDetailsSummary } from './ItemDetailsSummary';
 import styles from './ItemEditorBody.module.css';
+import { isDetailsSummaryShown, itemDetailFacts, ownerAccountFacts } from './itemDetailsSummaryLogic';
 import { resolveActionsPlacement } from './itemEditorActionsPlacement';
 import {
     applyGroupMergeOutcome,
@@ -132,6 +135,9 @@ const STATUS_CHIPS: StatusChipConfig[] = [
     { value: 'done', label: 'Done', icon: <CircleCheck />, tone: 'success' },
     { value: 'trash', label: 'Trash', icon: <Trash2 />, tone: 'error' },
 ];
+
+// Base UI controls carry hidden native inputs (tabindex -1 / aria-hidden) — never a focus target.
+const FIRST_FOCUSABLE = 'input:not([disabled]):not([tabindex="-1"]):not([aria-hidden="true"]), button:not([disabled]), textarea, [tabindex="0"]';
 
 /** A status chip's tooltip: its label, plus its letter when it has one. */
 function chipTitle(cfg: StatusChipConfig): string {
@@ -379,8 +385,38 @@ export function ItemEditorBody({
         [people, ownerUserId, assignedPeopleIds, allPeople],
     );
     // By id across accounts, like the pickers' `allOptions`: a done item may reference an archived entity.
-    const doneContextLookups = useMemo(() => buildDoneContextLookups(allPeople, allWorkContexts), [allPeople, allWorkContexts]);
-    const doneContext = useMemo(() => doneItemContext(liveItem, doneContextLookups), [liveItem, doneContextLookups]);
+    const factLookups = useMemo(() => buildItemFactLookups(allPeople, allWorkContexts), [allPeople, allWorkContexts]);
+    const doneContext = useMemo(() => doneItemContext(liveItem, factLookups), [liveItem, factLookups]);
+    // Review only: the details start as a read-only summary; "Edit details" swaps the form in for
+    // the rest of this mount (the host remounts per item, so the next card starts summarised again).
+    const [isDetailsExpanded, setIsDetailsExpanded] = useState(false);
+    const detailsFormRef = useRef<HTMLDivElement | null>(null);
+    const focusDetailsOnExpandRef = useRef(false);
+    useEffect(() => {
+        // The pencil unmounts with the summary — hand focus to the form's first control so a
+        // keyboard user lands where they asked to go instead of on <body>.
+        if (isDetailsExpanded && focusDetailsOnExpandRef.current) {
+            focusDetailsOnExpandRef.current = false;
+            detailsFormRef.current?.querySelector<HTMLElement>(FIRST_FOCUSABLE)?.focus();
+        }
+    }, [isDetailsExpanded]);
+    function expandDetails() {
+        focusDetailsOnExpandRef.current = true;
+        setIsDetailsExpanded(true);
+    }
+
+    /**
+     * Picking a status other than the saved one opens its form and LATCHES it open: a later match
+     * (re-picking the saved chip, or a remote write landing the same status) must never swap a
+     * summary of the live row over a form the user has been filling in.
+     */
+    function pickStatus(next: ClarifyDestination) {
+        setRoutineSaveError(null);
+        writeFormField('status', next, setStatus);
+        if (next !== liveItemRef.current.status) {
+            setIsDetailsExpanded(true);
+        }
+    }
 
     // Bundle the per-status forms so the merge/patch builders take one cohesive argument.
     const forms: EditorForms = { na: naForm, cal: calForm, wf: wfForm, sm: smForm };
@@ -1056,10 +1092,7 @@ export function ItemEditorBody({
         // handshake (decision + undo capture) around `triggerSave`: a body-level Cmd/Ctrl+Enter would
         // bypass it, so the shortcut is off there.
         isSaveDisabled: saveDisabled || renderActions !== undefined,
-        onPickStatus: (next) => {
-            setRoutineSaveError(null);
-            writeFormField('status', next, setStatus);
-        },
+        onPickStatus: pickStatus,
         canPick: (next) => next !== 'routine' || canClarifyToRoutine(liveItem),
     });
 
@@ -1073,6 +1106,9 @@ export function ItemEditorBody({
 
     const briefRowState = briefState(liveItem, liveBrief);
     const isBriefLeading = isBriefFirst(presentation, isShowBriefsOn, briefRowState);
+    const isNotesFolded = isNotesFoldedByDefault(isShowBriefsOn, briefRowState);
+    const isSummaryShown = isDetailsSummaryShown(presentation, { isExpanded: isDetailsExpanded, selectedStatus: status, savedStatus: liveItem.status });
+    const ownerFacts = ownerAccountFacts(loggedInAccounts, liveItem.userId);
 
     const actionButtons = renderActions ? (
         renderActions({ triggerSave: onSave, saveDisabled, isSaving, isDirty, hasTextEdits, isRoutineDestination: status === 'routine', onClose: closeEditor })
@@ -1121,6 +1157,7 @@ export function ItemEditorBody({
         // biome-ignore lint/a11y/noStaticElementInteractions: a key-delegation scope, not a control — it hears the shortcuts its children's keys bubble up, and must stay a React handler so a child's stopPropagation (the brief field's Escape) is honoured
         <div
             {...bodyProps}
+            data-testid="itemEditorBody"
             className={clsx(bodyProps.className, styles.keyScope)}
             tabIndex={-1}
             {...{ [EDITOR_KEY_SCOPE_ATTR]: '' }}
@@ -1173,17 +1210,6 @@ export function ItemEditorBody({
                 isBriefable={isBriefableItemStatus(liveItem.status)}
             />
 
-            {status === 'calendar' && (
-                <CalendarFields
-                    value={calForm}
-                    onChange={(patch) => writeFormField('cal', applyCalendarPatch(formRefs.current.cal, patch), setCalForm)}
-                    calendarOptions={visibleCalendarOptions}
-                    forceShowPicker={ownerUserId !== item.userId}
-                />
-            )}
-
-            <NotesSection notes={notes} onNotesChange={onNotesChange} collapsible={isBriefLeading} />
-
             <Separator />
 
             <fieldset>
@@ -1197,8 +1223,8 @@ export function ItemEditorBody({
                             <Chip
                                 icon={cfg.icon}
                                 label={cfg.label}
-                                size="md"
                                 variant="outline"
+                                className={styles.statusChip}
                                 // Only the selected chip takes its status tone; unselected, Done and Trash stay neutral like the rest.
                                 tone={status === cfg.value ? cfg.tone : undefined}
                                 // Announced as pressed and mirrored as data-selected (the DS Chip contract).
@@ -1208,22 +1234,122 @@ export function ItemEditorBody({
                                 aria-label={cfg.label}
                                 data-testid="itemEditorStatusChip"
                                 aria-keyshortcuts={statusKeyOf(cfg.value)?.toUpperCase()}
-                                onClick={() => {
-                                    setRoutineSaveError(null);
-                                    writeFormField('status', cfg.value, setStatus);
-                                }}
+                                onClick={() => pickStatus(cfg.value)}
                             />
                         </Tooltip>
                     ))}
                 </div>
             </fieldset>
 
-            {/* Only while Done is both saved and selected — picking another chip shows that status's fields instead. */}
-            {status === 'done' && doneContext && (
+            {isSummaryShown ? (
                 <>
-                    <Separator />
-                    <DoneItemContextSection context={doneContext} />
+                    <ItemDetailsSummary
+                        facts={[...itemDetailFacts({ ...liveItem, ...(liveAttendees ? { attendees: liveAttendees } : {}) }, factLookups), ...ownerFacts]}
+                        onEditRequested={expandDetails}
+                    />
+                    {status === 'calendar' && <CalendarEventLinks item={liveItem} calendarOptions={calendarOptions} />}
                 </>
+            ) : (
+                <div ref={detailsFormRef} className={styles.details} data-testid="itemDetailsForm">
+                    {/* Only while Done is both saved and selected — picking another chip shows that status's fields instead. */}
+                    {status === 'done' && doneContext && <DoneItemContextSection context={doneContext} />}
+
+                    {status === 'calendar' && (
+                        <>
+                            <CalendarFields
+                                value={calForm}
+                                onChange={(patch) => writeFormField('cal', applyCalendarPatch(formRefs.current.cal, patch), setCalForm)}
+                                calendarOptions={visibleCalendarOptions}
+                                forceShowPicker={ownerUserId !== item.userId}
+                            />
+                            <CalendarEventLinks item={liveItem} calendarOptions={calendarOptions} />
+                            {((liveAttendees?.length ?? 0) > 0 || item.organizer) && (
+                                <MeetingDetails
+                                    item={{ ...liveItem, ...(liveAttendees ? { attendees: liveAttendees } : {}) }}
+                                    db={db}
+                                    ownerUserIdForNewPeople={ownerUserId}
+                                    onRsvp={onRsvp}
+                                    onAttendeesChange={onAttendeesChange}
+                                    {...(scopeMissingReconsentUrl ? { scopeMissingReconsentUrl } : {})}
+                                    onReconsentClosed={() => setScopeMissingReconsentUrl(null)}
+                                />
+                            )}
+                        </>
+                    )}
+
+                    {status === 'nextAction' && (
+                        <NextActionFields
+                            value={naForm}
+                            onChange={(patch) => writeFormField('na', { ...formRefs.current.na, ...patch }, setNaForm)}
+                            workContexts={pickerWorkContexts}
+                            people={pickerPeople}
+                            usage={entityUsage}
+                        />
+                    )}
+
+                    {status === 'waitingFor' && (
+                        <WaitingForFields
+                            value={wfForm}
+                            onChange={(patch) => writeFormField('wf', { ...formRefs.current.wf, ...patch }, setWfForm)}
+                            people={pickerPeople}
+                        />
+                    )}
+
+                    {status === 'somedayMaybe' && (
+                        <div className={styles.statusFields}>
+                            <Text variant="bodySm" tone="secondary">
+                                Parked for later review. Optionally set a deadline or hide it from review until a date.
+                            </Text>
+                            <TicklerDateFields value={smForm} onChange={(patch) => writeFormField('sm', { ...formRefs.current.sm, ...patch }, setSmForm)} />
+                        </div>
+                    )}
+
+                    {status === 'routine' && (
+                        <div className={styles.statusFields} data-testid="itemEditorRoutineFields">
+                            <Text variant="bodySm" tone="secondary">
+                                Turns this item into a repeating routine. The item itself is consumed — the routine takes its title and notes.
+                            </Text>
+                            {routineSaveError && (
+                                <Callout tone="error" data-testid="itemEditorRoutineSaveError">
+                                    {routineSaveError}
+                                </Callout>
+                            )}
+                            <RoutineScheduleFields
+                                form={routineForm}
+                                onPatch={(patch) => setRoutineForm((f) => ({ ...f, ...patch }))}
+                                calendarOptions={routineCalendarOptions}
+                                workContexts={pickerWorkContexts}
+                                people={pickerPeople}
+                                usage={entityUsage}
+                                frequencyKey={item._id}
+                            />
+                        </div>
+                    )}
+
+                    {loggedInAccounts.length > 1 && (
+                        <div>
+                            <AccountPicker
+                                value={ownerUserId}
+                                onChange={(uid) => {
+                                    writeFormField('ownerUserId', uid, setOwnerUserId);
+                                    setReassignError(null);
+                                    writeFormField(
+                                        'cal',
+                                        { ...formRefs.current.cal, calendarSyncConfigId: pickDefaultConfigForUser(calendarOptions, uid, item) },
+                                        setCalForm,
+                                    );
+                                }}
+                                disabled={isRoutineGenerated || isSaving}
+                                {...(reassignError ? { error: reassignError } : {})}
+                            />
+                            {isRoutineGenerated && (
+                                <Text as="span" variant="caption" tone="secondary" className={styles.accountHint}>
+                                    To move this, edit the routine itself.
+                                </Text>
+                            )}
+                        </div>
+                    )}
+                </div>
             )}
 
             {liveItem.routineId && (
@@ -1232,108 +1358,15 @@ export function ItemEditorBody({
                 </div>
             )}
 
-            {loggedInAccounts.length > 1 && (
-                <div>
-                    <AccountPicker
-                        value={ownerUserId}
-                        onChange={(uid) => {
-                            writeFormField('ownerUserId', uid, setOwnerUserId);
-                            setReassignError(null);
-                            writeFormField(
-                                'cal',
-                                { ...formRefs.current.cal, calendarSyncConfigId: pickDefaultConfigForUser(calendarOptions, uid, item) },
-                                setCalForm,
-                            );
-                        }}
-                        disabled={isRoutineGenerated || isSaving}
-                        {...(reassignError ? { error: reassignError } : {})}
-                    />
-                    {isRoutineGenerated && (
-                        <Text as="span" variant="caption" tone="secondary" className={styles.accountHint}>
-                            To move this, edit the routine itself.
-                        </Text>
-                    )}
-                </div>
-            )}
+            <Separator />
 
-            {status === 'nextAction' && (
-                <>
-                    <Separator />
-                    <NextActionFields
-                        value={naForm}
-                        onChange={(patch) => writeFormField('na', { ...formRefs.current.na, ...patch }, setNaForm)}
-                        workContexts={pickerWorkContexts}
-                        people={pickerPeople}
-                        usage={entityUsage}
-                        dense={presentation === 'review'}
-                    />
-                </>
-            )}
-
-            {status === 'calendar' && (
-                <>
-                    <CalendarEventLinks item={liveItem} calendarOptions={calendarOptions} />
-                    {((liveAttendees?.length ?? 0) > 0 || item.organizer) && (
-                        <MeetingDetails
-                            item={{ ...liveItem, ...(liveAttendees ? { attendees: liveAttendees } : {}) }}
-                            db={db}
-                            ownerUserIdForNewPeople={ownerUserId}
-                            onRsvp={onRsvp}
-                            onAttendeesChange={onAttendeesChange}
-                            {...(scopeMissingReconsentUrl ? { scopeMissingReconsentUrl } : {})}
-                            onReconsentClosed={() => setScopeMissingReconsentUrl(null)}
-                        />
-                    )}
-                </>
-            )}
-
-            {status === 'waitingFor' && (
-                <>
-                    <Separator />
-                    <WaitingForFields
-                        value={wfForm}
-                        onChange={(patch) => writeFormField('wf', { ...formRefs.current.wf, ...patch }, setWfForm)}
-                        people={pickerPeople}
-                    />
-                </>
-            )}
-
-            {status === 'somedayMaybe' && (
-                <>
-                    <Separator />
-                    <div className={styles.statusFields}>
-                        <Text variant="bodySm" tone="secondary">
-                            Parked for later review. Optionally set a deadline or hide it from review until a date.
-                        </Text>
-                        <TicklerDateFields value={smForm} onChange={(patch) => writeFormField('sm', { ...formRefs.current.sm, ...patch }, setSmForm)} />
-                    </div>
-                </>
-            )}
-
-            {status === 'routine' && (
-                <>
-                    <Separator />
-                    <div className={styles.statusFields} data-testid="itemEditorRoutineFields">
-                        <Text variant="bodySm" tone="secondary">
-                            Turns this item into a repeating routine. The item itself is consumed — the routine takes its title and notes.
-                        </Text>
-                        {routineSaveError && (
-                            <Callout tone="error" data-testid="itemEditorRoutineSaveError">
-                                {routineSaveError}
-                            </Callout>
-                        )}
-                        <RoutineScheduleFields
-                            form={routineForm}
-                            onPatch={(patch) => setRoutineForm((f) => ({ ...f, ...patch }))}
-                            calendarOptions={routineCalendarOptions}
-                            workContexts={pickerWorkContexts}
-                            people={pickerPeople}
-                            usage={entityUsage}
-                            frequencyKey={item._id}
-                        />
-                    </div>
-                </>
-            )}
+            {/* Notes sit below the details for every status, so they are always in the same place. */}
+            <NotesSection
+                notes={notes}
+                onNotesChange={onNotesChange}
+                collapsible={isNotesFolded}
+                emptyRestingState={presentation === 'review' ? 'header' : 'editor'}
+            />
 
             {/* The item's place in its list's manual order — only while the chosen status is the SAVED one
                 (an item being moved to another list lands at that list's top on save) and the list has a

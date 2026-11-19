@@ -109,7 +109,16 @@ export type EditorPresentation = 'edit' | 'review';
  * "no brief, and here is why" caption, so the notes preview must stay on show as it does for `none`.
  */
 export function isBriefFirst(presentation: EditorPresentation, isShowBriefsOn: boolean, state: BriefState): boolean {
-    return presentation === 'review' && isShowBriefsOn && (state === 'fresh' || state === 'pinnedStale');
+    return presentation === 'review' && isNotesFoldedByDefault(isShowBriefsOn, state);
+}
+
+/**
+ * Whether the notes start folded behind "Show notes" — in every presentation. A brief on show
+ * already says what the item is, so the full notes are opened on demand rather than taking the
+ * editor's space. `declined` and `none` have no brief line to stand in for them.
+ */
+export function isNotesFoldedByDefault(isShowBriefsOn: boolean, state: BriefState): boolean {
+    return isShowBriefsOn && (state === 'fresh' || state === 'pinnedStale');
 }
 
 // ── Generate / Regenerate button ─────────────────────────────────────────────

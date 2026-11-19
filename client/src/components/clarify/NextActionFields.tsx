@@ -16,8 +16,6 @@ interface Props {
     people: StoredPerson[];
     /** Ranks the chip clouds most-used-first and drives their collapse; omit for alphabetical-only (stories/tests). */
     usage?: UsageIndex | undefined;
-    /** Weekly review: pair the narrow controls into two columns so the whole item fits without scrolling. */
-    dense?: boolean | undefined;
 }
 
 const ENERGY_OPTIONS: ToggleOption<EnergyLevel>[] = [
@@ -26,7 +24,7 @@ const ENERGY_OPTIONS: ToggleOption<EnergyLevel>[] = [
     { value: 'high', label: 'High', 'data-testid': 'energyHigh' },
 ];
 
-export function NextActionFields({ value, onChange, workContexts, people, usage = EMPTY_USAGE_INDEX, dense = false }: Props) {
+export function NextActionFields({ value, onChange, workContexts, people, usage = EMPTY_USAGE_INDEX }: Props) {
     function toggleWorkContext(id: string) {
         const ids = value.workContextIds.includes(id) ? value.workContextIds.filter((x) => x !== id) : [...value.workContextIds, id];
         onChange({ workContextIds: ids });
@@ -44,10 +42,9 @@ export function NextActionFields({ value, onChange, workContexts, people, usage 
     const alphabeticalPeople = useMemo(() => sortByName(people), [people]);
     const selectedContextIds = useMemo(() => new Set(value.workContextIds), [value.workContextIds]);
     const selectedPeopleIds = useMemo(() => new Set(value.peopleIds), [value.peopleIds]);
-    const fullSpan = dense ? styles.fullSpan : undefined;
 
     return (
-        <div className={styles.root} data-dense={dense || undefined}>
+        <div className={styles.root}>
             <div className={styles.fields}>
                 {/* Tickler field shown first — "ignoreBefore" hides the item until that date.
                 Placing it at the top makes the snooze intent explicit before filling other fields. */}
@@ -55,12 +52,6 @@ export function NextActionFields({ value, onChange, workContexts, people, usage 
                     <Text as="span" variant="caption" tone="secondary" className={styles.caption}>
                         Tickler — hide until
                     </Text>
-                    {/* The explainer costs a full line; in the review the label alone carries it. */}
-                    {!dense && (
-                        <Text as="span" variant="caption" tone="secondary" className={styles.explainer}>
-                            Item stays hidden from Next Actions until this date
-                        </Text>
-                    )}
                     <DateField
                         accessibleName="Tickler date"
                         value={value.ignoreBefore}
@@ -68,10 +59,10 @@ export function NextActionFields({ value, onChange, workContexts, people, usage 
                         inputTestId="ignoreBeforeDate"
                     />
                 </div>
-                {/* The two dates sit together, so the dense grid can pair them on one row. */}
+                {/* The two dates sit together, so the grid can pair them on one row. */}
                 <DateField label="Expected by" value={value.expectedBy} onChange={(expectedBy) => onChange({ expectedBy })} inputTestId="expectedByDate" />
                 {workContexts.length > 0 && (
-                    <FieldSection label="Work contexts" className={fullSpan}>
+                    <FieldSection label="Work contexts" className={styles.fullSpan}>
                         <CollapsibleChipGroup
                             ranked={rankedContexts}
                             alphabetical={alphabeticalContexts}
@@ -91,7 +82,7 @@ export function NextActionFields({ value, onChange, workContexts, people, usage 
                     </FieldSection>
                 )}
                 {people.length > 0 && (
-                    <FieldSection label="People" className={fullSpan}>
+                    <FieldSection label="People" className={styles.fullSpan}>
                         <CollapsibleChipGroup
                             ranked={rankedPeople}
                             alphabetical={alphabeticalPeople}

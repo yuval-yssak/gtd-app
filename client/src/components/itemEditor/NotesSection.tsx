@@ -1,7 +1,7 @@
 import { Check, ChevronDown, Pencil } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
 import { Button, IconButton, Text } from '../../designSystem';
-import { enterNotesEdit, exitNotesEdit, initialNotesEditMode } from '../../lib/notesEditMode';
+import { type EmptyNotesRestingState, enterNotesEdit, exitNotesEdit, initialNotesEditMode } from '../../lib/notesEditMode';
 import { MarkdownNotesEditor, NOTES_EDITOR_LABEL, NOTES_PLACEHOLDER } from '../markdown/MarkdownNotesEditor';
 import { MarkdownPreview } from '../markdown/MarkdownPreview';
 import styles from './ItemEditorBody.module.css';
@@ -15,6 +15,8 @@ interface NotesSectionProps {
      * disclosure (the brief already says what the item is) and expand in place on demand.
      */
     collapsible?: boolean | undefined;
+    /** Where empty notes rest — see `EmptyNotesRestingState`. Defaults to the open editor. */
+    emptyRestingState?: EmptyNotesRestingState | undefined;
 }
 
 /**
@@ -23,9 +25,11 @@ interface NotesSectionProps {
  * "Done" button, Escape, or moving focus elsewhere return to the preview while notes are
  * non-empty. Empty notes start in the editor so the affordance is obvious.
  */
-export function NotesSection({ notes, onNotesChange, collapsible = false }: NotesSectionProps) {
+export function NotesSection({ notes, onNotesChange, collapsible = false, emptyRestingState = 'editor' }: NotesSectionProps) {
     // Hook first, then the disclosure guard: the early return below must not change hook order.
-    const [isExpanded, setIsExpanded] = useState(false);
+    // Latched open once the user is writing — empty notes that rest in the editor, or the pencil —
+    // so a brief arriving mid-edit (generate-brief, the sweep) never folds the editor out from under them.
+    const [isExpanded, setIsExpanded] = useState(() => emptyRestingState === 'editor' && notesAreEmpty(notes));
     if (collapsible && !isExpanded) {
         return (
             <div>
@@ -35,14 +39,21 @@ export function NotesSection({ notes, onNotesChange, collapsible = false }: Note
             </div>
         );
     }
-    return <ExpandedNotes notes={notes} onNotesChange={onNotesChange} />;
+    return <ExpandedNotes notes={notes} onNotesChange={onNotesChange} emptyRest={emptyRestingState} onEditStarted={() => setIsExpanded(true)} />;
 }
 
-function ExpandedNotes({ notes, onNotesChange }: { notes: string; onNotesChange: (n: string) => void }) {
+interface ExpandedNotesProps {
+    notes: string;
+    onNotesChange: (n: string) => void;
+    emptyRest: EmptyNotesRestingState;
+    onEditStarted: () => void;
+}
+
+function ExpandedNotes({ notes, onNotesChange, emptyRest, onEditStarted }: ExpandedNotesProps) {
     // Empty notes start in the editor so the user sees a clear writing surface; non-empty notes
     // start in preview so the page reads like a document. Only the pencil asks for editor focus —
     // a freshly opened item with empty notes must not yank focus (see notesEditMode).
-    const [{ isEditing: editing, focusEditorOnMount }, setEditMode] = useState(() => initialNotesEditMode(notes));
+    const [{ isEditing: editing, focusEditorOnMount }, setEditMode] = useState(() => initialNotesEditMode(notes, emptyRest));
     // Per-instance id for the section label's aria-labelledby — useId guarantees uniqueness if
     // the section ever renders more than once in a tree (split pane, side-by-side comparison).
     const labelId = useId();
@@ -60,10 +71,14 @@ function ExpandedNotes({ notes, onNotesChange }: { notes: string; onNotesChange:
             editButtonRef.current?.focus();
         }
     }, [editing]);
-    const enterEdit = () => setEditMode(enterNotesEdit());
-    // Empty notes have nothing to preview — the editor stays the resting state.
+    const enterEdit = () => {
+        onEditStarted();
+        setEditMode(enterNotesEdit());
+    };
+    // Empty notes have nothing to preview — the editor stays the resting state, unless the host
+    // rests empty notes on the bare header (then leaving is always allowed).
     const exitEditIfNotesExist = () => {
-        if (notesAreEmpty(notesRef.current)) {
+        if (emptyRest === 'editor' && notesAreEmpty(notesRef.current)) {
             return false;
         }
         setEditMode(exitNotesEdit());
@@ -87,7 +102,7 @@ function ExpandedNotes({ notes, onNotesChange }: { notes: string; onNotesChange:
                     <IconButton
                         size="sm"
                         aria-label="Done editing notes"
-                        disabled={notesAreEmpty(notes)}
+                        disabled={emptyRest === 'editor' && notesAreEmpty(notes)}
                         // Keep focus in the editor on press: otherwise its blur flips to preview
                         // first and the click would land on nothing (or re-enter edit).
                         onMouseDown={(e) => e.preventDefault()}
@@ -124,11 +139,18 @@ function ExpandedNotes({ notes, onNotesChange }: { notes: string; onNotesChange:
                 <IconButton ref={editButtonRef} size="sm" aria-label="Edit notes" onClick={enterEdit} data-testid="notesEditButton">
                     <Pencil />
                 </IconButton>
+                {notesAreEmpty(notes) && (
+                    <Text as="span" variant="caption" tone="secondary">
+                        No notes
+                    </Text>
+                )}
             </div>
-            {/* biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must be focusable so keyboard users can scroll long notes (WCAG scrollable-region-focusable) */}
-            <section className={styles.pagePreview} tabIndex={0} aria-labelledby={labelId} data-testid="pageNotesPreview">
-                <MarkdownPreview markdown={notes} />
-            </section>
+            {notesAreEmpty(notes) ? null : (
+                // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must be focusable so keyboard users can scroll long notes (WCAG scrollable-region-focusable)
+                <section className={styles.pagePreview} tabIndex={0} aria-labelledby={labelId} data-testid="pageNotesPreview">
+                    <MarkdownPreview markdown={notes} />
+                </section>
+            )}
         </div>
     );
 }

@@ -6,6 +6,11 @@ describe('notes edit mode', () => {
         expect(initialNotesEditMode('   ')).toEqual({ isEditing: true, focusEditorOnMount: false });
     });
 
+    it('empty notes rest on the bare header when the host asks for it (the review card): nothing to show, nothing to type yet', () => {
+        expect(initialNotesEditMode('   ', 'header')).toEqual({ isEditing: false, focusEditorOnMount: false });
+        expect(initialNotesEditMode('Hello', 'header')).toEqual({ isEditing: false, focusEditorOnMount: false });
+    });
+
     it('non-empty notes rest in the preview', () => {
         expect(initialNotesEditMode('Hello')).toEqual({ isEditing: false, focusEditorOnMount: false });
     });

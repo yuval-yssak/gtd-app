@@ -4,6 +4,7 @@ import { compareByRank } from '../client/src/lib/compareNextActions';
 import type { StoredItem } from '../client/src/types/MyDB';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { openReviewDetailsForm } from './helpers/itemEditorLocators';
 import { uniqueStamp } from './helpers/uniqueStamp';
 
 // The Weekly Review card carries the editor's Position row (compact, one line), and the stage walk
@@ -147,6 +148,7 @@ test.describe('Weekly review — priority from the card', () => {
             await expect(titleField(page)).toHaveValue('Bravo');
             await expect(page.getByTestId('nextActionPositionBottom')).toBeEnabled();
 
+            await openReviewDetailsForm(page.getByTestId('focusStage'));
             await page.getByRole('group', { name: 'Energy' }).getByRole('button', { name: 'High' }).click();
             await expect(positionRow(page)).toHaveAttribute('data-locked', 'true');
             await expect(page.getByTestId('nextActionPositionBottom')).toBeDisabled();

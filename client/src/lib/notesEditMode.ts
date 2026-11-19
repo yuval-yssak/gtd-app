@@ -11,8 +11,18 @@ export interface NotesEditMode {
     focusEditorOnMount: boolean;
 }
 
-/** Empty notes have nothing to preview, so the editor is the resting state — without stealing focus on open. */
-export const initialNotesEditMode = (notes: string): NotesEditMode => ({ isEditing: notesAreEmpty(notes), focusEditorOnMount: false });
+/**
+ * Where empty notes rest. `editor` (the item page): with nothing to preview, an open writing surface
+ * makes the affordance obvious. `header` (the review card): the label and its pencil alone, because
+ * a scanning card cannot spare an empty editor's height.
+ */
+export type EmptyNotesRestingState = 'editor' | 'header';
+
+/** Non-empty notes rest in the preview; empty ones per `emptyRest` — never stealing focus on open. */
+export const initialNotesEditMode = (notes: string, emptyRest: EmptyNotesRestingState = 'editor'): NotesEditMode => ({
+    isEditing: emptyRest === 'editor' && notesAreEmpty(notes),
+    focusEditorOnMount: false,
+});
 
 export const enterNotesEdit = (): NotesEditMode => ({ isEditing: true, focusEditorOnMount: true });
 

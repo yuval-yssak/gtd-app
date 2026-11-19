@@ -21,44 +21,34 @@ const form: NextActionFormState = {
     ignoreBefore: '',
 };
 
-function markup(dense: boolean) {
-    return renderToStaticMarkup(
-        <NextActionFields value={form} onChange={() => {}} workContexts={[context('c1', '@phone')]} people={[person('p1', 'Dana')]} dense={dense} />,
-    );
+function markup() {
+    return renderToStaticMarkup(<NextActionFields value={form} onChange={() => {}} workContexts={[context('c1', '@phone')]} people={[person('p1', 'Dana')]} />);
 }
 
 const TICKLER_EXPLAINER = 'Item stays hidden from Next Actions until this date';
 
-describe('NextActionFields dense layout', () => {
-    it('lays the narrow controls out in a grid when dense', () => {
-        // The attribute switches on the two-column grid that keeps the review card from scrolling; the
-        // grid's geometry itself is pinned by e2e/weekly-review-dense-fields.spec.ts.
-        expect(markup(true)).toContain('data-dense');
-        expect(markup(false)).not.toContain('data-dense');
+// One layout for the item page and the weekly review alike: the narrow controls flow into a grid
+// (the geometry is pinned by e2e/weekly-review-dense-fields.spec.ts; below 34rem a container query
+// keeps the single column).
+describe('NextActionFields grid layout', () => {
+    it("is a size container, so the grid can key off the fields' own width", () => {
+        expect(markup()).toContain(styles.root);
     });
 
-    it('spans the chip clouds across every grid column when dense', () => {
-        // Contexts and people genuinely use the full width — a half-width column would wrap them
-        // more, costing back the vertical space the two-column grid just saved.
-        const spans = markup(true).split(styles.fullSpan).length - 1;
+    it('spans the chip clouds across every grid column', () => {
+        // Contexts and people genuinely use the full width — a one-column cell would wrap them
+        // more, costing back the vertical space the grid just saved.
+        const spans = markup().split(styles.fullSpan).length - 1;
         expect(spans).toBe(2);
     });
 
-    it('leaves the chip clouds unspanned when not dense', () => {
-        // Clarify and the standalone item editor share this component and must be untouched.
-        expect(markup(false)).not.toContain(styles.fullSpan);
+    it('has no tickler explainer line — "Tickler — hide until" already carries the meaning', () => {
+        expect(markup()).not.toContain(TICKLER_EXPLAINER);
     });
 
-    it('drops the tickler explainer line when dense', () => {
-        // "Tickler — hide until" already carries the meaning; the second caption cost a full line
-        // in a card that was already overflowing.
-        expect(markup(false)).toContain(TICKLER_EXPLAINER);
-        expect(markup(true)).not.toContain(TICKLER_EXPLAINER);
-    });
-
-    it('still renders every next-action control when dense', () => {
+    it('still renders every next-action control', () => {
         // Density must not silently drop a field: the grid repositions controls, never removes them.
-        const html = markup(true);
+        const html = markup();
         expect(html).toContain('Tickler');
         expect(html).toContain('Work contexts');
         expect(html).toContain('People');

@@ -55,11 +55,12 @@ test.describe('Weekly review card fits without scrolling', () => {
             // preview) — the exact case that overflowed.
             await expect(card.getByTestId('briefLine')).toHaveCount(0);
 
-            // The last metadata control in the card. If anything above it still overflows, it is
-            // pushed out of the scrollport and this fails.
-            const expectedBy = card.getByLabel('Expected by');
+            // The card summarises the details read-only; the last fact is the expected-by date. If
+            // anything above it still overflows, it is pushed out of the scrollport and this fails.
+            const expectedBy = card.getByTestId('itemDetailsFact').filter({ hasText: 'Expected by' });
             await expect(expectedBy).toBeVisible();
             await expect(expectedBy).toBeInViewport({ ratio: 1 });
+            await expect(card.getByTestId('itemEditorId')).toBeInViewport({ ratio: 1 });
 
             // …and nothing is scrolled: the whole item is on screen at once, which is the property
             // that "I need to scroll to see the full picture" is about. The full-width wrapper

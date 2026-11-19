@@ -32,4 +32,12 @@ describe('NotesSection resting states', () => {
         expect(buttonTag(html, 'Edit notes')).toBeUndefined();
         expect(buttonTag(html, 'Done editing notes')).toMatch(/\sdisabled=""/);
     });
+
+    it('with emptyRestingState="header", empty notes rest as the header and its pencil alone — no editor, no empty preview box', () => {
+        const html = renderToStaticMarkup(<NotesSection notes="   " onNotesChange={noop} emptyRestingState="header" />);
+        expect(html).not.toContain('pageNotesPreview');
+        expect(buttonTag(html, 'Done editing notes')).toBeUndefined();
+        expect(buttonTag(html, 'Edit notes')).toBeDefined();
+        expect(html).toContain('No notes');
+    });
 });

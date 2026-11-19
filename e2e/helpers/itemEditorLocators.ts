@@ -25,3 +25,14 @@ export async function openBriefEditor(scope: Page | Locator): Promise<Locator> {
 export function titleInputOf(scope: Page | Locator): Locator {
     return scope.getByRole('textbox', { name: 'Title' });
 }
+
+/**
+ * The weekly review's card rests on a read-only details summary; the pencil swaps the detail form
+ * (dates, contexts, energy, account…) in place. Call before touching any of those fields in a review card.
+ */
+export async function openReviewDetailsForm(scope: Page | Locator): Promise<Locator> {
+    await scope.getByTestId('editDetailsButton').click();
+    const form = scope.getByTestId('itemDetailsForm');
+    await form.waitFor();
+    return form;
+}
