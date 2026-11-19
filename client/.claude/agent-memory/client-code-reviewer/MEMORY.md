@@ -83,3 +83,4 @@
 - [Request loop outlives session gate](project_multi_request_loop_outlives_session_gate.md) — paging/drain loops keep sending after the 10s gate release; another pass pivots the cookie → wrong-user responses.
 - [Supervisor health-predicate loops](project_supervisor_health_predicate_loops.md) — repair loops wedge on a hung step (shared in-flight pass) or retry forever on reauth/permission states.
 - [Derived view swap unmounts dirty form](project_derived_view_swap_unmounts_dirty_form.md) — summary/fold predicates over live status/brief freshness flip on sync and hide a dirty form or active notes editor; demand a latch.
+- [Legal copy: calendar items omit routines](project_legal_copy_calendar_items_omit_routines.md) — imported GCal series are routines w/ title+description; "used only for A, B" lists get uses bolted on after.

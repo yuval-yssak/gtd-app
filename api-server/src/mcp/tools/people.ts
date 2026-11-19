@@ -2,7 +2,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ApiClient } from '../apiClient.js';
-import { accountSchema, defineTool, idSchema, notesSchema, registerOne, requestOptsFromArgs } from './types.js';
+import { ADDS, accountSchema, CHANGES_IDEMPOTENTLY, defineTool, idSchema, notesSchema, READS, registerOne, requestOptsFromArgs } from './types.js';
 
 /**
  * People CRUD. People are named contacts referenced from items via `peopleIds` and
@@ -13,8 +13,12 @@ import { accountSchema, defineTool, idSchema, notesSchema, registerOne, requestO
  */
 
 const listPeople = defineTool({
-    name: 'gtd_list_people',
-    description: "List the user's people. Sorted by updatedTs DESC.",
+    name: 'done_list_people',
+    title: 'List people',
+    safety: READS,
+    description:
+        "List the user's people — the contacts items refer to through `peopleIds` and `waitingForPersonId`. " +
+        'Use it to find a person id before creating a duplicate. Sorted by updatedTs DESC.',
     inputSchema: {
         limit: z.number().int().positive().max(500).optional(),
         cursor: z.string().optional(),
@@ -32,7 +36,9 @@ const listPeople = defineTool({
 });
 
 const getPerson = defineTool({
-    name: 'gtd_get_person',
+    name: 'done_get_person',
+    title: 'Get person',
+    safety: READS,
     description: 'Fetch a single person by id.',
     inputSchema: { id: idSchema, account: accountSchema },
     handler: async (args, api) =>
@@ -40,7 +46,9 @@ const getPerson = defineTool({
 });
 
 const createPerson = defineTool({
-    name: 'gtd_create_person',
+    name: 'done_create_person',
+    title: 'Create person',
+    safety: ADDS,
     description:
         'Create a new person. Put contact details in the dedicated `email` and `phone` fields — never bury them in `notes`. Use `notes` for freeform context only (role, Slack handle, timezone, links).',
     inputSchema: {
@@ -55,7 +63,9 @@ const createPerson = defineTool({
 });
 
 const updatePerson = defineTool({
-    name: 'gtd_update_person',
+    name: 'done_update_person',
+    title: 'Update person',
+    safety: CHANGES_IDEMPOTENTLY,
     description:
         'Update fields on an existing person. At least one field must be present. Contact details belong in the dedicated `email` and `phone` fields, not in `notes`.',
     inputSchema: {
@@ -72,11 +82,13 @@ const updatePerson = defineTool({
 });
 
 const deletePerson = defineTool({
-    name: 'gtd_delete_person',
+    name: 'done_delete_person',
+    title: 'Delete person',
+    safety: CHANGES_IDEMPOTENTLY,
     description:
         'Delete a person. Idempotent. Cascades to referencing items: the id is removed from `peopleIds` / `waitingForPersonId` ' +
         'and a `[person removed: <name>]` or `[was waiting for: <name>]` breadcrumb is appended to each affected item title. ' +
-        'To merely detach one item from a person without deleting the person, use gtd_update_item with `waitingForPersonId: null` ' +
+        'To merely detach one item from a person without deleting the person, use done_update_item with `waitingForPersonId: null` ' +
         'or a `peopleIds` array without that id.',
     inputSchema: { id: idSchema, account: accountSchema },
     handler: async (args, api) =>

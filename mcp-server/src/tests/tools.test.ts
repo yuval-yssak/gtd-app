@@ -9,7 +9,7 @@ import { _meToolsForTesting } from '../tools/me.js';
 import { _peopleToolsForTesting } from '../tools/people.js';
 import { _reassignToolsForTesting } from '../tools/reassign.js';
 import { _routineToolsForTesting } from '../tools/routines.js';
-import { defineTool, registerOne } from '../tools/types.js';
+import { defineTool, READS, registerOne } from '../tools/types.js';
 import { _workContextToolsForTesting } from '../tools/workContexts.js';
 
 /**
@@ -26,12 +26,12 @@ interface RecordedCall {
 }
 
 /**
- * Variant of makeFakeApi that lets a test pre-stage per-path responses — used by gtd_reassign,
+ * Variant of makeFakeApi that lets a test pre-stage per-path responses — used by done_reassign,
  * which calls /v1/me to resolve the recipient userId before posting /v1/reassign. `responses`
  * is consulted by exact path match; missing keys fall back to the default `{ok:true}`.
  *
  * Optional `accountResponses` lets a test return different bodies per `account` (used by
- * gtd_list_accounts, which calls /v1/me once per configured account). When supplied, the
+ * done_list_accounts, which calls /v1/me once per configured account). When supplied, the
  * `account` opt is used as the lookup key first and falls back to `responses` by path.
  * If the value is a `GtdApiError`, it's thrown so partial-failure flows can be exercised.
  */
@@ -62,6 +62,7 @@ function makeFakeApi(
             return (responses[path] ?? { ok: true }) as never;
         }),
         listAccounts: () => options.accounts ?? ['default'],
+        supportsMultipleAccounts: () => true,
         environment: () => options.environment ?? 'local',
         apiBase: () => options.apiBase ?? 'http://localhost:4000',
         webBase: () => options.webBase ?? null,
@@ -72,7 +73,7 @@ function makeFakeApi(
 describe('item tools', () => {
     const t = _itemToolsForTesting;
 
-    it('gtd_capture POSTs /v1/items with the body', async () => {
+    it('done_capture POSTs /v1/items with the body', async () => {
         const { api, calls } = makeFakeApi();
         await t.capture.handler({ title: 'buy milk', externalId: 'shortcut-1' }, api);
         expect(calls).toHaveLength(1);
@@ -83,7 +84,7 @@ describe('item tools', () => {
         expect(call.body).toEqual({ title: 'buy milk', externalId: 'shortcut-1' });
     });
 
-    it('gtd_list_items GETs /v1/items with query params', async () => {
+    it('done_list_items GETs /v1/items with query params', async () => {
         const { api, calls } = makeFakeApi({ items: [] });
         await t.listItems.handler({ q: 'mom', status: 'inbox', limit: 25 }, api);
         const [call] = calls;
@@ -93,7 +94,7 @@ describe('item tools', () => {
         expect(call.query).toEqual({ q: 'mom', status: 'inbox', since: undefined, limit: 25, cursor: undefined, sort: 'priority' });
     });
 
-    it('gtd_list_items lists in priority order unless the caller asks for updated', async () => {
+    it('done_list_items lists in priority order unless the caller asks for updated', async () => {
         const { api, calls } = makeFakeApi({ items: [] });
         await t.listItems.handler({}, api);
         await t.listItems.handler({ sort: 'updated', since: '2026-11-01T00:00:00.000Z' }, api);
@@ -103,11 +104,11 @@ describe('item tools', () => {
         expect(byUpdated.query).toMatchObject({ sort: 'updated', since: '2026-11-01T00:00:00.000Z' });
     });
 
-    it('gtd_list_items only accepts priority or updated as a sort', () => {
+    it('done_list_items only accepts priority or updated as a sort', () => {
         expect(t.listItems.inputSchema.sort.safeParse('alphabetical').success).toBe(false);
     });
 
-    it('gtd_get_item URL-encodes the id', async () => {
+    it('done_get_item URL-encodes the id', async () => {
         const { api, calls } = makeFakeApi();
         await t.getItem.handler({ id: 'abc/def' }, api);
         const [call] = calls;
@@ -115,7 +116,7 @@ describe('item tools', () => {
         expect(call.path).toBe('/v1/items/abc%2Fdef');
     });
 
-    it('gtd_list_items forwards calendarEventId as a query param so an agent can find the item the sync already linked', async () => {
+    it('done_list_items forwards calendarEventId as a query param so an agent can find the item the sync already linked', async () => {
         const { api, calls } = makeFakeApi({ items: [] });
         await t.listItems.handler({ calendarEventId: 'm142anuelg45ob9nbucvt670qg', status: 'calendar,done' }, api);
         const [call] = calls;
@@ -125,7 +126,7 @@ describe('item tools', () => {
         expect(call.query).toMatchObject({ calendarEventId: 'm142anuelg45ob9nbucvt670qg', status: 'calendar,done' });
     });
 
-    it('gtd_list_items forwards briefState as a query param', async () => {
+    it('done_list_items forwards briefState as a query param', async () => {
         const { api, calls } = makeFakeApi({ items: [] });
         await t.listItems.handler({ briefState: 'none' }, api);
         const [call] = calls;
@@ -133,7 +134,7 @@ describe('item tools', () => {
         expect(call.query).toMatchObject({ briefState: 'none' });
     });
 
-    it('gtd_set_brief PUTs /v1/items/:id/brief with the text, URL-encoding the id', async () => {
+    it('done_set_brief PUTs /v1/items/:id/brief with the text, URL-encoding the id', async () => {
         const { api, calls } = makeFakeApi();
         await t.setBrief.handler({ itemId: 'abc/def', brief: 'Passport renewal still blocked on photos' }, api);
         const [call] = calls;
@@ -143,7 +144,7 @@ describe('item tools', () => {
         expect(call.body).toEqual({ brief: 'Passport renewal still blocked on photos' });
     });
 
-    it('gtd_generate_brief POSTs /v1/items/:id/brief/generate, forwarding force only when given', async () => {
+    it('done_generate_brief POSTs /v1/items/:id/brief/generate, forwarding force only when given', async () => {
         const { api, calls } = makeFakeApi();
         await t.generateBrief.handler({ itemId: 'abc/def' }, api);
         await t.generateBrief.handler({ itemId: 'abc', force: true }, api);
@@ -157,7 +158,7 @@ describe('item tools', () => {
         expect(t.generateBrief.inputSchema.force.safeParse('yes').success).toBe(false);
     });
 
-    it('gtd_set_brief forwards null (a clear) and rejects an empty string up front', async () => {
+    it('done_set_brief forwards null (a clear) and rejects an empty string up front', async () => {
         const { api, calls } = makeFakeApi();
         await t.setBrief.handler({ itemId: 'abc', brief: null }, api);
         const [call] = calls;
@@ -168,7 +169,7 @@ describe('item tools', () => {
         expect(t.setBrief.inputSchema.brief.safeParse('x'.repeat(501)).success).toBe(false);
     });
 
-    it('gtd_update_item forwards null (a clear) rather than dropping it', async () => {
+    it('done_update_item forwards null (a clear) rather than dropping it', async () => {
         const { api, calls } = makeFakeApi();
         await t.updateItem.handler({ id: 'abc', waitingForPersonId: null, expectedBy: '2099-01-01' }, api);
         const [call] = calls;
@@ -176,7 +177,7 @@ describe('item tools', () => {
         expect(call.body).toEqual({ waitingForPersonId: null, expectedBy: '2099-01-01' });
     });
 
-    it('gtd_update_item accepts null for every clearable field and rejects it for title/status/GCal linkage', () => {
+    it('done_update_item accepts null for every clearable field and rejects it for title/status/GCal linkage', () => {
         const clearable = [
             'notes',
             'workContextIds',
@@ -201,7 +202,7 @@ describe('item tools', () => {
         }
     });
 
-    it('gtd_update_item keeps the notes Markdown-link guidance at the property level of the JSON Schema', () => {
+    it('done_update_item keeps the notes Markdown-link guidance at the property level of the JSON Schema', () => {
         // `.describe()` must be applied after `.nullable().optional()` — otherwise zod emits the
         // description inside `anyOf[0]` and most MCP clients never show it.
         const schema = z.toJSONSchema(z.object(t.updateItem.inputSchema), { io: 'input' }) as {
@@ -211,7 +212,7 @@ describe('item tools', () => {
         expect(schema.properties.waitingForPersonId?.description).toContain('null clears');
     });
 
-    it('gtd_update_item PATCHes /v1/items/:id with body without id', async () => {
+    it('done_update_item PATCHes /v1/items/:id with body without id', async () => {
         const { api, calls } = makeFakeApi();
         await t.updateItem.handler({ id: 'abc', status: 'nextAction', energy: 'low' }, api);
         const [call] = calls;
@@ -221,7 +222,7 @@ describe('item tools', () => {
         expect(call.body).toEqual({ status: 'nextAction', energy: 'low' });
     });
 
-    it('gtd_complete_item POSTs /complete with empty body', async () => {
+    it('done_complete_item POSTs /complete with empty body', async () => {
         const { api, calls } = makeFakeApi();
         await t.completeItem.handler({ id: 'abc' }, api);
         const [call] = calls;
@@ -231,7 +232,7 @@ describe('item tools', () => {
         expect(call.body).toEqual({});
     });
 
-    it('gtd_trash_item POSTs /trash with empty body (recoverable soft-delete)', async () => {
+    it('done_trash_item POSTs /trash with empty body (recoverable soft-delete)', async () => {
         const { api, calls } = makeFakeApi();
         await t.trashItem.handler({ id: 'abc' }, api);
         const [call] = calls;
@@ -246,7 +247,7 @@ describe('item tools', () => {
         [{ position: 'bottom' as const }, { position: 'bottom' }],
         [{ before: 'other' }, { before: 'other' }],
         [{ after: 'other' }, { after: 'other' }],
-    ])('gtd_move_item POSTs /move with only the chosen target %j (account stays out of the body)', async (args, body) => {
+    ])('done_move_item POSTs /move with only the chosen target %j (account stays out of the body)', async (args, body) => {
         const { api, calls } = makeFakeApi();
         await t.moveItem.handler({ id: 'abc', account: 'work', ...args }, api);
         const [call] = calls;
@@ -256,11 +257,11 @@ describe('item tools', () => {
         expect(call.body).toEqual(body);
     });
 
-    it('gtd_move_item only accepts top or bottom as a position', () => {
+    it('done_move_item only accepts top or bottom as a position', () => {
         expect(t.moveItem.inputSchema.position.safeParse('middle').success).toBe(false);
     });
 
-    it('gtd_update_item rejects status:"trash" at the schema level (Zod enum)', () => {
+    it('done_update_item rejects status:"trash" at the schema level (Zod enum)', () => {
         const result = t.updateItem.inputSchema.status.safeParse('trash');
         expect(result.success).toBe(false);
     });
@@ -278,7 +279,7 @@ describe('item tools', () => {
 describe('routine tools', () => {
     const t = _routineToolsForTesting;
 
-    it('gtd_create_routine POSTs the full body', async () => {
+    it('done_create_routine POSTs the full body', async () => {
         const { api, calls } = makeFakeApi();
         await t.createRoutine.handler(
             {
@@ -296,7 +297,7 @@ describe('routine tools', () => {
         expect(call.body).toMatchObject({ title: 'Daily standup', routineType: 'nextAction' });
     });
 
-    it('gtd_split_routine omits id from the body', async () => {
+    it('done_split_routine omits id from the body', async () => {
         const { api, calls } = makeFakeApi();
         await t.splitRoutine.handler({ id: 'r1', splitDate: '2026-06-01', tailEdits: { title: 'New name' } }, api);
         const [call] = calls;
@@ -305,7 +306,7 @@ describe('routine tools', () => {
         expect(call.body).toEqual({ splitDate: '2026-06-01', tailEdits: { title: 'New name' } });
     });
 
-    it('gtd_split_routine works without tailEdits (just id + splitDate)', async () => {
+    it('done_split_routine works without tailEdits (just id + splitDate)', async () => {
         const { api, calls } = makeFakeApi();
         await t.splitRoutine.handler({ id: 'r1', splitDate: '2026-06-01' }, api);
         const [call] = calls;
@@ -313,7 +314,7 @@ describe('routine tools', () => {
         expect(call.body).toEqual({ splitDate: '2026-06-01' });
     });
 
-    it('gtd_split_routine round-trips routineType / startDate / active in tailEdits', async () => {
+    it('done_split_routine round-trips routineType / startDate / active in tailEdits', async () => {
         const { api, calls } = makeFakeApi();
         await t.splitRoutine.handler(
             {
@@ -331,7 +332,7 @@ describe('routine tools', () => {
         });
     });
 
-    it('gtd_pause_routine and gtd_resume_routine POST to the right paths with empty body', async () => {
+    it('done_pause_routine and done_resume_routine POST to the right paths with empty body', async () => {
         const { api, calls } = makeFakeApi();
         await t.pauseRoutine.handler({ id: 'r1' }, api);
         await t.resumeRoutine.handler({ id: 'r2' }, api);
@@ -343,7 +344,7 @@ describe('routine tools', () => {
 });
 
 describe('people + workContexts tools', () => {
-    it('gtd_create_person POSTs /v1/people', async () => {
+    it('done_create_person POSTs /v1/people', async () => {
         const { api, calls } = makeFakeApi();
         await _peopleToolsForTesting.createPerson.handler({ name: 'Sam' }, api);
         const [call] = calls;
@@ -351,7 +352,7 @@ describe('people + workContexts tools', () => {
         expect(call.path).toBe('/v1/people');
     });
 
-    it('gtd_delete_work_context DELETEs /v1/work-contexts/:id', async () => {
+    it('done_delete_work_context DELETEs /v1/work-contexts/:id', async () => {
         const { api, calls } = makeFakeApi();
         await _workContextToolsForTesting.deleteWorkContext.handler({ id: 'wc1' }, api);
         const [call] = calls;
@@ -362,7 +363,7 @@ describe('people + workContexts tools', () => {
 });
 
 describe('reassign + batch tools', () => {
-    it('gtd_reassign resolves toUserId via /v1/me on the recipient account, then POSTs /v1/reassign with both bearers', async () => {
+    it('done_reassign resolves toUserId via /v1/me on the recipient account, then POSTs /v1/reassign with both bearers', async () => {
         // /v1/me returns the recipient's userId so the model never has to spell out raw UUIDs.
         const { api, calls } = makeFakeApi({ '/v1/me': { userId: 'bob-uuid', label: 'work' } });
         await _reassignToolsForTesting.reassign.handler({ entityType: 'item', entityId: 'i1', fromAccount: 'default', toAccount: 'work' }, api);
@@ -380,7 +381,7 @@ describe('reassign + batch tools', () => {
         expect(reassignCall.opts).toEqual({ account: 'default', recipientAccount: 'work' });
     });
 
-    it('gtd_reassign defaults fromAccount to "default" when omitted', async () => {
+    it('done_reassign defaults fromAccount to "default" when omitted', async () => {
         const { api, calls } = makeFakeApi({ '/v1/me': { userId: 'bob-uuid', label: 'work' } });
         await _reassignToolsForTesting.reassign.handler({ entityType: 'item', entityId: 'i1', toAccount: 'work', fromAccount: 'default' }, api);
         const reassignCall = calls.find((c) => c.path === '/v1/reassign');
@@ -388,13 +389,13 @@ describe('reassign + batch tools', () => {
         expect(reassignCall.opts?.account).toBe('default');
     });
 
-    it('gtd_reassign rejects when toAccount is omitted', () => {
+    it('done_reassign rejects when toAccount is omitted', () => {
         // The Zod schema requires toAccount — the SDK validates inputs before invoking the handler.
         const result = _reassignToolsForTesting.reassign.inputSchema.toAccount.safeParse(undefined);
         expect(result.success).toBe(false);
     });
 
-    it('gtd_batch wraps ops in {ops}', async () => {
+    it('done_batch wraps ops in {ops}', async () => {
         const { api, calls } = makeFakeApi();
         await _batchToolsForTesting.batch.handler(
             {
@@ -416,12 +417,12 @@ describe('reassign + batch tools', () => {
         });
     });
 
-    it('gtd_batch input schema rejects an empty ops array', () => {
+    it('done_batch input schema rejects an empty ops array', () => {
         const r = _batchToolsForTesting.batch.inputSchema.ops.safeParse([]);
         expect(r.success).toBe(false);
     });
 
-    it('gtd_batch entityId schema rejects whitespace-only inside ops (regression guard)', () => {
+    it('done_batch entityId schema rejects whitespace-only inside ops (regression guard)', () => {
         const op = { entityType: 'item', opType: 'create', entityId: '   ', snapshot: {} };
         const r = _batchToolsForTesting.batch.inputSchema.ops.safeParse([op]);
         expect(r.success).toBe(false);
@@ -431,7 +432,7 @@ describe('reassign + batch tools', () => {
 describe('me tools', () => {
     const t = _meToolsForTesting;
 
-    it('gtd_me merges /v1/me response with account, environment, and apiBase', async () => {
+    it('done_me merges /v1/me response with account, environment, and apiBase', async () => {
         const { api, calls } = makeFakeApi(
             { '/v1/me': { userId: 'u1', label: 'work-laptop', email: 'alice@example.com' } },
             { environment: 'production', apiBase: 'https://api.getting-things-done.app' },
@@ -453,19 +454,19 @@ describe('me tools', () => {
         });
     });
 
-    it('gtd_me defaults the account label to "default" in the response when no account arg is supplied', async () => {
+    it('done_me defaults the account label to "default" in the response when no account arg is supplied', async () => {
         const { api } = makeFakeApi({ '/v1/me': { userId: 'u1', label: 'lap', email: 'a@b.c' } });
         const result = await t.me.handler({}, api);
         expect(result).toMatchObject({ account: 'default', environment: 'local', apiBase: 'http://localhost:4000' });
     });
 
-    it('gtd_me echoes email:"" when the API response omits email (deleted user row)', async () => {
+    it('done_me echoes email:"" when the API response omits email (deleted user row)', async () => {
         const { api } = makeFakeApi({ '/v1/me': { userId: 'u1', label: 'lap' } });
         const result = await t.me.handler({}, api);
         expect(result).toMatchObject({ email: '' });
     });
 
-    it('gtd_list_accounts iterates listAccounts() in order, merging /v1/me per row plus top-level env echo', async () => {
+    it('done_list_accounts iterates listAccounts() in order, merging /v1/me per row plus top-level env echo', async () => {
         const { api, calls } = makeFakeApi(
             {},
             {
@@ -493,7 +494,7 @@ describe('me tools', () => {
         });
     });
 
-    it('gtd_list_accounts surfaces a per-row error when one token is revoked, without failing the rest', async () => {
+    it('done_list_accounts surfaces a per-row error when one token is revoked, without failing the rest', async () => {
         const { api } = makeFakeApi(
             {},
             {
@@ -512,7 +513,7 @@ describe('me tools', () => {
         expect(result.accounts[1]).toEqual({ account: 'old', error: 'token revoked', code: 'invalid_token' });
     });
 
-    it('gtd_list_accounts preserves listAccounts() insertion order in the accounts array', async () => {
+    it('done_list_accounts preserves listAccounts() insertion order in the accounts array', async () => {
         const { api } = makeFakeApi(
             {},
             {
@@ -540,7 +541,7 @@ describe('registerOne URL decoration (end-to-end)', () => {
             },
         };
         const { api } = makeFakeApi({}, { webBase });
-        const tool = defineTool({ name: toolName, description: 'test', inputSchema: {}, handler: async () => handlerResult });
+        const tool = defineTool({ name: toolName, title: 'Test', safety: READS, description: 'test', inputSchema: {}, handler: async () => handlerResult });
         // biome-ignore lint/suspicious/noExplicitAny: the stub matches registerOne's structural McpServer use.
         registerOne(server as any, tool, api);
         if (!captured) throw new Error('registerOne did not register a callback');
@@ -548,35 +549,41 @@ describe('registerOne URL decoration (end-to-end)', () => {
     }
 
     it('stamps the url into the serialized content for an item tool when webBase is set', async () => {
-        const callback = captureRegistered('gtd_capture', { _id: 'xyz', title: 'hi' }, 'https://staging.getting-things-done.app');
+        const callback = captureRegistered('done_capture', { _id: 'xyz', title: 'hi' }, 'https://staging.getting-things-done.app');
         const out = await callback({});
         const [block] = out.content;
         if (!block) throw new Error('expected one content block');
         expect(JSON.parse(block.text)).toEqual({ _id: 'xyz', title: 'hi', url: 'https://staging.getting-things-done.app/item/xyz' });
     });
 
+    it('serializes the result compactly — indentation would only cost the model tokens', async () => {
+        const callback = captureRegistered('done_list_items', { items: [{ _id: 'a', title: 'one' }] }, null);
+        const out = await callback({});
+        expect(out.content.map((block) => block.text)).toEqual(['{"items":[{"_id":"a","title":"one"}]}']);
+    });
+
     it('omits the url when webBase is null (custom env with no override)', async () => {
-        const callback = captureRegistered('gtd_capture', { _id: 'xyz' }, null);
+        const callback = captureRegistered('done_capture', { _id: 'xyz' }, null);
         const out = await callback({});
         const [block] = out.content;
         if (!block) throw new Error('expected one content block');
         expect(JSON.parse(block.text)).toEqual({ _id: 'xyz' });
     });
 
-    it('stamps fieldGuidance next to the url on an incomplete nextAction returned by gtd_update_item', async () => {
-        const callback = captureRegistered('gtd_update_item', { _id: 'na1', status: 'nextAction', energy: 'low' }, 'https://staging.getting-things-done.app');
+    it('stamps fieldGuidance next to the url on an incomplete nextAction returned by done_update_item', async () => {
+        const callback = captureRegistered('done_update_item', { _id: 'na1', status: 'nextAction', energy: 'low' }, 'https://staging.getting-things-done.app');
         const out = await callback({});
         const [block] = out.content;
         if (!block) throw new Error('expected one content block');
         const payload = JSON.parse(block.text) as { url?: string; fieldGuidance?: { missing: string[]; hint: string } };
         expect(payload.url).toBe('https://staging.getting-things-done.app/item/na1');
         expect(payload.fieldGuidance?.missing).toEqual(['time', 'workContextIds']);
-        expect(payload.fieldGuidance?.hint).toContain('gtd_update_item');
+        expect(payload.fieldGuidance?.hint).toContain('done_update_item');
     });
 
     it('serializes no fieldGuidance key at all once the nextAction is complete', async () => {
         const complete = { _id: 'na1', status: 'nextAction', energy: 'low', time: 15, workContextIds: ['wc1'] };
-        const callback = captureRegistered('gtd_update_item', complete, null);
+        const callback = captureRegistered('done_update_item', complete, null);
         const out = await callback({});
         const [block] = out.content;
         if (!block) throw new Error('expected one content block');
@@ -585,7 +592,7 @@ describe('registerOne URL decoration (end-to-end)', () => {
 });
 
 describe('field-completeness guidance in tool descriptions', () => {
-    it('gtd_update_item tells the model to send energy/time/workContextIds, expectedBy and location with the status', () => {
+    it('done_update_item tells the model to send energy/time/workContextIds, expectedBy and location with the status', () => {
         const { description } = _itemToolsForTesting.updateItem;
         expect(description).toContain('Completeness:');
         expect(description).toContain('`fieldGuidance: { missing, hint }`');
@@ -594,18 +601,18 @@ describe('field-completeness guidance in tool descriptions', () => {
         }
     });
 
-    it('gtd_update_item carries the guidance on the energy/time/workContextIds/expectedBy properties of the JSON Schema', () => {
+    it('done_update_item carries the guidance on the energy/time/workContextIds/expectedBy properties of the JSON Schema', () => {
         const schema = z.toJSONSchema(z.object(_itemToolsForTesting.updateItem.inputSchema), { io: 'input' }) as {
             properties: Record<string, { description?: string }>;
         };
         const { energy, time, workContextIds, expectedBy } = schema.properties;
         expect(energy?.description).toContain('Every nextAction should carry one');
         expect(time?.description).toContain('minutes');
-        expect(workContextIds?.description).toContain('gtd_list_work_contexts');
+        expect(workContextIds?.description).toContain('done_list_work_contexts');
         expect(expectedBy?.description).toContain('Every waitingFor should carry one');
     });
 
-    it('gtd_create_routine asks for energy/time/workContextIds on a nextAction template', () => {
+    it('done_create_routine asks for energy/time/workContextIds on a nextAction template', () => {
         const { description } = _routineToolsForTesting.createRoutine;
         for (const field of ['`energy`', '`time`', '`workContextIds`']) {
             expect(description).toContain(field);

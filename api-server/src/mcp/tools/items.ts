@@ -3,16 +3,28 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ApiClient } from '../apiClient.js';
 import { FIELD_COMPLETENESS_GUIDANCE } from './fieldGuidance.js';
-import { accountSchema, defineTool, idSchema, NOTES_DESCRIPTION, notesSchema, registerOne, requestOptsFromArgs } from './types.js';
+import {
+    ADDS,
+    accountSchema,
+    CHANGES,
+    CHANGES_IDEMPOTENTLY,
+    defineTool,
+    idSchema,
+    NOTES_DESCRIPTION,
+    notesSchema,
+    READS,
+    registerOne,
+    requestOptsFromArgs,
+} from './types.js';
 
 /**
  * Tool definitions for the item surface of the GTD /v1 API. Field shapes mirror what the API
  * accepts; the model gets the matrix described in tool descriptions so it can compose
  * status-transition gestures correctly. Validation is enforced server-side either way.
  *
- * Note on deletion: to dispose of an item, use `gtd_trash_item` (soft-delete → status:'trash',
+ * Note on deletion: to dispose of an item, use `done_trash_item` (soft-delete → status:'trash',
  * recoverable from the in-app Trash view). There is no item hard-delete on the public API:
- * `gtd_batch` rejects {entityType:'item', opType:'delete'}, and PATCH rejects {status:'trash'}
+ * `done_batch` rejects {entityType:'item', opType:'delete'}, and PATCH rejects {status:'trash'}
  * with 409. Trashing is the single, recoverable disposal path for an LLM-driven surface.
  *
  * Multi-account: every tool accepts an optional `account` field — see the README's
@@ -28,13 +40,15 @@ const itemStatusSchema = z.enum(['inbox', 'nextAction', 'calendar', 'waitingFor'
 const clearable = <T extends z.ZodTypeAny>(schema: T) => schema.nullable().optional();
 
 const capture = defineTool({
-    name: 'gtd_capture',
+    name: 'done_capture',
+    title: 'Capture to inbox',
+    safety: ADDS,
     description:
         'Capture a new inbox item. Always lands in `inbox` regardless of any status sent. ' +
         'Optional `externalId` provides strict idempotency (caller-supplied dedupe key, e.g. an email Message-Id). ' +
         'Without externalId, identical (title, notes) within 24h are best-effort de-duped. ' +
         'Do NOT capture a Google Calendar event: the calendar sync creates and links its item automatically. ' +
-        'To annotate an existing event, find its item with gtd_list_items({ calendarEventId }) and gtd_update_item it.',
+        'To annotate an existing event, find its item with done_list_items({ calendarEventId }) and done_update_item it.',
     inputSchema: {
         title: z.string().min(1).describe('Required. Non-empty after trim.'),
         notes: notesSchema,
@@ -51,10 +65,12 @@ const BRIEF_FIELD_DESCRIPTION =
     '(brief matches the current title + notes), "pinnedStale" (a user/agent-authored brief whose notes changed since), ' +
     '"declined" (the server judged exactly this text and wrote no brief — the model found nothing worth condensing, or ' +
     'the notes were too short to ask; `text` is null) or "none" (no usable brief). Briefs are ' +
-    'written automatically by a server sweep — do not write one unless the user asks (see gtd_set_brief).';
+    'written automatically by a server sweep — do not write one unless the user asks (see done_set_brief).';
 
 const listItems = defineTool({
-    name: 'gtd_list_items',
+    name: 'done_list_items',
+    title: 'List or search items',
+    safety: READS,
     description:
         "List or search the user's items. Defaults to all statuses except `trash`. " +
         'Sorted in PRIORITY order by default — the order the app presents: lists in the app navigation order Inbox, ' +
@@ -64,7 +80,7 @@ const listItems = defineTool({
         'For by expected day (undated first — the page\'s "By date" view), then by priority inside each day; Inbox and ' +
         'Someday / Maybe by priority; Calendar by day, all-day events first, then by start time; Done most recently updated ' +
         'first. An item listed above another in the same list and day has ' +
-        'higher priority — use that order to pick `before` / `after` for gtd_move_item. Pass `sort: "updated"` for ' +
+        'higher priority — use that order to pick `before` / `after` for done_move_item. Pass `sort: "updated"` for ' +
         'most-recently-changed first (pair it with `since` to fetch only what changed). ' +
         `Use \`cursor\` from a previous response to paginate (a cursor only works with the sort that issued it). ${BRIEF_FIELD_DESCRIPTION} ` +
         'Filter by `briefState` to sweep items that still need a brief (`none` excludes items the server deliberately ' +
@@ -116,7 +132,9 @@ const listItems = defineTool({
 });
 
 const getItem = defineTool({
-    name: 'gtd_get_item',
+    name: 'done_get_item',
+    title: 'Get item',
+    safety: READS,
     description: `Fetch a single item by id. 404 if missing or owned by another user. ${BRIEF_FIELD_DESCRIPTION}`,
     inputSchema: {
         id: idSchema,
@@ -127,7 +145,9 @@ const getItem = defineTool({
 });
 
 const setBrief = defineTool({
-    name: 'gtd_set_brief',
+    name: 'done_set_brief',
+    title: 'Set item brief',
+    safety: CHANGES_IDEMPOTENTLY,
     description:
         "Normally do NOT call this: a server sweep writes and refreshes every open item's brief automatically, and that " +
         'is the preferred source. Use it only when the user explicitly asks to word or remove a brief. ' +
@@ -152,7 +172,9 @@ const setBrief = defineTool({
 });
 
 const generateBrief = defineTool({
-    name: 'gtd_generate_brief',
+    name: 'done_generate_brief',
+    title: 'Generate item brief',
+    safety: CHANGES,
     description:
         "Ask the SERVER's model to write an item's brief from its current title + notes (one sentence, targeting " +
         '~160 chars but never truncated — an overlong brief is stored whole — origin "model"). Outcomes: `written` (a new brief), `skipped` (notes too short — under 160 chars — so a ' +
@@ -181,7 +203,9 @@ const generateBrief = defineTool({
 });
 
 const updateItem = defineTool({
-    name: 'gtd_update_item',
+    name: 'done_update_item',
+    title: 'Update item',
+    safety: CHANGES_IDEMPOTENTLY,
     description:
         'Update any user-settable field on an existing item. Supports status transitions ' +
         '(except → trash, which is rejected). Field combinations must satisfy the status×field matrix:\n' +
@@ -189,7 +213,7 @@ const updateItem = defineTool({
         '- nextAction: workContextIds, peopleIds, energy, time, urgent, expectedBy, ignoreBefore\n' +
         '- calendar: timeStart, timeEnd, workContextIds, peopleIds (calendarEventId / calendarIntegrationId are server-managed ' +
         'linkage — never set them to "attach" an item to an existing Google event; the sync already created and linked ' +
-        'that item, so gtd_list_items({ calendarEventId }) and update it. A second link is refused with 409 calendar_event_linked ' +
+        'that item, so done_list_items({ calendarEventId }) and update it. A second link is refused with 409 calendar_event_linked ' +
         'naming the owner in extra:{ownerType, ownerId}.)\n' +
         '- waitingFor: waitingForPersonId (optional — a waitingFor item need not name a person), peopleIds, expectedBy, ignoreBefore\n' +
         '- somedayMaybe: expectedBy, ignoreBefore\n' +
@@ -206,7 +230,7 @@ const updateItem = defineTool({
         notes: clearable(z.string()).describe(`${NOTES_DESCRIPTION} null clears.`),
         status: itemStatusSchema.optional(),
         workContextIds: clearable(z.array(z.string())).describe(
-            'Work-context ids (from gtd_list_work_contexts) the item needs — the condition under which it can be done. ' +
+            'Work-context ids (from done_list_work_contexts) the item needs — the condition under which it can be done. ' +
                 'Every nextAction should carry one (usually exactly one). null clears.',
         ),
         peopleIds: clearable(z.array(z.string())),
@@ -215,7 +239,7 @@ const updateItem = defineTool({
         time: clearable(z.number().nonnegative()).describe('Estimated duration in minutes. Every nextAction should carry one. null clears.'),
         // Deprecated and ignored (the shortlist flag was replaced by the in-app priority order, read
         // back as `rank`); still accepted so older prompts keep working.
-        focus: clearable(z.boolean()).describe('Deprecated — accepted and ignored. To change priority use gtd_move_item.'),
+        focus: clearable(z.boolean()).describe('Deprecated — accepted and ignored. To change priority use done_move_item.'),
         urgent: clearable(z.boolean()),
         expectedBy: clearable(z.string()).describe(
             'YYYY-MM-DD or ISO datetime. Allowed on nextAction / waitingFor / somedayMaybe. Every waitingFor should carry ' +
@@ -236,7 +260,9 @@ const updateItem = defineTool({
 });
 
 const completeItem = defineTool({
-    name: 'gtd_complete_item',
+    name: 'done_complete_item',
+    title: 'Complete item',
+    safety: CHANGES_IDEMPOTENTLY,
     description: 'Mark an item as done. Idempotent — completing a done item returns the unchanged item.',
     inputSchema: {
         id: idSchema,
@@ -247,7 +273,9 @@ const completeItem = defineTool({
 });
 
 const trashItem = defineTool({
-    name: 'gtd_trash_item',
+    name: 'done_trash_item',
+    title: 'Move item to trash',
+    safety: CHANGES_IDEMPOTENTLY,
     description:
         'Trash (soft-delete) a single item — moves it to `status: "trash"`. This is the correct way to dispose of an item: ' +
         "it is RECOVERABLE (the item stays in the user's in-app Trash view and can be restored), unlike a hard delete which is " +
@@ -262,7 +290,9 @@ const trashItem = defineTool({
 });
 
 const moveItem = defineTool({
-    name: 'gtd_move_item',
+    name: 'done_move_item',
+    title: 'Reprioritize item',
+    safety: CHANGES_IDEMPOTENTLY,
     description:
         "Change an item's priority: move it within its ordered list, exactly as dragging it in the app does. " +
         'Give exactly ONE of `position` ("top" | "bottom"), `before` (an item id — land just above it) or `after` ' +
@@ -270,10 +300,10 @@ const moveItem = defineTool({
         'Inbox, Someday / Maybe, and Next Actions / Waiting For per expected day (items sharing an `expectedBy` day; ' +
         'undated items form their own group) — `top`/`bottom` mean the top/bottom of that day, and `before`/`after` ' +
         'need an item of the same status and day (otherwise 409 different_section; change `expectedBy` with ' +
-        'gtd_update_item to move across days). calendar, done and trash items have no manual order (409 not_orderable). ' +
+        'done_update_item to move across days). calendar, done and trash items have no manual order (409 not_orderable). ' +
         'The response is the moved item (its new `rank`) plus `placement: { position, total }` — its 1-based place in ' +
         'that list, counting items the tickler currently hides. Already in place → returned unchanged. ' +
-        'gtd_list_items returns items in this priority order (its default sort), so read the current order from it ' +
+        'done_list_items returns items in this priority order (its default sort), so read the current order from it ' +
         'rather than comparing `rank` values yourself. ' +
         'When moving several items, call this tool one item at a time, in order: parallel calls all succeed, but the ' +
         'order among them is not guaranteed. 409 item_changed means the item was edited meanwhile; read it again and retry.',

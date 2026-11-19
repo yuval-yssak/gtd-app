@@ -1,13 +1,6 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { ApiClient } from './apiClient.js';
-import { registerBatchTools } from './tools/batch.js';
 import { FIELD_COMPLETENESS_GUIDANCE } from './tools/fieldGuidance.js';
-import { registerItemTools } from './tools/items.js';
-import { registerMeTools } from './tools/me.js';
-import { registerPeopleTools } from './tools/people.js';
-import { registerReassignTools } from './tools/reassign.js';
-import { registerRoutineTools } from './tools/routines.js';
-import { registerWorkContextTools } from './tools/workContexts.js';
+
+export { registerAllTools } from './tools/catalog.js';
 
 /**
  * Server-level usage guidance surfaced to every MCP client — mirrors
@@ -18,7 +11,7 @@ export const SERVER_INSTRUCTIONS = [
     'The same applies to a nextAction routine: give its `template` an `energy`, `time` and `workContextIds`.',
     'After creating or editing an item, routine, person or work context, the tool response includes a `url` field — a direct',
     'web-app link to that entity. Always show the user this `url` at the end of your reply so they can jump straight to it.',
-    'The `gtd_batch` tool returns per-op `results`, each carrying the server-stamped `updatedTs`, an `applyStatus`, and',
+    'The `done_batch` tool returns per-op `results`, each carrying the server-stamped `updatedTs`, an `applyStatus`, and',
     'a `url` for item/routine/person/workContext writes — surface those `url`s the same way, and check `applyStatus` instead of',
     'assuming every op landed (`skipped_missing` = the target row no longer exists).',
     'When creating or updating a person, put contact details in the dedicated `email` and `phone` fields — never bury',
@@ -31,24 +24,9 @@ export const SERVER_INSTRUCTIONS = [
     'background sweep (every ~15 minutes) briefs every open item and re-briefs it whenever the title or notes change.',
     'Items whose notes are too short, or hold nothing worth condensing, end up `state: "declined"` with no text — that',
     'is expected, not something to fix. A missing brief is not an error — it simply has not been generated yet.',
-    'Do NOT set or generate briefs as part of creating or editing items. Call `gtd_set_brief` only when the user explicitly asks for a brief',
+    'Do NOT set or generate briefs as part of creating or editing items. Call `done_set_brief` only when the user explicitly asks for a brief',
     'worded their way: an authored brief is pinned, the sweep never refreshes it, and it goes stale as the notes evolve.',
-    "`gtd_generate_brief` asks the server's model for a brief immediately — use it only when the user wants one now.",
+    "`done_generate_brief` asks the server's model for a brief immediately — use it only when the user wants one now.",
     'Briefs are only generated for OPEN items; a done or trashed item is never briefed (409 `brief_not_applicable`),',
     'though a brief written before it was closed is kept.',
 ].join(' ');
-
-/**
- * Registers every GTD tool group against an `McpServer`. Single source of truth shared by the
- * remote `/mcp` route; the stdio binary registers the identical set from its own copy
- * (mcp-server/src/index.ts) — kept in lockstep by mcpToolParity.test.ts.
- */
-export function registerAllTools(server: McpServer, api: ApiClient): void {
-    registerItemTools(server, api);
-    registerRoutineTools(server, api);
-    registerPeopleTools(server, api);
-    registerWorkContextTools(server, api);
-    registerReassignTools(server, api);
-    registerBatchTools(server, api);
-    registerMeTools(server, api);
-}

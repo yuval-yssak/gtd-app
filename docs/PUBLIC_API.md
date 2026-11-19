@@ -583,7 +583,7 @@ Snapshot restrictions:
 
 - Server-managed sync-integrity fields are rejected with `400 forbidden_field` — the set is every anchor field the public read projections never expose (so echoing a read back can never trip it): items — `contentHash`, `lastPushedToGCalTs`, `lastSyncedFromGCalTs`, `lastSyncedNotes`, `calendarInstanceEventId`, `cancelledByGCal`, and the four `lastKnownCalendar*` relink markers; routines — `lastPushedToGCalTs`, `lastSyncedFromGCalTs`, `lastSyncedNotes`, `retiredByGCal`, `calendarRebasedEventId`, and the four `lastKnownCalendar*` markers. Note this is a narrower guarantee than the per-entity routes' closed allowlists: publicly-readable server-managed routine fields (`routineExceptions`, `lastGeneratedDate`, `splitFromRoutineId`) remain writable on this full-snapshot surface (as on `/sync/push`), while `PATCH` rejects them.
 - `snapshot._id`, when present, must equal the op's `entityId` — a mismatch is rejected with `400 invalid_op_shape`.
-- `rank` (the Next Actions priority key) is **settable here** — the same trust this surface extends to `/sync/push`, and a `gtd_get_item` → batch-update echo must round-trip it. Batch `create` ops are **not minted a rank**: an unranked item sorts to the top of its expected-day section in the app, where a fresh item lands, and is minted one when it is next reordered or transitions into `nextAction` through `PATCH`. The deprecated `focus` is accepted and dropped.
+- `rank` (the Next Actions priority key) is **settable here** — the same trust this surface extends to `/sync/push`, and a `done_get_item` → batch-update echo must round-trip it. Batch `create` ops are **not minted a rank**: an unranked item sorts to the top of its expected-day section in the app, where a fresh item lands, and is minted one when it is next reordered or transitions into `nextAction` through `PATCH`. The deprecated `focus` is accepted and dropped.
 
 > **Item hard-delete is not permitted here.** An op of `{ entityType: 'item', opType: 'delete' }` is rejected with `400 invalid_op_shape` because a hard delete physically removes the row and is unrecoverable. To dispose of an item use [`POST /v1/items/:id/trash`](#post-v1itemsidtrash--soft-delete-recoverable) — a recoverable soft-delete. `opType: 'delete'` remains valid for `routine`, `person`, and `workContext` ops (their deletes hydrate a pre-delete snapshot into the op log for cascade replay).
 
@@ -807,21 +807,21 @@ curl -X POST https://api.getting-things-done.app/v1/reassign \
 }
 ```
 
-The model then calls `gtd_reassign` with `fromAccount: "default", toAccount: "work", entityType: "item", entityId: "…"`. The MCP looks up the work account's userId via `GET /v1/me` on the recipient token, attaches both bearers, and posts to `/v1/reassign`.
+The model then calls `done_reassign` with `fromAccount: "default", toAccount: "work", entityType: "item", entityId: "…"`. The MCP looks up the work account's userId via `GET /v1/me` on the recipient token, attaches both bearers, and posts to `/v1/reassign`.
 
 ## Local MCP server
 
-A stdio MCP server lives at [`mcp-server/`](../mcp-server/) and exposes the full `/v1` surface as tools (capture, list, get, update, complete, trash, set-brief and generate-brief for items; full CRUD for routines/people/workContexts; pause/resume/split composites; reassign; batch). Every tool accepts an optional `account` arg that selects which configured token signs the call; `gtd_reassign` accepts `fromAccount` / `toAccount` to assemble the two-token consent gesture. The token's scopes are enforced server-side, so the MCP layer is a thin shim.
+A stdio MCP server lives at [`mcp-server/`](../mcp-server/) and exposes the full `/v1` surface as tools (capture, list, get, update, complete, trash, set-brief and generate-brief for items; full CRUD for routines/people/workContexts; pause/resume/split composites; reassign; batch). Every tool accepts an optional `account` arg that selects which configured token signs the call; `done_reassign` accepts `fromAccount` / `toAccount` to assemble the two-token consent gesture. The token's scopes are enforced server-side, so the MCP layer is a thin shim.
 
 See [`mcp-server/README.md`](../mcp-server/README.md) for the build and Claude Desktop / Claude Code config snippet.
 
 ### Field-completeness guidance
 
-The MCP layer (both the stdio binary and the remote `/mcp` endpoint) adds one thing the raw `PATCH /v1/items/:id` does not: after a `gtd_update_item`, if the stored item is a `nextAction` without `energy` / `time` / `workContextIds`, a `waitingFor` without `expectedBy`, or a Google-linked `calendar` item (one with a `calendarEventId`) without `location`, the tool response carries a `fieldGuidance: { missing, hint }` block telling the model which fields to fill in and how. The server instructions and tool descriptions state the same rule up front. The write itself is unchanged — this is advisory metadata, not validation — and the block is omitted once the fields are set. Details and the per-status table: [`mcp-server/README.md`](../mcp-server/README.md) § Field-completeness guidance.
+The MCP layer (both the stdio binary and the remote `/mcp` endpoint) adds one thing the raw `PATCH /v1/items/:id` does not: after a `done_update_item`, if the stored item is a `nextAction` without `energy` / `time` / `workContextIds`, a `waitingFor` without `expectedBy`, or a Google-linked `calendar` item (one with a `calendarEventId`) without `location`, the tool response carries a `fieldGuidance: { missing, hint }` block telling the model which fields to fill in and how. The server instructions and tool descriptions state the same rule up front. The write itself is unchanged — this is advisory metadata, not validation — and the block is omitted once the fields are set. Details and the per-status table: [`mcp-server/README.md`](../mcp-server/README.md) § Field-completeness guidance.
 
 ### Why no item delete tool
 
-There is no `DELETE /v1/items/:id`, and `PATCH` rejects `{status: 'trash'}`. Disposal goes through the dedicated `POST /v1/items/:id/trash` (MCP: `gtd_trash_item`), which is a recoverable soft-delete — the item stays in the in-app Trash view. A hard delete of an item is refused even inside `gtd_batch` (`{entityType:'item', opType:'delete'}` is rejected), so an LLM-driven surface can never make a row unrecoverable.
+There is no `DELETE /v1/items/:id`, and `PATCH` rejects `{status: 'trash'}`. Disposal goes through the dedicated `POST /v1/items/:id/trash` (MCP: `done_trash_item`), which is a recoverable soft-delete — the item stays in the in-app Trash view. A hard delete of an item is refused even inside `done_batch` (`{entityType:'item', opType:'delete'}` is rejected), so an LLM-driven surface can never make a row unrecoverable.
 
 
 ## Implementation notes (for the API server)

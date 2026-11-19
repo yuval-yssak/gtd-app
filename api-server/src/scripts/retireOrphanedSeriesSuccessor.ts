@@ -5,7 +5,7 @@
  *
  * WHY A SCRIPT AND NOT THE API: the reap is driven by an inbound cancelled master. When the series' last
  * occurrence is far in the past, a full sync's future `timeMin` means Google never re-reports that master,
- * so the stranded row cannot self-heal. Retiring it through the normal API (`gtd_update_routine` /
+ * so the stranded row cannot self-heal. Retiring it through the normal API (`done_update_routine` /
  * `POST /v1/routines/:id/pause`) fires `handleRoutinePush` -> `pushRoutinePause`, which WRITES TO GOOGLE
  * CALENDAR — unacceptable against a shared work calendar with real attendees. This script writes through
  * the DAOs and records sync operations (so other devices converge) WITHOUT `notifyChange`, which is where

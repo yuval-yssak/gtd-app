@@ -161,7 +161,7 @@ Show `ignoreBefore` mechanics: an item parked to next month, invisible everywher
 Recap the morning's ledger: N items captured, M clarified, K done, J delegated, all loops accounted for. One honest sentence about the weekly review being what keeps the system trustworthy. Final metric + "start with capture; everything else follows."
 
 ### Production notes
-- **Use a dedicated demo account** — your real inventory contains internal ticket numbers, org IDs, prod incident details, and people's names. Create a fresh user on staging, add a `GTD_API_TOKEN_DEMO` account to the MCP, and seed the Part-4 inventory (I can generate the `gtd_batch` seeding script on request).
+- **Use a dedicated demo account** — your real inventory contains internal ticket numbers, org IDs, prod incident details, and people's names. Create a fresh user on staging, add a `GTD_API_TOKEN_DEMO` account to the MCP, and seed the Part-4 inventory (I can generate the `done_batch` seeding script on request).
 - Pre-stage the Slack "interruption" with a scheduled message to yourself so it lands on cue.
 - tmux or iTerm tabs named per topic (`webhooks`, `stats`, `ticket`, `pr-142`) so viewers can track the parallelism visually.
 - Record at 2× the pace you think you need, then cut. Add chapter markers.
@@ -237,6 +237,6 @@ Given the audience (internal RND, goal = inspire adoption), combo 1 for the intr
 ---
 
 ## Suggested next steps
-1. Create the demo user on staging + `GTD_API_TOKEN_DEMO` → I can seed the entire Part-4 inventory via `gtd_batch` in one go.
+1. Create the demo user on staging + `GTD_API_TOKEN_DEMO` → I can seed the entire Part-4 inventory via `done_batch` in one go.
 2. I can draft the full narration script for Video 1 (~600 words) and a beat-by-beat shot list for Video 2.
 3. Schedule the Slack "interruption" message before recording.

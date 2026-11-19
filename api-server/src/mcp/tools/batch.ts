@@ -2,7 +2,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ApiClient } from '../apiClient.js';
-import { accountSchema, defineTool, idSchema, registerOne, requestOptsFromArgs } from './types.js';
+import { accountSchema, CHANGES, defineTool, idSchema, registerOne, requestOptsFromArgs } from './types.js';
 
 /**
  * Heterogeneous batch — submit multiple primitive ops in one request. Use when an integration
@@ -15,12 +15,14 @@ import { accountSchema, defineTool, idSchema, registerOne, requestOptsFromArgs }
  * value in the per-op `results` array, alongside `applyStatus` and a web `url`.
  *
  * Item hard-delete is NOT permitted here — the server rejects {entityType:'item', opType:'delete'}
- * with 400 because a hard delete is unrecoverable. To dispose of an item use `gtd_trash_item`
+ * with 400 because a hard delete is unrecoverable. To dispose of an item use `done_trash_item`
  * (recoverable soft-delete). `opType:'delete'` remains valid for routine/person/workContext ops.
  */
 
 const batch = defineTool({
-    name: 'gtd_batch',
+    name: 'done_batch',
+    title: 'Apply batch of changes',
+    safety: CHANGES,
     description:
         'Submit a heterogeneous batch of primitive ops atomically. Each op is {entityType, opType, entityId, snapshot}. ' +
         'snapshot is a full entity object (or null for delete). The server re-stamps snapshot.user AND snapshot.updatedTs ' +
@@ -31,11 +33,11 @@ const batch = defineTool({
         'updatedTs is non-null ONLY for an applied non-delete op — never treat the echo of a skipped op as current state. ' +
         'Atomic w.r.t. validation and scope; NOT atomic w.r.t. mid-flight Mongo failures (same caveat as /sync/push). ' +
         'Note: item hard-delete is rejected ({entityType:"item", opType:"delete"} → 400) because it is unrecoverable — ' +
-        'use gtd_trash_item to dispose of an item (recoverable soft-delete). opType:"delete" is still valid for ' +
+        'use done_trash_item to dispose of an item (recoverable soft-delete). opType:"delete" is still valid for ' +
         'routine, person, workContext and itemBrief entities. itemBrief snapshots ({_id: itemId, itemId, text, origin, ' +
         'sourceHash, generatedTs, createdTs, updatedTs}) must use origin "user" or "agent" (model/skipped are server-only → ' +
         '400 forbidden_origin) and reference an item you own or create earlier in the same batch (else 404); prefer ' +
-        'gtd_set_brief, which stamps sourceHash for you — and, like it, only when the user asked for an authored brief.',
+        'done_set_brief, which stamps sourceHash for you — and, like it, only when the user asked for an authored brief.',
     inputSchema: {
         ops: z
             .array(

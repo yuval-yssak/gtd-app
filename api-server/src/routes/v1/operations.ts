@@ -93,7 +93,7 @@ interface RawOpBag {
  * - `routineId` / `externalId`: legitimate trash-replay and create-dedupe flows carry them.
  * - `routineExceptions` / `lastGeneratedDate` / `splitFromRoutineId`: server-managed, but part of
  *   the public routine projection — a 400 would break every batch update built from a
- *   `gtd_get_routine` echo. PATCH still rejects them; the full-snapshot surface accepts them, the
+ *   `done_get_routine` echo. PATCH still rejects them; the full-snapshot surface accepts them, the
  *   same trust it extends to `/sync/push`. This is a narrower guarantee than the per-entity
  *   routes' closed allowlists — documented in PUBLIC_API.md.
  * - `rank` (the Next Actions priority key): in the public read projection, so a get→batch-update
@@ -312,7 +312,7 @@ export const v1OperationsRoutes = new Hono<{ Variables: BearerVariables & { batc
             }
             try {
                 // `serverStampUpdatedTs`: the public surface has no meaningful client clock — a
-                // caller-echoed `updatedTs` (e.g. from a stale `gtd_get_item`) would silently lose
+                // caller-echoed `updatedTs` (e.g. from a stale `done_get_item`) would silently lose
                 // LWW on every device. Matches the per-entity /v1 routes' server-assigned contract.
                 const { ops, outcomes } = await applyAndPublishOperations(userId, batch.ops, {
                     deviceId: `api:${tokenId}`,

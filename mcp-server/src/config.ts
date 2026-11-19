@@ -7,7 +7,7 @@
  * **Multi-account.** A single Claude session can drive multiple accounts: the default account's
  * token comes from `GTD_API_TOKEN`, additional accounts are configured as `GTD_API_TOKEN_<LABEL>`
  * (label is normalised to lowercase). All tools accept an optional `account` arg that selects
- * which token to attach; `gtd_reassign` accepts both `fromAccount` and `toAccount` so the MCP
+ * which token to attach; `done_reassign` accepts both `fromAccount` and `toAccount` so the MCP
  * can assemble the new two-token consent gesture without leaking raw tokens to the model.
  */
 

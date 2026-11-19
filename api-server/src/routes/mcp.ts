@@ -91,7 +91,7 @@ export const mcpRoutes = new Hono().all('/', async (c) => {
     });
 
     // Per-request server + stateless transport (Cloud Run multi-instance, no sticky sessions).
-    const server = new McpServer({ name: 'gtd-mcp', version: '0.1.0' }, { instructions: SERVER_INSTRUCTIONS });
+    const server = new McpServer({ name: 'done-mcp', title: 'Done', version: '0.1.0' }, { instructions: SERVER_INSTRUCTIONS });
     registerAllTools(server, api);
     // Omit sessionIdGenerator entirely → stateless mode (required on multi-instance Cloud Run).
     const transport = new WebStandardStreamableHTTPServerTransport({ enableJsonResponse: true });

@@ -63,5 +63,5 @@ export const GOOGLE_CALENDAR_DATA_USES: readonly GoogleDataUse[] = [
 export const GOOGLE_SIGN_IN_DATA_USE =
     'Signing in with Google shares your name, email address and profile picture. They identify your account and are shown in the account switcher; nothing else is read from your Google Account unless you connect a calendar.';
 
-/** Mirrors the privacy policy's Google API Services disclosure, including the transfer to Anthropic for item briefs. */
-export const GOOGLE_LIMITED_USE_STATEMENT = `${APP_NAME} uses Google Calendar data only for calendar sync and, as described in the privacy policy, for item briefs, which send event titles and descriptions to Anthropic. It is never used for advertising, never sold, and never used to train machine-learning models. Disconnecting the calendar in Settings deletes the access tokens we hold.`;
+/** Mirrors the privacy policy's Google API Services disclosure, including the transfer to Anthropic for item briefs and what a connected Claude reads. */
+export const GOOGLE_LIMITED_USE_STATEMENT = `${APP_NAME} uses Google Calendar data only for calendar sync; for item briefs, which send event titles and descriptions to Anthropic, as described in the privacy policy; and, if you connect Claude to your account yourself, to show your calendar items and routines to Claude when it reads them on your behalf. It is never used for advertising, never sold, and never used to train machine-learning models. Disconnecting the calendar in Settings deletes the access tokens we hold.`;

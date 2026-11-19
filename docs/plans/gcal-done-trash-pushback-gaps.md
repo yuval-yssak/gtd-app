@@ -373,7 +373,7 @@ must be rewritten in the same commit:
 Order matters: B rows first (a ✓ re-push from the stale time would move Google back).
 
 1. **B1 / B2 — fix times, which also pushes ✓ (integration is active now):** via MCP
-   `gtd_update_item` (account `work`) — B1 `fdbda589-31e0-4ce3-b984-24ae4bb70796` → `timeStart
+   `done_update_item` (account `work`) — B1 `fdbda589-31e0-4ce3-b984-24ae4bb70796` → `timeStart
    2026-09-24T09:15:00+03:00`, `timeEnd 2026-09-24T09:25:00+03:00`; B2
    `c4eec141-007f-481f-897d-9a6fd97bb9eb` → `11:15:00+03:00` / `11:30:00+03:00`. Verify
    `lastPushedToGCalTs` stamped (mongosh) and the log line `overriding routine instance … status=done`.
@@ -388,7 +388,7 @@ Order matters: B rows first (a ✓ re-push from the stale time would move Google
    and that no cancellation email reached the 3 guests.
 4. **D1** `22a587e4-fa0f-4bc0-a68f-6874c8756f5d`: if Q1 = trash, it is healed by the next sync only
    if Google re-reports the tombstone (`showDeleted: true`, but the instance is now past the sync
-   cursor — likely **not** re-reported). Repair directly: `gtd_trash_item` via MCP; the outbound
+   cursor — likely **not** re-reported). Repair directly: `done_trash_item` via MCP; the outbound
    cancellation hits 404 (instance gone) and skips. Then confirm `calendarInstanceEventId` was freed
    (if not, `$unset` via mongosh + a recorded op, mirroring `updateItemsAndRecordOps`).
 5. Post-repair audit (mongosh):

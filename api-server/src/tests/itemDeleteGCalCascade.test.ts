@@ -1,4 +1,4 @@
-/** Regression test for the bug where deleting a calendar-linked item via gtd_batch (snapshot:null)
+/** Regression test for the bug where deleting a calendar-linked item via done_batch (snapshot:null)
  * skipped GCal pushback. The fix hydrates the snapshot in `applyAndPublishOperation` and routes
  * item-delete ops through a dedicated `handleItemDelete` branch that calls `provider.deleteEvent`. */
 /** biome-ignore-all lint/style/noNonNullAssertion: test code asserts result before using ! */

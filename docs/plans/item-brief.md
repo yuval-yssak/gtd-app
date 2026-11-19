@@ -18,9 +18,9 @@ Five ways a brief comes into existence, in priority order:
 |---|---|---|---|
 | 1 | **Message Batches API** sweep | primary; all users, OPEN statuses only (see § Targeting scope); 50 % price | `lib/brief/briefBatch.ts`, `POST /maintenance/briefs/sweep` |
 | 2 | **Cloud Scheduler** | drives #1 every 15 min (submit new batch + harvest ended ones) | GCP job → the sweep endpoint, cron-secret header |
-| 3 | **On-demand generate** | user button (editor + review card), public API, MCP `gtd_generate_brief` | `POST /v1/items/:id/brief/generate` (direct `messages.create`) |
+| 3 | **On-demand generate** | user button (editor + review card), public API, MCP `done_generate_brief` | `POST /v1/items/:id/brief/generate` (direct `messages.create`) |
 | 4 | **Write-path escape hatch** | inline generation right after an item write; **feature-flagged, off by default** | `applyOperation` post-write hook, `BRIEF_INLINE_ON_WRITE=1` |
-| 5 | **Authored brief** | the user types it in the editor; Claude Code writes it via MCP `gtd_set_brief` | `PUT /v1/items/:id/brief` + client op |
+| 5 | **Authored brief** | the user types it in the editor; Claude Code writes it via MCP `done_set_brief` | `PUT /v1/items/:id/brief` + client op |
 
 ## Decisions this plan is built on
 
@@ -260,8 +260,8 @@ determinism, state table, skip threshold at 159/160 chars).
   `brief: { text, origin, state: 'fresh' | 'pinnedStale' | 'none', generatedTs } | null`.
 - `GET /v1/items?briefState=none|pinnedStale` filter so an agent can sweep what is missing.
 - `routes/v1/operations.ts` batch: allow `itemBrief` create/update/delete (same rules as `PUT`).
-- MCP: `gtd_set_brief { itemId, brief, account }` and a `brief` field on `gtd_get_item` /
-  `gtd_list_items` output; `SERVER_INSTRUCTIONS` gains one sentence: "A brief is a one-sentence,
+- MCP: `done_set_brief { itemId, brief, account }` and a `brief` field on `done_get_item` /
+  `done_list_items` output; `SERVER_INSTRUCTIONS` gains one sentence: "A brief is a one-sentence,
   review-oriented condensation of title + notes — what the commitment is and why it is still open;
   never logistics." Copied to `mcp-server/` (parity test).
 - `docs/PUBLIC_API.md`: endpoint + field docs.
@@ -293,7 +293,7 @@ item), `syncHelpers` arm (delete the arm → typecheck fails, per reviewer memor
 clean vs dirty brief field, preference hook. e2e — `item-brief-authored.spec.ts`: type a brief in
 the editor, reload, brief persists and syncs to a second context; `weekly-review-brief.spec.ts`:
 card shows brief first with notes collapsed, toggle off restores the notes preview, editing notes
-flips a model-origin brief to `none` (seeded via `gtd_set_brief`-equivalent API call with
+flips a model-origin brief to `none` (seeded via `done_set_brief`-equivalent API call with
 `origin: 'model'` test hook) and keeps a user-origin brief with the stale marker.
 
 ---
@@ -353,7 +353,7 @@ refusal, force override, op stamps `server:brief`), `briefModel.test.ts` with `v
   op that follows), toast on error, disabled offline with tooltip. Present in both `edit` and
   `review` presentation, so the review card has the button too. "Regenerate" (same button) when a
   pinned brief exists asks for confirmation inline ("Replace your brief?").
-- MCP `gtd_generate_brief { itemId, force?, account }`.
+- MCP `done_generate_brief { itemId, force?, account }`.
 - `docs/PUBLIC_API.md` + MCP instructions.
 
 Tests: `v1ItemBriefGenerate.test.ts` (scope gate, ownership, rate-limit, force semantics, fake

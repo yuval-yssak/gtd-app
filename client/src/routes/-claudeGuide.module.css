@@ -1,0 +1,65 @@
+.page {
+    min-block-size: 100vh;
+    background-color: var(--color-bg-page);
+    padding: var(--space-8) var(--space-4) var(--space-16);
+}
+
+.card {
+    max-inline-size: 44rem;
+    margin-inline: auto;
+    padding: var(--space-10) var(--space-8);
+}
+
+@media (width <= 600px) {
+    .card {
+        padding: var(--space-6) var(--space-5);
+    }
+}
+
+.nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-6);
+    margin-block-end: var(--space-8);
+}
+
+.title {
+    margin-block-end: var(--space-1);
+}
+
+.sectionTitle {
+    margin-block: var(--space-8) var(--space-3);
+}
+
+.intro {
+    margin-block: var(--space-4) 0;
+}
+
+.setupNote {
+    margin-block-end: var(--space-4);
+}
+
+.examples {
+    margin: 0 0 var(--space-4);
+}
+
+.example + .example {
+    margin-block-start: var(--space-4);
+}
+
+.example dt {
+    font-weight: var(--weight-semibold);
+}
+
+.example dd {
+    margin: var(--space-1) 0 0;
+}
+
+.notes {
+    margin: 0 0 var(--space-4);
+    padding-inline-start: var(--space-5);
+}
+
+.notes li + li {
+    margin-block-start: var(--space-2);
+}

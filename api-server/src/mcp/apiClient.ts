@@ -46,6 +46,11 @@ export interface ApiClient {
     request<T>(method: string, path: string, body?: unknown, query?: Record<string, string | number | undefined>, opts?: RequestOptions): Promise<T>;
     /** The single configured account label — always `['default']` remotely. */
     listAccounts(): string[];
+    /**
+     * Whether a call can pick an account (`account` / `done_reassign`). True for the stdio server, whose
+     * env can hold a token per account; false for the hosted connector, which is one signed-in account.
+     */
+    supportsMultipleAccounts(): boolean;
     environment(): GtdEnvironment;
     apiBase(): string;
     webBase(): string | null;
@@ -65,12 +70,13 @@ export interface RemoteApiClientConfig {
 export function createRemoteApiClient(config: RemoteApiClientConfig): ApiClient {
     return {
         listAccounts: () => [SINGLE_ACCOUNT_LABEL],
+        supportsMultipleAccounts: () => false,
         environment: () => config.environment,
         apiBase: () => config.apiBase,
         webBase: () => config.webBase,
         async request(method, path, body, query, opts) {
             // A remote connection is one authenticated caller = one token. Any request targeting a
-            // NON-default account (or a recipient token, e.g. gtd_reassign's cross-account move) cannot
+            // NON-default account (or a recipient token, e.g. done_reassign's cross-account move) cannot
             // be honored with a single token — fail loudly rather than silently resolving to the caller,
             // which would otherwise turn a cross-account reassign into a confusing self-reassign.
             const account = opts?.account;

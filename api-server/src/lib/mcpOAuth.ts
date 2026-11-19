@@ -58,10 +58,12 @@ export function generateOpaqueToken(): string {
     return randomBytes(32).toString('base64url');
 }
 
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1']);
+
 /**
  * Validates a redirect_uri for registration / authorization. Allows absolute https URLs and
  * http loopback (localhost / 127.0.0.1) for native MCP clients; rejects fragments and any
- * non-http(s) scheme. This is the open-redirect gate's structural half — exact-match against the
+ * non-http(s) scheme. This is the open-redirect gate's structural half — the match against the
  * client's registered list is the other half (see `redirectUriIsRegistered`).
  */
 export function isValidRedirectUri(uri: string): boolean {
@@ -77,15 +79,34 @@ export function isValidRedirectUri(uri: string): boolean {
     if (parsed.protocol === 'https:') {
         return true;
     }
-    if (parsed.protocol === 'http:' && (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1')) {
-        return true;
-    }
-    return false;
+    return parsed.protocol === 'http:' && LOOPBACK_HOSTS.has(parsed.hostname);
 }
 
-/** Exact-match (verbatim string equality) against the client's registered redirect URIs. */
-export function redirectUriIsRegistered(client: OAuthClientInterface, redirectUri: string): boolean {
-    return client.redirectUris.includes(redirectUri);
+/** A loopback redirect with its port removed, or null when the URI is not an http loopback URL. */
+function portlessLoopbackUri(uri: string): string | null {
+    if (!URL.canParse(uri)) {
+        return null;
+    }
+    const parsed = new URL(uri);
+    if (parsed.protocol !== 'http:' || !LOOPBACK_HOSTS.has(parsed.hostname)) {
+        return null;
+    }
+    parsed.port = '';
+    return parsed.toString();
+}
+
+/**
+ * Whether the client registered this redirect URI. A public URI must match verbatim. An http loopback
+ * URI matches whatever its port (RFC 8252 §7.3): a native client such as Claude Code listens on the
+ * port that is free at sign-in time, which need not be the one it registered. Host, path and query
+ * still have to match, and the response only ever reaches the user's own machine.
+ */
+export function redirectUriIsRegistered(client: Pick<OAuthClientInterface, 'redirectUris'>, redirectUri: string): boolean {
+    if (client.redirectUris.includes(redirectUri)) {
+        return true;
+    }
+    const requestedLoopback = portlessLoopbackUri(redirectUri);
+    return requestedLoopback !== null && client.redirectUris.some((registered) => portlessLoopbackUri(registered) === requestedLoopback);
 }
 
 /**

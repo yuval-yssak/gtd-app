@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ApiClient } from '../apiClient.js';
-import { accountSchema, defineTool, idSchema, registerOne, requestOptsFromArgs } from './types.js';
+import { ADDS, accountSchema, CHANGES_IDEMPOTENTLY, defineTool, idSchema, READS, registerOne, requestOptsFromArgs } from './types.js';
 
 /**
  * Work-context CRUD. Work contexts are condition tags (e.g. "near a phone", "at computer")
@@ -10,8 +10,12 @@ import { accountSchema, defineTool, idSchema, registerOne, requestOptsFromArgs }
  */
 
 const listWorkContexts = defineTool({
-    name: 'gtd_list_work_contexts',
-    description: "List the user's work contexts. Sorted by updatedTs DESC.",
+    name: 'done_list_work_contexts',
+    title: 'List work contexts',
+    safety: READS,
+    description:
+        "List the user's work contexts — the named conditions a task needs (a place, a tool, a situation). " +
+        'Use it to find the id an item or routine template takes in `workContextIds`. Sorted by updatedTs DESC.',
     inputSchema: {
         limit: z.number().int().positive().max(500).optional(),
         cursor: z.string().optional(),
@@ -29,7 +33,9 @@ const listWorkContexts = defineTool({
 });
 
 const getWorkContext = defineTool({
-    name: 'gtd_get_work_context',
+    name: 'done_get_work_context',
+    title: 'Get work context',
+    safety: READS,
     description: 'Fetch a single work context by id.',
     inputSchema: { id: idSchema, account: accountSchema },
     handler: async (args, api) =>
@@ -37,15 +43,21 @@ const getWorkContext = defineTool({
 });
 
 const createWorkContext = defineTool({
-    name: 'gtd_create_work_context',
-    description: 'Create a new work context tag.',
+    name: 'done_create_work_context',
+    title: 'Create work context',
+    safety: ADDS,
+    description:
+        'Create a work context: a named condition under which tasks can be done (a place, a tool, a situation). ' +
+        'Check done_list_work_contexts first so an existing one is reused instead of duplicated.',
     inputSchema: { name: z.string().min(1), account: accountSchema },
     handler: async ({ account, ...body }, api) => api.request('POST', '/v1/work-contexts', body, undefined, requestOptsFromArgs({ account })),
 });
 
 const updateWorkContext = defineTool({
-    name: 'gtd_update_work_context',
-    description: 'Update an existing work context.',
+    name: 'done_update_work_context',
+    title: 'Rename work context',
+    safety: CHANGES_IDEMPOTENTLY,
+    description: 'Rename a work context. Items and routines that reference it keep the reference.',
     inputSchema: {
         id: idSchema,
         name: z.string().min(1),
@@ -56,7 +68,9 @@ const updateWorkContext = defineTool({
 });
 
 const deleteWorkContext = defineTool({
-    name: 'gtd_delete_work_context',
+    name: 'done_delete_work_context',
+    title: 'Delete work context',
+    safety: CHANGES_IDEMPOTENTLY,
     description: 'Delete a work context. Idempotent. Does NOT cascade.',
     inputSchema: { id: idSchema, account: accountSchema },
     handler: async (args, api) =>

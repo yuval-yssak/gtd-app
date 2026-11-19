@@ -45,9 +45,14 @@ export interface RequestOptions {
 
 export interface ApiClient {
     request<T>(method: string, path: string, body?: unknown, query?: Record<string, string | number | undefined>, opts?: RequestOptions): Promise<T>;
-    /** Configured account labels in env-var insertion order — drives `gtd_list_accounts` iteration. */
+    /** Configured account labels in env-var insertion order — drives `done_list_accounts` iteration. */
     listAccounts(): string[];
-    /** The classified environment derived from `apiBase` (echoed in `gtd_me` / `gtd_list_accounts` responses). */
+    /**
+     * Whether a call can pick an account (`account` / `done_reassign`). True for the stdio server, whose
+     * env can hold a token per account; false for the hosted connector, which is one signed-in account.
+     */
+    supportsMultipleAccounts(): boolean;
+    /** The classified environment derived from `apiBase` (echoed in `done_me` / `done_list_accounts` responses). */
     environment(): GtdEnvironment;
     /** The normalised `apiBase` URL — pairs with `environment()` so tool output is unambiguous. */
     apiBase(): string;
@@ -60,6 +65,7 @@ const DEFAULT_ACCOUNT_LABEL = 'default';
 export function createApiClient(config: McpConfig): ApiClient {
     return {
         listAccounts: () => [...config.tokens.keys()],
+        supportsMultipleAccounts: () => true,
         environment: () => config.environment,
         apiBase: () => config.apiBase,
         webBase: () => config.webBase,

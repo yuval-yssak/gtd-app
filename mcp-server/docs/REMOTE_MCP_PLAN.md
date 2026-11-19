@@ -107,7 +107,7 @@ concepts and should be dropped from the remote build (replaced by one-token-per-
    binary and the HTTP route import — so local stdio and remote HTTP serve identical tools. (Keep the
    stdio binary working for offline/dev.)
 3. Deploy to **staging first** (`gtd-api-staging`), point one `mcpServers` block at
-   `https://api-staging.getting-things-done.app/mcp`, verify `gtd_list_items` returns `url`.
+   `https://api-staging.getting-things-done.app/mcp`, verify `done_list_items` returns `url`.
 4. Cut over the local config from the `node dist/index.js` block to the remote URL; keep the stdio
    block available as a fallback.
 5. (Later) Option 2 OAuth if Desktop/mobile/no-token-paste UX is wanted.

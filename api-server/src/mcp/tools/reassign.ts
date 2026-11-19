@@ -2,7 +2,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ApiClient } from '../apiClient.js';
-import { defineTool, idSchema, registerOne } from './types.js';
+import { CHANGES, defineTool, idSchema, registerOne } from './types.js';
 
 /**
  * Cross-account reassign — move an item or routine from the calling token's user to another
@@ -28,7 +28,10 @@ interface MeResponse {
 }
 
 const reassign = defineTool({
-    name: 'gtd_reassign',
+    name: 'done_reassign',
+    title: 'Move to another account',
+    safety: CHANGES,
+    requiresMultipleAccounts: true,
     description:
         'Move an item or routine from one account to another. People and workContexts cannot be reassigned; ' +
         'if the moved entity carries peopleIds/workContextIds, the server auto-relinks them into the recipient ' +

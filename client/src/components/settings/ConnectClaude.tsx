@@ -5,30 +5,35 @@ import { claudeCodeAddCommand, LOCAL_MCP_README_URL, MCP_CONNECTOR_NAME, mcpConn
 import { CopyButton } from '../CopyButton';
 import styles from './ConnectClaude.module.css';
 
+/** Settings nests the steps deep in its own outline; the public guide puts them right under an h2. */
+type StepHeading = 'h3' | 'h6';
+
 /**
  * Self-serve guide for connecting Claude to this account through the hosted MCP endpoint. The
  * endpoint runs its own OAuth sign-in, so the user never handles a token — the only input is the URL.
  */
-export function ConnectClaude() {
+export function ConnectClaude({ stepHeadingAs = 'h6' }: { stepHeadingAs?: StepHeading }) {
     const connectorUrl = mcpConnectorUrl(API_SERVER);
     return (
         <div data-testid="connectClaudeSection">
             <Text variant="bodySm" className={styles.urlLabel}>
-                Your connector URL:
+                Connector URL:
             </Text>
             <CopyableLine value={connectorUrl} testId="mcpConnectorUrl" label="connector URL" />
-            <ClaudeAppSteps />
-            <ClaudeCodeSteps connectorUrl={connectorUrl} />
-            <SignInSteps />
-            <GoodToKnow />
+            <ClaudeAppSteps headingAs={stepHeadingAs} />
+            <ClaudeCodeSteps connectorUrl={connectorUrl} headingAs={stepHeadingAs} />
+            <SignInSteps headingAs={stepHeadingAs} />
+            <GoodToKnow headingAs={stepHeadingAs} />
         </div>
     );
 }
 
-function ClaudeAppSteps() {
+function ClaudeAppSteps({ headingAs }: { headingAs: StepHeading }) {
     return (
         <div className={styles.block}>
-            <Text variant="subtitleSm">In claude.ai or the Claude desktop app</Text>
+            <Text variant="subtitleSm" as={headingAs}>
+                In claude.ai or the Claude desktop app
+            </Text>
             <ol className={styles.steps}>
                 <li>
                     Open <strong>Settings → Connectors</strong> and choose <strong>Add custom connector</strong>.
@@ -47,10 +52,12 @@ function ClaudeAppSteps() {
     );
 }
 
-function ClaudeCodeSteps({ connectorUrl }: { connectorUrl: string }) {
+function ClaudeCodeSteps({ connectorUrl, headingAs }: { connectorUrl: string; headingAs: StepHeading }) {
     return (
         <div className={styles.block}>
-            <Text variant="subtitleSm">In Claude Code (terminal)</Text>
+            <Text variant="subtitleSm" as={headingAs}>
+                In Claude Code (terminal)
+            </Text>
             <ol className={styles.steps}>
                 <li>
                     Run:
@@ -64,10 +71,12 @@ function ClaudeCodeSteps({ connectorUrl }: { connectorUrl: string }) {
     );
 }
 
-function SignInSteps() {
+function SignInSteps({ headingAs }: { headingAs: StepHeading }) {
     return (
         <div className={styles.block}>
-            <Text variant="subtitleSm">Then sign in</Text>
+            <Text variant="subtitleSm" as={headingAs}>
+                Then sign in
+            </Text>
             <ol className={styles.steps}>
                 <li>A browser window opens. If it asks you to sign in, use the Google or GitHub account you use here.</li>
                 <li>
@@ -82,10 +91,12 @@ function SignInSteps() {
     );
 }
 
-function GoodToKnow() {
+function GoodToKnow({ headingAs }: { headingAs: StepHeading }) {
     return (
         <div className={styles.block}>
-            <Text variant="subtitleSm">Good to know</Text>
+            <Text variant="subtitleSm" as={headingAs}>
+                Good to know
+            </Text>
             <ul className={styles.steps}>
                 <li>Claude stays signed in. You'll only be asked to sign in again after a month without use.</li>
                 <li>

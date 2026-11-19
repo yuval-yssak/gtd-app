@@ -1,6 +1,6 @@
 /**
  * End-to-end tests for the remote `/mcp` resource endpoint. Issues an OAuth access token directly,
- * then drives the MCP Streamable HTTP transport (initialize → tools/list → tools/call gtd_me) and
+ * then drives the MCP Streamable HTTP transport (initialize → tools/list → tools/call done_me) and
  * the 401 discovery path. The tools call back into `/v1/*` over loopback HTTP; the test routes that
  * loopback into the in-process app via a `fetch` stub so no real listener is needed.
  */
@@ -8,17 +8,20 @@ import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { issueOAuthAccessToken } from '../auth/apiTokens.js';
 import { __resetDefaultStoreForTests } from '../auth/rateLimitMiddleware.js';
+import { MCP_SUPPORTED_SCOPES } from '../lib/mcpOAuth.js';
 import { closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { mcpRoutes } from '../routes/mcp.js';
 import { v1Routes } from '../routes/v1/index.js';
+import { v1BriefGenerateRoutes } from '../routes/v1/itemBriefGenerate.js';
 import type { ApiTokenScope } from '../types/entities.js';
 
 const ORIGIN = 'http://localhost:4000';
 
 // The app under test serves both /mcp (the resource) and /v1 (what the tools call over loopback).
-// The full /v1 router is mounted so item writes (gtd_capture → gtd_update_item) run the real
+// The full /v1 router is mounted so item writes (done_capture → done_update_item) run the real
 // apply pipeline — the field-guidance test below inspects what the server actually stored.
-const app = new Hono().route('/mcp', mcpRoutes).route('/v1', v1Routes);
+// The brief-generate route is mounted first, as in index.ts — it is a separate router there too.
+const app = new Hono().route('/mcp', mcpRoutes).route('/v1', v1BriefGenerateRoutes).route('/v1', v1Routes);
 
 const SCOPES: ApiTokenScope[] = ['items.capture', 'items.read', 'items.write', 'contexts.write'];
 
@@ -39,6 +42,9 @@ beforeEach(async () => {
         db.collection('items').deleteMany({}),
         db.collection('operations').deleteMany({}),
         db.collection('workContexts').deleteMany({}),
+        db.collection('people').deleteMany({}),
+        db.collection('routines').deleteMany({}),
+        db.collection('itemBriefs').deleteMany({}),
     ]);
     __resetDefaultStoreForTests();
     vi.restoreAllMocks();
@@ -59,10 +65,10 @@ function stubLoopbackFetch() {
     });
 }
 
-async function seedUserAndToken(): Promise<{ userId: string; token: string }> {
+async function seedUserAndToken(scopes: ApiTokenScope[] = SCOPES): Promise<{ userId: string; token: string }> {
     const userId = 'user-mcp-test';
     await db.collection('user').insertOne({ _id: userId as never, email: 'mcp@example.com', name: 'MCP Tester' });
-    const { plaintext } = await issueOAuthAccessToken(userId, 'client-abc', SCOPES, 3600);
+    const { plaintext } = await issueOAuthAccessToken(userId, 'client-abc', scopes, 3600);
     return { userId, token: plaintext };
 }
 
@@ -76,6 +82,13 @@ async function callMcp(token: string | null, message: unknown): Promise<{ status
     const res = await app.fetch(new Request(`${ORIGIN}/mcp`, { method: 'POST', headers, body: JSON.stringify(message) }));
     const text = await res.text();
     return { status: res.status, body: text ? JSON.parse(text) : null, wwwAuth: res.headers.get('www-authenticate') };
+}
+
+interface ListedTool {
+    name: string;
+    title?: string;
+    annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean };
+    inputSchema: { properties?: Record<string, unknown> };
 }
 
 const INITIALIZE = {
@@ -100,22 +113,23 @@ describe('/mcp authentication', () => {
 });
 
 describe('/mcp protocol', () => {
-    it('handshakes, lists tools, and calls gtd_me through the loopback /v1 path', async () => {
+    it('handshakes, lists tools, and calls done_me through the loopback /v1 path', async () => {
         const { userId, token } = await seedUserAndToken();
         stubLoopbackFetch();
 
         const init = await callMcp(token, INITIALIZE);
         expect(init.status).toBe(200);
-        expect((init.body as { result?: { serverInfo?: { name?: string } } }).result?.serverInfo?.name).toBe('gtd-mcp');
+        const serverInfo = (init.body as { result?: { serverInfo?: { name?: string; title?: string } } }).result?.serverInfo;
+        expect(serverInfo).toMatchObject({ name: 'done-mcp', title: 'Done' });
 
         const list = await callMcp(token, { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
         const toolNames = (list.body as { result: { tools: { name: string }[] } }).result.tools.map((t) => t.name);
-        expect(toolNames).toContain('gtd_me');
-        expect(toolNames).toContain('gtd_capture');
-        expect(toolNames).toContain('gtd_set_brief');
-        expect(toolNames).toContain('gtd_generate_brief');
+        expect(toolNames).toContain('done_me');
+        expect(toolNames).toContain('done_capture');
+        expect(toolNames).toContain('done_set_brief');
+        expect(toolNames).toContain('done_generate_brief');
 
-        const call = await callMcp(token, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'gtd_me', arguments: {} } });
+        const call = await callMcp(token, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'done_me', arguments: {} } });
         expect(call.status).toBe(200);
         const content = (call.body as { result: { content: { type: string; text: string }[]; isError?: boolean } }).result;
         expect(content.isError).toBeFalsy();
@@ -154,29 +168,29 @@ describe('/mcp protocol', () => {
 
     /** Captures an inbox item through /mcp and returns its id. */
     async function captureViaMcp(token: string, id: number, title: string): Promise<string> {
-        const captured = await callItemToolViaMcp(token, id, 'gtd_capture', { title });
+        const captured = await callItemToolViaMcp(token, id, 'done_capture', { title });
         // Inbox has no required metadata, so a capture never carries guidance.
         expect(captured).not.toHaveProperty('fieldGuidance');
         if (typeof captured._id !== 'string') throw new Error('expected the captured item to carry an _id');
         return captured._id;
     }
 
-    it('stamps fieldGuidance on an incomplete nextAction written through gtd_update_item, and drops it once complete', async () => {
+    it('stamps fieldGuidance on an incomplete nextAction written through done_update_item, and drops it once complete', async () => {
         const { token } = await seedUserAndToken();
         stubLoopbackFetch();
         await callMcp(token, INITIALIZE);
         const id = await captureViaMcp(token, 10, 'Renew passport');
 
-        const bare = await callItemToolViaMcp(token, 11, 'gtd_update_item', { id, status: 'nextAction' });
+        const bare = await callItemToolViaMcp(token, 11, 'done_update_item', { id, status: 'nextAction' });
         expect(bare.status).toBe('nextAction');
         expect(bare.fieldGuidance).toMatchObject({ missing: ['energy', 'time', 'workContextIds'] });
 
-        const partial = await callItemToolViaMcp(token, 12, 'gtd_update_item', { id, energy: 'low', time: 20 });
+        const partial = await callItemToolViaMcp(token, 12, 'done_update_item', { id, energy: 'low', time: 20 });
         expect(partial.fieldGuidance).toMatchObject({ missing: ['workContextIds'] });
 
-        const office = await callItemToolViaMcp(token, 13, 'gtd_create_work_context', { name: 'Office' });
+        const office = await callItemToolViaMcp(token, 13, 'done_create_work_context', { name: 'Office' });
         if (typeof office._id !== 'string') throw new Error('expected the work context to carry an _id');
-        const complete = await callItemToolViaMcp(token, 14, 'gtd_update_item', { id, workContextIds: [office._id] });
+        const complete = await callItemToolViaMcp(token, 14, 'done_update_item', { id, workContextIds: [office._id] });
         expect(complete).not.toHaveProperty('fieldGuidance');
         expect(complete.workContextIds).toEqual([office._id]);
     });
@@ -188,18 +202,18 @@ describe('/mcp protocol', () => {
         const id = await captureViaMcp(token, 30, 'Dentist');
 
         // No Google Calendar is connected, so scheduling leaves the item unlinked: nothing to set a location on.
-        const unlinked = await callItemToolViaMcp(token, 31, 'gtd_update_item', { id, status: 'calendar', timeStart: '2099-04-01T10:00:00' });
+        const unlinked = await callItemToolViaMcp(token, 31, 'done_update_item', { id, status: 'calendar', timeStart: '2099-04-01T10:00:00' });
         expect(unlinked.status).toBe('calendar');
         expect(unlinked).not.toHaveProperty('fieldGuidance');
 
         // The sync stamps the link (and later the Google location) server-side; seed both directly.
         await db.collection('items').updateOne({ _id: id, user: userId } as never, { $set: { calendarEventId: 'gcal-evt-dentist' } });
-        const linked = await callItemToolViaMcp(token, 32, 'gtd_update_item', { id, title: 'Dentist (cleaning)' });
+        const linked = await callItemToolViaMcp(token, 32, 'done_update_item', { id, title: 'Dentist (cleaning)' });
         expect(linked.fieldGuidance).toMatchObject({ missing: ['location'] });
         expect(linked.fieldGuidance?.hint).toContain('calendarEventId gcal-evt-dentist');
 
         await db.collection('items').updateOne({ _id: id, user: userId } as never, { $set: { location: 'Room 4B' } });
-        const located = await callItemToolViaMcp(token, 33, 'gtd_update_item', { id, notes: 'Bring insurance card' });
+        const located = await callItemToolViaMcp(token, 33, 'done_update_item', { id, notes: 'Bring insurance card' });
         expect(located.location).toBe('Room 4B');
         expect(located).not.toHaveProperty('fieldGuidance');
     });
@@ -211,7 +225,7 @@ describe('/mcp protocol', () => {
         const id = await captureViaMcp(token, 40, 'Taxes');
 
         // `energy` is not allowed on an inbox item → 400 status_field_violation from the apply pipeline.
-        const result = await callToolViaMcp(token, 41, 'gtd_update_item', { id, energy: 'high' });
+        const result = await callToolViaMcp(token, 41, 'done_update_item', { id, energy: 'high' });
         const [block] = result.content;
         if (!block) throw new Error('expected an error content block');
         expect(result.isError).toBe(true);
@@ -219,21 +233,21 @@ describe('/mcp protocol', () => {
         expect(block.text).not.toContain('fieldGuidance');
     });
 
-    it('asks for expectedBy on a waitingFor item written through gtd_update_item', async () => {
+    it('asks for expectedBy on a waitingFor item written through done_update_item', async () => {
         const { token } = await seedUserAndToken();
         stubLoopbackFetch();
         await callMcp(token, INITIALIZE);
 
         const id = await captureViaMcp(token, 20, 'Quote from the roofer');
 
-        const waiting = await callItemToolViaMcp(token, 21, 'gtd_update_item', { id, status: 'waitingFor' });
+        const waiting = await callItemToolViaMcp(token, 21, 'done_update_item', { id, status: 'waitingFor' });
         expect(waiting.fieldGuidance).toMatchObject({ missing: ['expectedBy'] });
 
-        const dated = await callItemToolViaMcp(token, 22, 'gtd_update_item', { id, expectedBy: '2026-10-20' });
+        const dated = await callItemToolViaMcp(token, 22, 'done_update_item', { id, expectedBy: '2026-10-20' });
         expect(dated).not.toHaveProperty('fieldGuidance');
     });
 
-    it('advertises the completeness rule in the server instructions and the gtd_update_item description', async () => {
+    it('advertises the completeness rule in the server instructions and the done_update_item description', async () => {
         const { token } = await seedUserAndToken();
         stubLoopbackFetch();
 
@@ -242,10 +256,91 @@ describe('/mcp protocol', () => {
 
         const list = await callMcp(token, { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
         const tools = (list.body as { result: { tools: { name: string; description?: string }[] } }).result.tools;
-        expect(tools.find((tool) => tool.name === 'gtd_update_item')?.description).toContain('Completeness:');
+        expect(tools.find((tool) => tool.name === 'done_update_item')?.description).toContain('Completeness:');
     });
 
-    it('fails gtd_reassign explicitly (multi-account is unsupported on the single-token remote)', async () => {
+    // What the Claude connector directory checks on the wire: a title and both safety hints on every
+    // tool, and no tool a single signed-in account can never call successfully.
+    it('lists every tool with a title and safety hints, and none that needs a second account', async () => {
+        const { token } = await seedUserAndToken();
+        await callMcp(token, INITIALIZE);
+
+        const list = await callMcp(token, { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
+        const tools = (list.body as { result: { tools: ListedTool[] } }).result.tools;
+
+        expect(tools.length).toBeGreaterThanOrEqual(28);
+        for (const tool of tools) {
+            expect(tool.title, tool.name).toEqual(expect.any(String));
+            expect(tool.annotations, tool.name).toMatchObject({ readOnlyHint: expect.any(Boolean), destructiveHint: expect.any(Boolean) });
+            expect(Object.keys(tool.inputSchema.properties ?? {}), tool.name).not.toContain('account');
+        }
+        const toolNames = tools.map((tool) => tool.name);
+        expect(toolNames).not.toContain('done_reassign');
+        expect(toolNames).not.toContain('done_list_accounts');
+        expect(tools.find((tool) => tool.name === 'done_list_items')?.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false });
+        expect(tools.find((tool) => tool.name === 'done_trash_item')?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true });
+    });
+
+    // A directory reviewer calls each tool with valid arguments and expects success, with the access a
+    // real sign-in grants. The walk must cover the whole list, so a new tool cannot ship unexercised.
+    it('every listed tool succeeds with valid arguments under the scopes an OAuth sign-in grants', async () => {
+        const { userId, token } = await seedUserAndToken(MCP_SUPPORTED_SCOPES);
+        stubLoopbackFetch();
+        await callMcp(token, INITIALIZE);
+        const called: string[] = [];
+        const call = async (name: string, args: Record<string, unknown>) => {
+            called.push(name);
+            return callItemToolViaMcp(token, 100 + called.length, name, args);
+        };
+        const idOf = (payload: ItemToolPayload) => {
+            if (typeof payload._id !== 'string') throw new Error('expected the created entity to carry an _id');
+            return payload._id;
+        };
+
+        const itemId = idOf(await call('done_capture', { title: 'Renew passport' }));
+        await call('done_get_item', { id: itemId });
+        await call('done_list_items', { status: 'inbox' });
+        await call('done_update_item', { id: itemId, status: 'nextAction', energy: 'low', time: 15 });
+        await call('done_move_item', { id: itemId, position: 'top' });
+        // No notes to condense, so the server records a skip without calling the model.
+        await call('done_generate_brief', { itemId });
+        await call('done_set_brief', { itemId, brief: 'Passport expires in March.' });
+        await call('done_complete_item', { id: itemId });
+        await call('done_trash_item', { id: itemId });
+
+        const personId = idOf(await call('done_create_person', { name: 'Dana' }));
+        await call('done_get_person', { id: personId });
+        await call('done_list_people', {});
+        await call('done_update_person', { id: personId, email: 'dana@example.com' });
+        await call('done_delete_person', { id: personId });
+
+        const contextId = idOf(await call('done_create_work_context', { name: 'Office' }));
+        await call('done_get_work_context', { id: contextId });
+        await call('done_list_work_contexts', {});
+        await call('done_update_work_context', { id: contextId, name: 'Desk' });
+        await call('done_delete_work_context', { id: contextId });
+
+        const routineId = idOf(
+            await call('done_create_routine', { title: 'Water the plants', routineType: 'nextAction', rrule: 'FREQ=WEEKLY', template: {}, active: true }),
+        );
+        await call('done_get_routine', { id: routineId });
+        await call('done_list_routines', {});
+        await call('done_update_routine', { id: routineId, title: 'Water the garden' });
+        await call('done_pause_routine', { id: routineId });
+        await call('done_resume_routine', { id: routineId });
+        await call('done_split_routine', { id: routineId, splitDate: '2099-01-01', tailEdits: { title: 'Water the lawn' } });
+        await call('done_delete_routine', { id: routineId });
+
+        const batchContext = { _id: 'wc-batch', user: userId, name: 'Errands', createdTs: '2026-01-01T00:00:00.000Z', updatedTs: '2026-01-01T00:00:00.000Z' };
+        await call('done_batch', { ops: [{ entityType: 'workContext', opType: 'create', entityId: 'wc-batch', snapshot: batchContext }] });
+        await call('done_me', {});
+
+        const list = await callMcp(token, { jsonrpc: '2.0', id: 99, method: 'tools/list', params: {} });
+        const listed = (list.body as { result: { tools: ListedTool[] } }).result.tools.map((tool) => tool.name);
+        expect([...new Set(called)].sort()).toEqual(listed.sort());
+    });
+
+    it('refuses a call to done_reassign, which it does not list', async () => {
         const { token } = await seedUserAndToken();
         stubLoopbackFetch();
         await callMcp(token, INITIALIZE);
@@ -254,11 +349,11 @@ describe('/mcp protocol', () => {
             jsonrpc: '2.0',
             id: 4,
             method: 'tools/call',
-            params: { name: 'gtd_reassign', arguments: { entityType: 'item', entityId: 'x', toAccount: 'work' } },
+            params: { name: 'done_reassign', arguments: { entityType: 'item', entityId: 'x', toAccount: 'work' } },
         });
-        const result = (call.body as { result: { content: { text: string }[]; isError?: boolean } }).result;
-        expect(result.isError).toBe(true);
-        // The single-token client throws rather than silently resolving toAccount to the caller.
-        expect(result.content[0]?.text ?? '').toContain('multi_account_unsupported');
+
+        // The SDK reports an unknown tool as a JSON-RPC error or an isError result, depending on its version.
+        const { error, result } = call.body as { error?: unknown; result?: { isError?: boolean } };
+        expect(error !== undefined || result?.isError === true).toBe(true);
     });
 });

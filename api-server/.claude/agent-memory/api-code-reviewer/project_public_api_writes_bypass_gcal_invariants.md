@@ -5,7 +5,7 @@ metadata:
   type: project
 ---
 
-Recurring blind spot: every broadening of the public `/v1` item write surface (Phase 3 full-surface PATCH, the `null`-clears-optional-fields change, `gtd_batch`, bulk import) is reviewed against the Zod snapshot schema + the status×field matrix, but NOT against the GCal pushback dispatcher's implicit invariants.
+Recurring blind spot: every broadening of the public `/v1` item write surface (Phase 3 full-surface PATCH, the `null`-clears-optional-fields change, `done_batch`, bulk import) is reviewed against the Zod snapshot schema + the status×field matrix, but NOT against the GCal pushback dispatcher's implicit invariants.
 
 The load-bearing invariant nobody restates: in `lib/calendarPushback.ts`, `handleItemPush` dispatches on presence/absence of `calendarEventId`. `status: 'calendar'` **without** `calendarEventId` means "app-created calendar item that has never been pushed" → mint a **new** GCal event. `hydrateCalendarDetachSnapshots` only fires for statuses in `CALENDAR_DETACH_STATUSES` (inbox/nextAction/waitingFor/somedayMaybe), so it does not cover an item that *stays* `calendar` while losing its linkage.
 

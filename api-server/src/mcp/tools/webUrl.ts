@@ -9,9 +9,9 @@
  * for each (`/item/<id>`, `/routine/<id>`, `/person/<id>`, `/work-context/<id>`).
  *
  * Four response shapes are handled: `one` (a bare entity), `list` (an `{ items|routines|people|workContexts: [] }`
- * envelope), `pair` — the `{ head, tail }` composite returned by `gtd_split_routine`, which
+ * envelope), `pair` — the `{ head, tail }` composite returned by `done_split_routine`, which
  * creates two linkable routines at once — and `batch`, the `{ ok, count, results: [] }` envelope
- * of `gtd_batch`, where each per-op result is stamped from its own `entityType`/`entityId`
+ * of `done_batch`, where each per-op result is stamped from its own `entityType`/`entityId`
  * (delete ops get no url — the row is gone).
  */
 
@@ -27,32 +27,32 @@ type LinkableEntity = keyof typeof PATH_BY_ENTITY;
 type ToolShape = { entity: LinkableEntity; shape: 'one' | 'list' | 'pair' } | { shape: 'batch' };
 
 const SHAPE_BY_TOOL: Record<string, ToolShape> = {
-    gtd_capture: { entity: 'item', shape: 'one' },
-    gtd_get_item: { entity: 'item', shape: 'one' },
-    gtd_update_item: { entity: 'item', shape: 'one' },
-    gtd_complete_item: { entity: 'item', shape: 'one' },
-    gtd_trash_item: { entity: 'item', shape: 'one' },
-    gtd_move_item: { entity: 'item', shape: 'one' },
-    gtd_set_brief: { entity: 'item', shape: 'one' },
-    gtd_list_items: { entity: 'item', shape: 'list' },
-    gtd_create_routine: { entity: 'routine', shape: 'one' },
-    gtd_get_routine: { entity: 'routine', shape: 'one' },
-    gtd_update_routine: { entity: 'routine', shape: 'one' },
-    gtd_pause_routine: { entity: 'routine', shape: 'one' },
-    gtd_resume_routine: { entity: 'routine', shape: 'one' },
+    done_capture: { entity: 'item', shape: 'one' },
+    done_get_item: { entity: 'item', shape: 'one' },
+    done_update_item: { entity: 'item', shape: 'one' },
+    done_complete_item: { entity: 'item', shape: 'one' },
+    done_trash_item: { entity: 'item', shape: 'one' },
+    done_move_item: { entity: 'item', shape: 'one' },
+    done_set_brief: { entity: 'item', shape: 'one' },
+    done_list_items: { entity: 'item', shape: 'list' },
+    done_create_routine: { entity: 'routine', shape: 'one' },
+    done_get_routine: { entity: 'routine', shape: 'one' },
+    done_update_routine: { entity: 'routine', shape: 'one' },
+    done_pause_routine: { entity: 'routine', shape: 'one' },
+    done_resume_routine: { entity: 'routine', shape: 'one' },
     // Split returns a { head, tail } composite (two routines), not a bare routine — see stampPair.
-    gtd_split_routine: { entity: 'routine', shape: 'pair' },
-    gtd_list_routines: { entity: 'routine', shape: 'list' },
-    gtd_create_person: { entity: 'person', shape: 'one' },
-    gtd_get_person: { entity: 'person', shape: 'one' },
-    gtd_update_person: { entity: 'person', shape: 'one' },
-    gtd_list_people: { entity: 'person', shape: 'list' },
-    gtd_create_work_context: { entity: 'workContext', shape: 'one' },
-    gtd_get_work_context: { entity: 'workContext', shape: 'one' },
-    gtd_update_work_context: { entity: 'workContext', shape: 'one' },
-    gtd_list_work_contexts: { entity: 'workContext', shape: 'list' },
+    done_split_routine: { entity: 'routine', shape: 'pair' },
+    done_list_routines: { entity: 'routine', shape: 'list' },
+    done_create_person: { entity: 'person', shape: 'one' },
+    done_get_person: { entity: 'person', shape: 'one' },
+    done_update_person: { entity: 'person', shape: 'one' },
+    done_list_people: { entity: 'person', shape: 'list' },
+    done_create_work_context: { entity: 'workContext', shape: 'one' },
+    done_get_work_context: { entity: 'workContext', shape: 'one' },
+    done_update_work_context: { entity: 'workContext', shape: 'one' },
+    done_list_work_contexts: { entity: 'workContext', shape: 'list' },
     // Batch returns per-op results (not entities); each is stamped from its own entityType.
-    gtd_batch: { shape: 'batch' },
+    done_batch: { shape: 'batch' },
 };
 
 /** The array property holding the entities in a list response (mirrors the v1 API envelopes). */
@@ -85,7 +85,7 @@ export function decorateWithUrls(toolName: string, result: unknown, webBase: str
     return stampList(result, spec.entity, webBase);
 }
 
-/** Stamps `url` onto each named entity of a `{ head, tail }` composite (gtd_split_routine). */
+/** Stamps `url` onto each named entity of a `{ head, tail }` composite (done_split_routine). */
 function stampPair(envelope: unknown, kind: LinkableEntity, webBase: string): unknown {
     if (!isRecord(envelope)) {
         return envelope;
@@ -121,7 +121,7 @@ function stampList(envelope: unknown, kind: LinkableEntity, webBase: string): un
     return { ...envelope, [listKey]: list.map((entity) => stampOne(entity, kind, webBase)) };
 }
 
-/** Stamps `url` onto each per-op result of the `gtd_batch` response envelope. */
+/** Stamps `url` onto each per-op result of the `done_batch` response envelope. */
 function stampBatchResults(envelope: unknown, webBase: string): unknown {
     if (!isRecord(envelope)) {
         return envelope;

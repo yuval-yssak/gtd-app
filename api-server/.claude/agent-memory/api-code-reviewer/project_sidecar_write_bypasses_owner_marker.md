@@ -15,7 +15,7 @@ the item slips past the choke point completely.
 is left with no brief and no marker, i.e. permanently invisible to the sweep — the exact "false
 `false` strands an item forever" failure the module exists to prevent. Same shape for
 `writeAuthoredBrief` (pin → unpin makes a previously-excluded item targetable again without an
-item write). Both reachable from the client editor and MCP `gtd_set_brief`.
+item write). Both reachable from the client editor and MCP `done_set_brief`.
 
 The two `cascadeItemBriefRemoval` call sites are NOT holes, for a reason worth remembering: the
 reference cascade fires only on item delete (item is gone), and reassign does its

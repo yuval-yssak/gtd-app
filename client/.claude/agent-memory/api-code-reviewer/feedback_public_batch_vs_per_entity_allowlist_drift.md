@@ -20,7 +20,7 @@ fields added later are automatically writable. A hand-written denylist reliably 
 **Resolution pattern that was accepted here (2026-08-27 LWW review):** deriving the denylist from
 the PATCH allowlist is NOT the right fix on this codebase — it would 400 honest MCP callers,
 because `routineExceptions` / `lastGeneratedDate` / `splitFromRoutineId` are server-managed yet
-sit in `presentRoutine`'s `PUBLIC_FIELDS`, so a legitimate `gtd_get_routine` echo carries them.
+sit in `presentRoutine`'s `PUBLIC_FIELDS`, so a legitimate `done_get_routine` echo carries them.
 The accepted criterion is: **deny every sync-integrity anchor that the public read projections
 (`presentItem` / `presentRoutine`) never expose** — echo-safe by construction, since no honest
 round-trip can trip it. Verify it mechanically: no denied field may appear in `PUBLIC_FIELDS`.

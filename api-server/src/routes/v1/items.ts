@@ -1264,7 +1264,7 @@ export const v1ItemsRoutes = new Hono<{ Variables: BearerVariables }>()
 
     // ── POST /v1/items/:id/trash ────────────────────────────────────────────
     // Recoverable soft-delete: moves the item to `status: 'trash'`. This is the public API's
-    // disposal primitive — it replaces the old `gtd_batch` hard-delete hack, which physically
+    // disposal primitive — it replaces the old `done_batch` hard-delete hack, which physically
     // removed the row (unrecoverable). A trashed item stays in the collection and shows up in the
     // in-app Trash view for restore. Idempotent (already-trashed → X-Idempotent-Replay).
     .post('/items/:id/trash', requireScope('items.write'), async (c) => {

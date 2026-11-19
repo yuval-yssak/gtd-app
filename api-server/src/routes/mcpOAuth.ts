@@ -296,7 +296,7 @@ function redirectWithError(redirectUri: string, error: string, description: stri
 /**
  * Validates the authorize request up to the point a session is required. Returns the resolved
  * client + confined scopes on success, or a rendered error / redirect on failure. The redirect_uri
- * exact-match check runs FIRST and renders an error page (never a redirect) on mismatch — the
+ * registration check runs FIRST and renders an error page (never a redirect) on mismatch — the
  * open-redirect gate.
  */
 async function validateAuthorizeRequest(

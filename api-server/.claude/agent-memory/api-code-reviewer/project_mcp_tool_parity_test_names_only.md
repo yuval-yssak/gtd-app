@@ -7,6 +7,8 @@ metadata:
 
 **RESOLVED 2026-09-16.** `mcpToolParity.test.ts` now captures each `registerTool` call's `description` plus `z.toJSONSchema(z.object(inputSchema), {io:'input'})` and deep-equals the two copies. I verified it is not vacuous by mutating one `.describe()` string in the api-server copy — the test failed as expected. Copy drift in schemas, field descriptions, and tool descriptions is now caught. Handler *bodies* are still unguarded (handlers are never invoked during registration), so a behavioural divergence between the two copies' handlers would still ship silently — keep diffing the files directly when a handler changes.
 
+Update 2026-11-19 (feat/mcp-directory-readiness): the parity test also compares `title` + `annotations`, on both the multi-account (stdio) and single-account (hosted) surfaces. Safety hints are hand-classified per tool — when reviewing a new tool, check its hint against the route's real behaviour (re-run, GCal side effects, force-overwrite), not just that one is present.
+
 The original problem, kept for context:
 
 `api-server/src/tests/mcpToolParity.test.ts` is the only automated guard on the "keep the two MCP tool copies identical" rule, and it asserts nothing but the sorted set of registered tool *names* (plus a length floor). Input schemas, field-level `.describe()` text, tool descriptions, and handler bodies can diverge silently between `mcp-server/src/tools/*.ts` (source of truth) and `api-server/src/mcp/tools/*.ts` (copy).

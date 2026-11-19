@@ -1,7 +1,7 @@
 /**
  * PARITY FIXTURES — the api-server test (`api-server/src/tests/itemMoveParity.test.ts`) asserts the
  * identical tables against its port in `lib/itemMove.ts` (used by `POST /v1/items/:id/move` and the
- * MCP `gtd_move_item`). A divergence means an order the API writes would display differently in the
+ * MCP `done_move_item`). A divergence means an order the API writes would display differently in the
  * app. Change both files together.
  */
 import { describe, expect, it } from 'vitest';

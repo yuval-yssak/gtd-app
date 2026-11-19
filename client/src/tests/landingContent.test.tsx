@@ -35,6 +35,9 @@ function scopesRequestedOnConnect() {
     return [...[...scopeList.matchAll(/'([^']+)'/g)].map(([, scope]) => scope), userinfoScope].sort();
 }
 
+/** The connector's use of calendar data — one clause the policy, the landing page and the noscript mirror must all carry. */
+const CONNECTOR_CALENDAR_USE = 'your calendar items and routines to Claude when it reads them on your behalf';
+
 describe('Google Calendar data uses', () => {
     it('name exactly the scopes the API server requests on connect, userinfo.email included', () => {
         // The two constants are only meaningful while they are what the connect flow actually sends.
@@ -47,6 +50,8 @@ describe('Google Calendar data uses', () => {
         expect(LEGAL_DOCUMENTS.privacy.markdown).toContain('Anthropic');
         expect(GOOGLE_LIMITED_USE_STATEMENT).toContain('Anthropic');
         expect(GOOGLE_LIMITED_USE_STATEMENT).toContain('never used for advertising');
+        expect(GOOGLE_LIMITED_USE_STATEMENT).toContain(CONNECTOR_CALENDAR_USE);
+        expect(LEGAL_DOCUMENTS.privacy.markdown).toContain(CONNECTOR_CALENDAR_USE);
     });
 });
 
@@ -100,6 +105,7 @@ describe('index.html <noscript> mirror', () => {
         // The clarify-with-AI assistant was removed; the mirror must not keep describing it.
         expect(noscript).not.toMatch(/clarify-with-AI|assistant/i);
         expect(noscript).toContain('never used for advertising');
+        expect(noscript).toContain(CONNECTOR_CALENDAR_USE);
         expect(noscript).toContain(LANDING_TRADEMARK_NOTICE);
     });
 });

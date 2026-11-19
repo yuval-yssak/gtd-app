@@ -31,8 +31,8 @@ async function seedNextActions(mcp: McpStdioClient, titles: readonly string[]): 
     const entries: Array<[string, string]> = [];
     // Sequential on purpose: each clarify must mint its key after the previous one, or the seeded order is arbitrary.
     for (const title of titles) {
-        const captured = (await callTool(mcp, 'gtd_capture', { title })) as { _id: string };
-        await callTool(mcp, 'gtd_update_item', { id: captured._id, status: 'nextAction', energy: 'low', time: 5 });
+        const captured = (await callTool(mcp, 'done_capture', { title })) as { _id: string };
+        await callTool(mcp, 'done_update_item', { id: captured._id, status: 'nextAction', energy: 'low', time: 5 });
         entries.push([title, captured._id]);
     }
     return Object.fromEntries(entries);
@@ -45,11 +45,11 @@ function idOf(ids: Record<string, string>, title: string): string {
 }
 
 /**
- * Priority order changed through the MCP (`gtd_move_item` → `POST /v1/items/:id/move`) is the
+ * Priority order changed through the MCP (`done_move_item` → `POST /v1/items/:id/move`) is the
  * order the Next Actions page shows: the real stdio binary, a real bearer token, the real apply
  * pipeline and sync into the browser's IndexedDB.
  */
-test.describe('MCP gtd_move_item', () => {
+test.describe('MCP done_move_item', () => {
     test('top, bottom, before and after reorder the Next Actions list', async ({ browser }) => {
         const email = `mcp-move-${uniqueStamp()}@example.com`;
         await resetServerForEmails([email]);
@@ -68,18 +68,18 @@ test.describe('MCP gtd_move_item', () => {
                 await expect.poll(() => rowTitles(page)).toEqual(['Alpha', 'Bravo', 'Charlie']);
                 await waitForLiveChannel(page);
 
-                const toTop = (await callTool(mcp, 'gtd_move_item', { id: idOf(ids, 'Charlie'), position: 'top' })) as MovedItem;
+                const toTop = (await callTool(mcp, 'done_move_item', { id: idOf(ids, 'Charlie'), position: 'top' })) as MovedItem;
                 expect(toTop.placement).toEqual({ position: 1, total: 3 });
                 expect(toTop.url).toContain(`/item/${idOf(ids, 'Charlie')}`);
                 await expect.poll(() => rowTitles(page)).toEqual(['Charlie', 'Alpha', 'Bravo']);
 
-                await callTool(mcp, 'gtd_move_item', { id: idOf(ids, 'Charlie'), position: 'bottom' });
+                await callTool(mcp, 'done_move_item', { id: idOf(ids, 'Charlie'), position: 'bottom' });
                 await expect.poll(() => rowTitles(page)).toEqual(['Alpha', 'Bravo', 'Charlie']);
 
-                await callTool(mcp, 'gtd_move_item', { id: idOf(ids, 'Charlie'), before: idOf(ids, 'Bravo') });
+                await callTool(mcp, 'done_move_item', { id: idOf(ids, 'Charlie'), before: idOf(ids, 'Bravo') });
                 await expect.poll(() => rowTitles(page)).toEqual(['Alpha', 'Charlie', 'Bravo']);
 
-                const after = (await callTool(mcp, 'gtd_move_item', { id: idOf(ids, 'Alpha'), after: idOf(ids, 'Bravo') })) as MovedItem;
+                const after = (await callTool(mcp, 'done_move_item', { id: idOf(ids, 'Alpha'), after: idOf(ids, 'Bravo') })) as MovedItem;
                 expect(after.placement).toEqual({ position: 3, total: 3 });
                 await expect.poll(() => rowTitles(page)).toEqual(['Charlie', 'Bravo', 'Alpha']);
 
@@ -87,8 +87,8 @@ test.describe('MCP gtd_move_item', () => {
                 await page.reload();
                 await expect.poll(() => rowTitles(page)).toEqual(['Charlie', 'Bravo', 'Alpha']);
 
-                // gtd_list_items reads back the same order the page shows — its default is priority order.
-                const listed = (await callTool(mcp, 'gtd_list_items', { status: 'nextAction' })) as { items: Array<{ title: string }> };
+                // done_list_items reads back the same order the page shows — its default is priority order.
+                const listed = (await callTool(mcp, 'done_list_items', { status: 'nextAction' })) as { items: Array<{ title: string }> };
                 expect(listed.items.map((row) => row.title)).toEqual(['Charlie', 'Bravo', 'Alpha']);
             } finally {
                 mcp.close();
@@ -119,7 +119,7 @@ test.describe('MCP gtd_move_item', () => {
                     return { entityType: 'item', opType: 'create', entityId: id, snapshot };
                 };
                 const now = dayjs();
-                await callTool(mcp, 'gtd_batch', {
+                await callTool(mcp, 'done_batch', {
                     ops: [unranked('Older', now.subtract(2, 'minute').toISOString()), unranked('Newer', now.subtract(1, 'minute').toISOString())],
                 });
 
@@ -127,13 +127,13 @@ test.describe('MCP gtd_move_item', () => {
                 await expect.poll(() => rowTitles(page)).toEqual(['Newer', 'Older', 'Ranked']);
                 await waitForLiveChannel(page);
 
-                const moved = (await callTool(mcp, 'gtd_move_item', { id: idOf(ranked, 'Ranked'), after: `mcp-move-newer-${stamp}` })) as MovedItem;
+                const moved = (await callTool(mcp, 'done_move_item', { id: idOf(ranked, 'Ranked'), after: `mcp-move-newer-${stamp}` })) as MovedItem;
                 expect(moved.placement).toEqual({ position: 2, total: 3 });
                 await expect.poll(() => rowTitles(page)).toEqual(['Newer', 'Ranked', 'Older']);
 
                 await page.reload();
                 await expect.poll(() => rowTitles(page)).toEqual(['Newer', 'Ranked', 'Older']);
-                const listed = (await callTool(mcp, 'gtd_list_items', { status: 'nextAction' })) as { items: Array<{ title: string }> };
+                const listed = (await callTool(mcp, 'done_list_items', { status: 'nextAction' })) as { items: Array<{ title: string }> };
                 expect(listed.items.map((row) => row.title)).toEqual(['Newer', 'Ranked', 'Older']);
             } finally {
                 mcp.close();

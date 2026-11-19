@@ -17,6 +17,9 @@ describe('LEGAL_EFFECTIVE_DATE', () => {
     });
 });
 
+/** The connector's use of calendar data, worded identically in the policy, the landing page and the noscript mirror. */
+const CONNECTOR_CALENDAR_USE = 'your calendar items and routines to Claude when it reads them on your behalf';
+
 describe('privacy policy', () => {
     it('names every processor from the data-flow inventory', () => {
         for (const processor of ['Google Cloud', 'MongoDB Atlas', 'Cloudflare', 'Anthropic', 'GitHub', 'push services']) {
@@ -62,6 +65,20 @@ describe('privacy policy', () => {
         expect(privacy.markdown).toContain('No name, email address or user identifier accompanies them');
     });
 
+    it('says what connecting Claude shares with Anthropic, and what of the conversation reaches the Service', () => {
+        expect(privacy.markdown).toContain('Done itself sends content to Anthropic, the provider of the Claude models, for one feature:');
+        expect(privacy.markdown).toContain('If you connect Claude to your account (Settings → Connect Claude)');
+        expect(privacy.markdown).toContain(
+            "the items, routines, people and work contexts Claude reads through the connector, and your account's email address,",
+        );
+        expect(privacy.markdown).toContain('become part of your Claude conversation');
+        // A Google recurring series is imported as a routine, so routines carry Google data too.
+        expect(privacy.markdown).toContain(
+            'Calendar items and calendar routines can include event titles, descriptions and locations imported from Google Calendar',
+        );
+        expect(privacy.markdown).toContain('including any text it writes into your account, never the rest of the conversation');
+    });
+
     it('does not promise a briefs opt-out the server lacks — the Settings switch only hides them', () => {
         expect(privacy.markdown).not.toMatch(/turned off in Settings/);
         expect(privacy.markdown).toContain('hides them on that device but does not stop generation');
@@ -84,7 +101,8 @@ describe('privacy policy', () => {
 
     it('lists every use of Google Calendar data in the Limited Use paragraph, including the AI features that receive it', () => {
         expect(privacy.markdown).not.toContain('used only to provide the calendar-sync features');
-        expect(privacy.markdown).toContain('calendar sync, and — as described under "AI processing" — item briefs for calendar items');
+        expect(privacy.markdown).toContain('calendar sync; item briefs for calendar items, as described under "AI processing"; and, if you connect Claude');
+        expect(privacy.markdown).toContain(CONNECTOR_CALENDAR_USE);
         expect(privacy.markdown).toContain('for calendar items this can include an event description imported from Google Calendar');
     });
 

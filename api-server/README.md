@@ -174,7 +174,7 @@ Public-API mutations record an `OperationInterface` with `deviceId="api:<tokenId
 
 #### Local MCP server
 
-`mcp-server/` exposes the entire `/v1` surface as MCP tools (`gtd_capture`, `gtd_list_items`, `gtd_reassign`, …) for use from Claude Desktop / Claude Code. It supports multiple accounts in one session via numbered env vars:
+`mcp-server/` exposes the entire `/v1` surface as MCP tools (`done_capture`, `done_list_items`, `done_reassign`, …) for use from Claude Desktop / Claude Code. It supports multiple accounts in one session via numbered env vars:
 
 ```jsonc
 {
@@ -192,7 +192,7 @@ Public-API mutations record an `OperationInterface` with `deviceId="api:<tokenId
 }
 ```
 
-See [`mcp-server/README.md`](../mcp-server/README.md) for tool inventory and the cross-account `gtd_reassign` worked example.
+See [`mcp-server/README.md`](../mcp-server/README.md) for tool inventory and the cross-account `done_reassign` worked example.
 
 ### Dev (non-production only)
 

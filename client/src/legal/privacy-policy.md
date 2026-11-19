@@ -33,11 +33,13 @@ We never sell personal data, never use your content for advertising, and never u
 
 ## AI processing
 
-One feature sends content to Anthropic, the provider of the Claude models:
+Done itself sends content to Anthropic, the provider of the Claude models, for one feature:
 
 - **Item briefs** send an item's status, title and notes; for calendar items this can include an event description imported from Google Calendar. No name, email address or user identifier accompanies them.
 
 Anthropic processes this data under its commercial API terms, which do not permit it to train models on API inputs or outputs. Briefs are generated automatically for every open item whose notes are long enough to need one; the "Show briefs" switch in Settings hides them on that device but does not stop generation.
+
+If you connect Claude to your account (Settings → Connect Claude), the items, routines, people and work contexts Claude reads through the connector, and your account's email address, become part of your Claude conversation and are handled by Anthropic under the terms of your Claude plan. Calendar items and calendar routines can include event titles, descriptions and locations imported from Google Calendar. We receive only the requests Claude makes on your behalf, including any text it writes into your account, never the rest of the conversation.
 
 ## Product research
 
@@ -50,7 +52,7 @@ We want to learn where the Service helps and where it gets in the way. To do tha
 
 ## Google API Services disclosure
 
-Done's use and transfer to any other app of information received from Google APIs will adhere to the [Google API Services User Data Policy](https://developers.google.com/terms/api-services-user-data-policy#additional_requirements_for_specific_api_scopes), including the Limited Use requirements. Calendar data is used only to provide user-facing features of the app: calendar sync, and — as described under "AI processing" — item briefs for calendar items. It is never used for advertising, never sold, never used to train machine-learning models, and only read by a person with your consent (for example, to answer a support request you raised), for security purposes such as investigating abuse, or when required by law. For product research it is used only in aggregated, anonymised form and is never read by a person.
+Done's use and transfer to any other app of information received from Google APIs will adhere to the [Google API Services User Data Policy](https://developers.google.com/terms/api-services-user-data-policy#additional_requirements_for_specific_api_scopes), including the Limited Use requirements. Calendar data is used only to provide user-facing features of the app: calendar sync; item briefs for calendar items, as described under "AI processing"; and, if you connect Claude to your account yourself, showing your calendar items and routines to Claude when it reads them on your behalf. It is never used for advertising, never sold, never used to train machine-learning models, and only read by a person with your consent (for example, to answer a support request you raised), for security purposes such as investigating abuse, or when required by law. For product research it is used only in aggregated, anonymised form and is never read by a person.
 
 Disconnecting the calendar in Settings deletes the tokens we hold and asks Google to revoke the grant, which ends our access. If that revocation does not go through (for example, Google was unreachable at that moment), you can also remove the grant from [your Google Account permissions](https://myaccount.google.com/permissions).
 

@@ -3,7 +3,7 @@ import type { ApiClient } from '../apiClient.js';
 import { _reassignToolsForTesting } from '../tools/reassign.js';
 
 /**
- * Focused coverage for the gtd_reassign tool. The tool's load-bearing behaviour is the
+ * Focused coverage for the done_reassign tool. The tool's load-bearing behaviour is the
  * `/v1/me`-then-`/v1/reassign` choreography that resolves the recipient userId server-side
  * so the model never has to know raw Better Auth UUIDs. Verified end-to-end: input schema,
  * call ordering, and header propagation.
@@ -30,6 +30,7 @@ function makeStubApi(meResponse: { userId: string; label: string }): { api: ApiC
             return { ok: true } as never;
         }),
         listAccounts: () => ['default', 'work'],
+        supportsMultipleAccounts: () => true,
         environment: () => 'local',
         apiBase: () => 'http://localhost:4000',
         webBase: () => null,
@@ -37,7 +38,7 @@ function makeStubApi(meResponse: { userId: string; label: string }): { api: ApiC
     return { api, calls };
 }
 
-describe('gtd_reassign tool', () => {
+describe('done_reassign tool', () => {
     it('resolves toUserId from the recipient token via /v1/me before posting /v1/reassign', async () => {
         const { api, calls } = makeStubApi({ userId: 'bob-uuid', label: 'work' });
         await _reassignToolsForTesting.reassign.handler({ entityType: 'item', entityId: 'i1', fromAccount: 'default', toAccount: 'work' }, api);

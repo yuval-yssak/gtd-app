@@ -23,27 +23,27 @@ describe('resolveWebBase', () => {
 
 describe('decorateWithUrls', () => {
     it('stamps an item deep link on a single-item response', () => {
-        const result = decorateWithUrls('gtd_capture', { _id: 'abc123', title: 'buy milk' }, STAGING);
+        const result = decorateWithUrls('done_capture', { _id: 'abc123', title: 'buy milk' }, STAGING);
         expect(result).toEqual({ _id: 'abc123', title: 'buy milk', url: `${STAGING}/item/abc123` });
     });
 
-    it('stamps an item deep link on the gtd_set_brief response (it returns the projected item)', () => {
-        const result = decorateWithUrls('gtd_set_brief', { _id: 'abc123', brief: { text: 'x' } }, STAGING);
+    it('stamps an item deep link on the done_set_brief response (it returns the projected item)', () => {
+        const result = decorateWithUrls('done_set_brief', { _id: 'abc123', brief: { text: 'x' } }, STAGING);
         expect(result).toMatchObject({ _id: 'abc123', url: `${STAGING}/item/abc123` });
     });
 
-    it('stamps an item deep link on the gtd_move_item response (the moved item plus its placement)', () => {
-        const result = decorateWithUrls('gtd_move_item', { _id: 'abc123', placement: { position: 1, total: 3 } }, STAGING);
+    it('stamps an item deep link on the done_move_item response (the moved item plus its placement)', () => {
+        const result = decorateWithUrls('done_move_item', { _id: 'abc123', placement: { position: 1, total: 3 } }, STAGING);
         expect(result).toMatchObject({ _id: 'abc123', placement: { position: 1, total: 3 }, url: `${STAGING}/item/abc123` });
     });
 
     it('stamps a routine deep link on a single-routine response', () => {
-        const result = decorateWithUrls('gtd_create_routine', { _id: 'r1', name: 'water plants' }, STAGING);
+        const result = decorateWithUrls('done_create_routine', { _id: 'r1', name: 'water plants' }, STAGING);
         expect(result).toEqual({ _id: 'r1', name: 'water plants', url: `${STAGING}/routine/r1` });
     });
 
     it('stamps a url onto every entity in a list envelope, preserving other keys', () => {
-        const result = decorateWithUrls('gtd_list_items', { items: [{ _id: 'a' }, { _id: 'b' }], nextCursor: 'c' }, STAGING);
+        const result = decorateWithUrls('done_list_items', { items: [{ _id: 'a' }, { _id: 'b' }], nextCursor: 'c' }, STAGING);
         expect(result).toEqual({
             items: [
                 { _id: 'a', url: `${STAGING}/item/a` },
@@ -54,12 +54,12 @@ describe('decorateWithUrls', () => {
     });
 
     it('uses the routines key for routine list responses', () => {
-        const result = decorateWithUrls('gtd_list_routines', { routines: [{ _id: 'r1' }] }, STAGING);
+        const result = decorateWithUrls('done_list_routines', { routines: [{ _id: 'r1' }] }, STAGING);
         expect(result).toEqual({ routines: [{ _id: 'r1', url: `${STAGING}/routine/r1` }] });
     });
 
     it('stamps a url on both head and tail of a split-routine { head, tail } response', () => {
-        const result = decorateWithUrls('gtd_split_routine', { head: { _id: 'h1' }, tail: { _id: 't1' } }, STAGING);
+        const result = decorateWithUrls('done_split_routine', { head: { _id: 'h1' }, tail: { _id: 't1' } }, STAGING);
         expect(result).toEqual({
             head: { _id: 'h1', url: `${STAGING}/routine/h1` },
             tail: { _id: 't1', url: `${STAGING}/routine/t1` },
@@ -67,56 +67,56 @@ describe('decorateWithUrls', () => {
     });
 
     it('stamps only the present leg of a partial split payload, never injecting an undefined sibling', () => {
-        const result = decorateWithUrls('gtd_split_routine', { head: { _id: 'h1' } }, STAGING);
+        const result = decorateWithUrls('done_split_routine', { head: { _id: 'h1' } }, STAGING);
         expect(result).toEqual({ head: { _id: 'h1', url: `${STAGING}/routine/h1` } });
         expect(Object.hasOwn(result as object, 'tail')).toBe(false);
     });
 
     it('passes a non-record split payload through unchanged', () => {
-        expect(decorateWithUrls('gtd_split_routine', null, STAGING)).toBeNull();
+        expect(decorateWithUrls('done_split_routine', null, STAGING)).toBeNull();
     });
 
     it('passes an empty list envelope through unchanged', () => {
-        expect(decorateWithUrls('gtd_list_items', { items: [] }, STAGING)).toEqual({ items: [] });
+        expect(decorateWithUrls('done_list_items', { items: [] }, STAGING)).toEqual({ items: [] });
     });
 
     it('leaves a list element without an _id untouched while still stamping its siblings', () => {
-        const result = decorateWithUrls('gtd_list_items', { items: [{ _id: 'a' }, { title: 'no id' }] }, STAGING);
+        const result = decorateWithUrls('done_list_items', { items: [{ _id: 'a' }, { title: 'no id' }] }, STAGING);
         expect(result).toEqual({ items: [{ _id: 'a', url: `${STAGING}/item/a` }, { title: 'no id' }] });
     });
 
     it('stamps a person deep link on single-person responses', () => {
-        const created = decorateWithUrls('gtd_create_person', { _id: 'p1', name: 'Alex' }, STAGING);
+        const created = decorateWithUrls('done_create_person', { _id: 'p1', name: 'Alex' }, STAGING);
         expect(created).toEqual({ _id: 'p1', name: 'Alex', url: `${STAGING}/person/p1` });
-        const updated = decorateWithUrls('gtd_update_person', { _id: 'p2', name: 'Sam' }, STAGING);
+        const updated = decorateWithUrls('done_update_person', { _id: 'p2', name: 'Sam' }, STAGING);
         expect(updated).toEqual({ _id: 'p2', name: 'Sam', url: `${STAGING}/person/p2` });
     });
 
     it('uses the people key for person list responses', () => {
-        const result = decorateWithUrls('gtd_list_people', { people: [{ _id: 'p1' }] }, STAGING);
+        const result = decorateWithUrls('done_list_people', { people: [{ _id: 'p1' }] }, STAGING);
         expect(result).toEqual({ people: [{ _id: 'p1', url: `${STAGING}/person/p1` }] });
     });
 
     it('stamps a work-context deep link on single-context responses', () => {
-        for (const toolName of ['gtd_create_work_context', 'gtd_get_work_context', 'gtd_update_work_context']) {
+        for (const toolName of ['done_create_work_context', 'done_get_work_context', 'done_update_work_context']) {
             const result = decorateWithUrls(toolName, { _id: 'w1', name: 'near a phone' }, STAGING);
             expect(result, toolName).toEqual({ _id: 'w1', name: 'near a phone', url: `${STAGING}/work-context/w1` });
         }
     });
 
     it('uses the workContexts key for work-context list responses', () => {
-        const result = decorateWithUrls('gtd_list_work_contexts', { workContexts: [{ _id: 'w1' }], nextCursor: 'c' }, STAGING);
+        const result = decorateWithUrls('done_list_work_contexts', { workContexts: [{ _id: 'w1' }], nextCursor: 'c' }, STAGING);
         expect(result).toEqual({ workContexts: [{ _id: 'w1', url: `${STAGING}/work-context/w1` }], nextCursor: 'c' });
     });
 
     it('leaves delete tools untouched (the row is gone)', () => {
-        expect(decorateWithUrls('gtd_delete_person', { ok: true }, STAGING)).toEqual({ ok: true });
-        expect(decorateWithUrls('gtd_delete_work_context', { ok: true }, STAGING)).toEqual({ ok: true });
+        expect(decorateWithUrls('done_delete_person', { ok: true }, STAGING)).toEqual({ ok: true });
+        expect(decorateWithUrls('done_delete_work_context', { ok: true }, STAGING)).toEqual({ ok: true });
     });
 
-    it('stamps a url onto each linkable per-op result of a gtd_batch response, keyed by its own entityType', () => {
+    it('stamps a url onto each linkable per-op result of a done_batch response, keyed by its own entityType', () => {
         const batchResult = decorateWithUrls(
-            'gtd_batch',
+            'done_batch',
             {
                 ok: true,
                 count: 4,
@@ -143,7 +143,7 @@ describe('decorateWithUrls', () => {
 
     it('stamps no url on a batch delete result (the row is gone) and passes legacy {ok, count} through', () => {
         const withDelete = decorateWithUrls(
-            'gtd_batch',
+            'done_batch',
             { ok: true, count: 1, results: [{ entityType: 'routine', entityId: 'r1', opType: 'delete', applyStatus: 'applied', updatedTs: null }] },
             STAGING,
         );
@@ -153,21 +153,21 @@ describe('decorateWithUrls', () => {
             results: [{ entityType: 'routine', entityId: 'r1', opType: 'delete', applyStatus: 'applied', updatedTs: null }],
         });
         // A server that has not yet shipped `results` (legacy shape) passes through untouched.
-        const legacy = decorateWithUrls('gtd_batch', { ok: true, count: 3 }, STAGING);
+        const legacy = decorateWithUrls('done_batch', { ok: true, count: 3 }, STAGING);
         expect(legacy).toEqual({ ok: true, count: 3 });
     });
 
     it('is a no-op when the web base is null (custom env with no override)', () => {
-        const result = decorateWithUrls('gtd_capture', { _id: 'abc123' }, null);
+        const result = decorateWithUrls('done_capture', { _id: 'abc123' }, null);
         expect(result).toEqual({ _id: 'abc123' });
     });
 
     it('passes payloads through unchanged when the shape does not match (envelope drift)', () => {
         // A single-item tool that somehow returned an error-ish object without an _id.
-        const noId = decorateWithUrls('gtd_get_item', { error: 'not found' }, STAGING);
+        const noId = decorateWithUrls('done_get_item', { error: 'not found' }, STAGING);
         expect(noId).toEqual({ error: 'not found' });
         // A list tool whose list key isn't an array.
-        const badList = decorateWithUrls('gtd_list_items', { items: null }, STAGING);
+        const badList = decorateWithUrls('done_list_items', { items: null }, STAGING);
         expect(badList).toEqual({ items: null });
     });
 });

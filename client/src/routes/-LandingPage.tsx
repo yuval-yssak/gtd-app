@@ -2,6 +2,7 @@ import { Link } from '@tanstack/react-router';
 import { ButtonLink, Card, Text } from '../designSystem';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { APP_NAME } from '../lib/appName';
+import { CLAUDE_GUIDE_NAV_LABEL, CLAUDE_GUIDE_PATH } from '../lib/claudeGuideContent';
 import {
     GOOGLE_CALENDAR_DATA_USES,
     GOOGLE_LIMITED_USE_STATEMENT,
@@ -86,6 +87,9 @@ export function LandingPage() {
                         </Link>
                         <Link to={LEGAL_DOCUMENTS.terms.path} data-testid="landingTermsLink">
                             {LEGAL_DOCUMENTS.terms.title}
+                        </Link>
+                        <Link to={CLAUDE_GUIDE_PATH} data-testid="landingClaudeGuideLink">
+                            {CLAUDE_GUIDE_NAV_LABEL}
                         </Link>
                         <a href={`mailto:${LEGAL_CONTACT_EMAIL}`} data-testid="landingContactLink">
                             Contact

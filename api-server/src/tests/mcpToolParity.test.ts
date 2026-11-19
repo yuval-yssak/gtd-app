@@ -12,19 +12,19 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { SERVER_INSTRUCTIONS as STDIO_SERVER_INSTRUCTIONS } from '../../../mcp-server/src/serverInstructions.js';
 // The stdio binary's source-of-truth copies (relative import across packages — test-only, never bundled).
-import { registerBatchTools } from '../../../mcp-server/src/tools/batch.js';
-import { registerItemTools } from '../../../mcp-server/src/tools/items.js';
-import { registerMeTools } from '../../../mcp-server/src/tools/me.js';
-import { registerPeopleTools } from '../../../mcp-server/src/tools/people.js';
-import { registerReassignTools } from '../../../mcp-server/src/tools/reassign.js';
-import { registerRoutineTools } from '../../../mcp-server/src/tools/routines.js';
-import { registerWorkContextTools } from '../../../mcp-server/src/tools/workContexts.js';
+import { registerAllTools as registerStdioTools } from '../../../mcp-server/src/tools/catalog.js';
 import type { ApiClient } from '../mcp/apiClient.js';
 import { SERVER_INSTRUCTIONS as REMOTE_SERVER_INSTRUCTIONS, registerAllTools } from '../mcp/registerTools.js';
 
+/** The stdio binary can hold a token per account; the hosted connector is one signed-in account. */
+type Surface = 'multiAccount' | 'singleAccount';
+const SURFACES: Surface[] = ['multiAccount', 'singleAccount'];
+
 interface RegisteredTool {
     name: string;
+    title: string;
     description: string;
+    annotations: unknown;
     /** Input schema serialized to JSON Schema — the wire shape an MCP client actually sees. */
     inputSchema: unknown;
 }
@@ -34,58 +34,50 @@ interface RegisteredTool {
  * The input schema is serialized to JSON Schema so a `.nullable()` / `.describe()` drift between
  * the two copies fails here instead of only surfacing to a model at runtime.
  */
-function captureTools(register: (server: McpServer, api: ApiClient) => void): RegisteredTool[] {
+function captureTools(register: (server: McpServer, api: ApiClient) => void, surface: Surface = 'multiAccount'): RegisteredTool[] {
     const tools: RegisteredTool[] = [];
     const stub = {
-        registerTool: (name: string, config: { description: string; inputSchema: z.ZodRawShape }) =>
-            tools.push({ name, description: config.description, inputSchema: z.toJSONSchema(z.object(config.inputSchema), { io: 'input' }) }),
+        registerTool: (name: string, config: { title: string; description: string; inputSchema: z.ZodRawShape; annotations: unknown }) =>
+            tools.push({
+                name,
+                title: config.title,
+                description: config.description,
+                annotations: config.annotations,
+                inputSchema: z.toJSONSchema(z.object(config.inputSchema), { io: 'input' }),
+            }),
     } as unknown as McpServer;
-    // A no-op ApiClient — registration never invokes handlers, so the methods are never called.
-    const api = {} as ApiClient;
+    // Registration never invokes handlers, so the surface is the only thing it asks the client.
+    const api = { supportsMultipleAccounts: () => surface === 'multiAccount' } as ApiClient;
     register(stub, api);
     return tools.sort((a, b) => a.name.localeCompare(b.name));
 }
 
-function captureToolNames(register: (server: McpServer, api: ApiClient) => void): string[] {
-    return captureTools(register).map((tool) => tool.name);
+function captureToolNames(register: (server: McpServer, api: ApiClient) => void, surface: Surface = 'multiAccount'): string[] {
+    return captureTools(register, surface).map((tool) => tool.name);
 }
 
 describe('MCP tool parity (api-server copy ↔ mcp-server source of truth)', () => {
-    it('exposes the identical set of tool names from both copies', () => {
-        const remote = captureToolNames(registerAllTools);
-        const stdio = captureToolNames((server, api) => {
-            registerItemTools(server, api);
-            registerRoutineTools(server, api);
-            registerPeopleTools(server, api);
-            registerWorkContextTools(server, api);
-            registerReassignTools(server, api);
-            registerBatchTools(server, api);
-            registerMeTools(server, api);
-        });
-        expect(remote).toEqual(stdio);
+    it.each(SURFACES)('exposes the identical set of tool names from both copies (%s)', (surface) => {
+        const remote = captureToolNames(registerAllTools, surface);
+        expect(remote).toEqual(captureToolNames(registerStdioTools, surface));
         // Sanity: the full GTD surface is present (guards against both copies being empty).
-        expect(remote).toContain('gtd_capture');
-        expect(remote).toContain('gtd_reassign');
+        expect(remote).toContain('done_capture');
         expect(remote.length).toBeGreaterThanOrEqual(28);
     });
 
-    it('exposes identical descriptions and input JSON Schemas from both copies', () => {
-        const remote = captureTools(registerAllTools);
-        const stdio = captureTools((server, api) => {
-            registerItemTools(server, api);
-            registerRoutineTools(server, api);
-            registerPeopleTools(server, api);
-            registerWorkContextTools(server, api);
-            registerReassignTools(server, api);
-            registerBatchTools(server, api);
-            registerMeTools(server, api);
-        });
-        expect(remote).toEqual(stdio);
+    it.each(SURFACES)('exposes identical titles, descriptions, annotations and input JSON Schemas from both copies (%s)', (surface) => {
+        expect(captureTools(registerAllTools, surface)).toEqual(captureTools(registerStdioTools, surface));
+    });
+
+    // A cross-account move needs a second token, which a hosted connection never has.
+    it('lists done_reassign only where several accounts can be configured', () => {
+        expect(captureToolNames(registerAllTools, 'multiAccount')).toContain('done_reassign');
+        expect(captureToolNames(registerAllTools, 'singleAccount')).not.toContain('done_reassign');
     });
 
     it('serves identical server instructions from both copies', () => {
         expect(REMOTE_SERVER_INSTRUCTIONS).toEqual(STDIO_SERVER_INSTRUCTIONS);
-        expect(REMOTE_SERVER_INSTRUCTIONS).toContain('gtd_set_brief');
+        expect(REMOTE_SERVER_INSTRUCTIONS).toContain('done_set_brief');
         expect(REMOTE_SERVER_INSTRUCTIONS).toContain('fieldGuidance');
     });
 
@@ -94,9 +86,9 @@ describe('MCP tool parity (api-server copy ↔ mcp-server source of truth)', () 
         expect(REMOTE_SERVER_INSTRUCTIONS).toContain('Do NOT set or generate briefs');
         expect(REMOTE_SERVER_INSTRUCTIONS).not.toContain('Prefer setting');
         const tools = new Map(captureTools(registerAllTools).map((tool) => [tool.name, tool.description]));
-        expect(tools.get('gtd_set_brief')).toMatch(/^Normally do NOT call this/);
-        expect(tools.get('gtd_generate_brief')).toContain('Normally unnecessary');
-        expect(tools.get('gtd_generate_brief')).not.toContain('Prefer gtd_set_brief');
+        expect(tools.get('done_set_brief')).toMatch(/^Normally do NOT call this/);
+        expect(tools.get('done_generate_brief')).toContain('Normally unnecessary');
+        expect(tools.get('done_generate_brief')).not.toContain('Prefer done_set_brief');
     });
 
     // Registration-level parity above cannot see response decoration (url stamping, field

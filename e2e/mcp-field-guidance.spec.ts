@@ -23,7 +23,7 @@ interface GuidedItem {
  * is still empty (and how to fill it), and that the block vanishes once the fields are set.
  */
 test.describe('MCP server field guidance (mcp-server)', () => {
-    test('nudges for energy/time/context, expectedBy and location after gtd_update_item', async ({ browser }) => {
+    test('nudges for energy/time/context, expectedBy and location after done_update_item', async ({ browser }) => {
         const email = `mcp-guidance-${uniqueStamp()}@example.com`;
         await resetServerForEmails([email]);
 
@@ -40,20 +40,20 @@ test.describe('MCP server field guidance (mcp-server)', () => {
                 expect(init.result?.instructions).toContain('fieldGuidance');
 
                 // 1. Capture lands in inbox — no metadata expected, no guidance.
-                const captured = (await callTool(mcp, 'gtd_capture', { title: 'Book dentist appointment' })) as GuidedItem;
+                const captured = (await callTool(mcp, 'done_capture', { title: 'Book dentist appointment' })) as GuidedItem;
                 expect(captured.status).toBe('inbox');
                 expect(captured.fieldGuidance).toBeUndefined();
 
                 // 2. Status-only clarify to nextAction → all three Do-phase fields flagged, next to the url.
-                const bare = (await callTool(mcp, 'gtd_update_item', { id: captured._id, status: 'nextAction' })) as GuidedItem;
+                const bare = (await callTool(mcp, 'done_update_item', { id: captured._id, status: 'nextAction' })) as GuidedItem;
                 expect(bare.status).toBe('nextAction');
                 expect(bare.url).toContain(`/item/${captured._id}`);
                 expect(bare.fieldGuidance?.missing).toEqual(['energy', 'time', 'workContextIds']);
-                expect(bare.fieldGuidance?.hint).toContain('gtd_list_work_contexts');
+                expect(bare.fieldGuidance?.hint).toContain('done_list_work_contexts');
 
                 // 3. Fill them in (with a real work context) → the block disappears.
-                const office = (await callTool(mcp, 'gtd_create_work_context', { name: 'Office' })) as { _id: string };
-                const complete = (await callTool(mcp, 'gtd_update_item', {
+                const office = (await callTool(mcp, 'done_create_work_context', { name: 'Office' })) as { _id: string };
+                const complete = (await callTool(mcp, 'done_update_item', {
                     id: captured._id,
                     energy: 'low',
                     time: 10,
@@ -62,9 +62,9 @@ test.describe('MCP server field guidance (mcp-server)', () => {
                 expect(complete.fieldGuidance).toBeUndefined();
 
                 // 4. Delegating it → expectedBy is the one thing a waitingFor needs.
-                const waiting = (await callTool(mcp, 'gtd_update_item', { id: captured._id, status: 'waitingFor' })) as GuidedItem;
+                const waiting = (await callTool(mcp, 'done_update_item', { id: captured._id, status: 'waitingFor' })) as GuidedItem;
                 expect(waiting.fieldGuidance?.missing).toEqual(['expectedBy']);
-                const dated = (await callTool(mcp, 'gtd_update_item', {
+                const dated = (await callTool(mcp, 'done_update_item', {
                     id: captured._id,
                     expectedBy: dayjs().add(7, 'day').format('YYYY-MM-DD'),
                 })) as GuidedItem;
@@ -74,7 +74,7 @@ test.describe('MCP server field guidance (mcp-server)', () => {
                 //    the location rule must NOT fire (there is no Google event to set a location on). The
                 //    linked case is covered by the api-server /mcp test, which seeds the link directly.
                 const start = dayjs().add(1, 'day').hour(10).minute(0).second(0).millisecond(0);
-                const scheduled = (await callTool(mcp, 'gtd_update_item', {
+                const scheduled = (await callTool(mcp, 'done_update_item', {
                     id: captured._id,
                     status: 'calendar',
                     expectedBy: null,

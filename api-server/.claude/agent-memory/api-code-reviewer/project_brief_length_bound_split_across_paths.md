@@ -7,7 +7,7 @@ metadata:
 
 `itemBriefs.text` has no single length bound. Enumerate by writer, not by field:
 
-1. **Authored** (`PUT /v1/items/:id/brief`, MCP `gtd_set_brief`, `/v1/operations/batch`-adjacent) —
+1. **Authored** (`PUT /v1/items/:id/brief`, MCP `done_set_brief`, `/v1/operations/batch`-adjacent) —
    `parseBriefBody` in `lib/itemBriefs.ts` enforces `BRIEF_MAX_CHARS = 500` as a **hard** 400.
 2. **Model** (`writeModelBrief` ← `parseBriefResponse` ← `fitBriefText`) — **unbounded** since
    2026-09-21. `BRIEF_TARGET_MAX_CHARS = 160` is a prompt-only SOFT target; `fitBriefText` is now
@@ -36,12 +36,12 @@ surfacing as an opaque "not JSON". It still degrades safely — nothing partial 
 
 **How to apply:** when a diff touches brief length, walk all three writers. Watch for **doc drift on
 surfaces that promise a length the code no longer enforces** — the offender found on this review was
-the MCP tool description for `gtd_generate_brief`, duplicated byte-identically in
+the MCP tool description for `done_generate_brief`, duplicated byte-identically in
 `api-server/src/mcp/tools/items.ts` AND `mcp-server/src/tools/items.ts`, asserting the model path is
 "one sentence, ≤ 160 chars". **FIXED 2026-09-21** in both copies. Keep the general lesson: the MCP
 parity test compares the two copies *to each other*, so it can never catch a claim that is wrong in
 both — parity passing is not evidence a description is true. Note the neighbouring "under 160 chars"
-in the same `gtd_generate_brief` string is the **skip threshold**
+in the same `done_generate_brief` string is the **skip threshold**
 (`BRIEF_SKIP_MIN_NOTES_CHARS`, a different 160) and is correct; don't "fix" it. Related:
 [[project_mcp_tool_parity_test_names_only]], [[project_brief_declined_state_split]],
 [[project_brief_prompt_cache_control_inert_on_haiku]].

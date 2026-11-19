@@ -4,13 +4,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { createApiClient } from './apiClient.js';
 import { loadConfig } from './config.js';
 import { SERVER_INSTRUCTIONS } from './serverInstructions.js';
-import { registerBatchTools } from './tools/batch.js';
-import { registerItemTools } from './tools/items.js';
-import { registerMeTools } from './tools/me.js';
-import { registerPeopleTools } from './tools/people.js';
-import { registerReassignTools } from './tools/reassign.js';
-import { registerRoutineTools } from './tools/routines.js';
-import { registerWorkContextTools } from './tools/workContexts.js';
+import { registerAllTools } from './tools/catalog.js';
 
 /**
  * Stdio entrypoint. Reads GTD_API_BASE / GTD_API_TOKEN from env (set by the MCP client config),
@@ -24,19 +18,14 @@ async function main(): Promise<void> {
 
     const server = new McpServer(
         {
-            name: 'gtd-mcp',
+            name: 'done-mcp',
+            title: 'Done',
             version: '0.1.0',
         },
         { instructions: SERVER_INSTRUCTIONS },
     );
 
-    registerItemTools(server, api);
-    registerRoutineTools(server, api);
-    registerPeopleTools(server, api);
-    registerWorkContextTools(server, api);
-    registerReassignTools(server, api);
-    registerBatchTools(server, api);
-    registerMeTools(server, api);
+    registerAllTools(server, api);
 
     const transport = new StdioServerTransport();
     await server.connect(transport);
@@ -44,6 +33,6 @@ async function main(): Promise<void> {
 
 main().catch((err) => {
     // Fatal startup error — log to stderr (stdout is reserved for the MCP transport) and exit.
-    process.stderr.write(`gtd-mcp fatal: ${err instanceof Error ? err.message : String(err)}\n`);
+    process.stderr.write(`done-mcp fatal: ${err instanceof Error ? err.message : String(err)}\n`);
     process.exit(1);
 });

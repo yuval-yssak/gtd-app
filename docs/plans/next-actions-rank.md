@@ -160,7 +160,7 @@ dated item.
 > `expectedBy = ignoreBefore` instead, so it surfaces as "Today" on its wake day rather than
 > already overdue. Focused items that already have a date keep it.
 
-**D2. Public API `focus` on PATCH / MCP `gtd_update_item`.** `PUBLIC_API.md` says breaking changes
+**D2. Public API `focus` on PATCH / MCP `done_update_item`.** `PUBLIC_API.md` says breaking changes
 ship as `/v2`.
 - (a) Accept and silently drop; `rank` read-only in responses. (b) Reject with `forbidden_field`.
 
@@ -403,7 +403,7 @@ covers the rank-less window).
 
 ## Out of scope (follow-ups, capture as GTD items)
 
-- `POST /v1/items/:id/move` / MCP `gtd_move_item` so agents can prioritise with neighbours instead
+- `POST /v1/items/:id/move` / MCP `done_move_item` so agents can prioritise with neighbours instead
   of raw keys.
 - Binary-insertion placement gesture ("Which first?").
 - Separate "when" vs "deadline" dates.

@@ -15,7 +15,7 @@ Round 3 (2026-09-25): after reconnect the `/webhooks/renew` cron (`renewWebhookA
 
 Round 4 (2026-09-25): "trash paths `$unset` calendarInstanceEventId" is only true for SERVER-side trash (routine delete, regen, inbound cancel, demote). Client `clarifyToTrash` spreads the item, so a user-trashed occurrence pushed via /sync/push keeps its instance id (isDemotableDeadTwin explicitly handles trash twins). Flag blanket "trash frees the instance id" wording.
 
-Round 5 (2026-09-25): the "server-side vs in-app" split is ALSO wrong — `POST /v1/items/:id/trash` (MCP `gtd_trash_item`) is server-side but spreads `existing`, keeping the instance id. Correct axis is user-initiated trash (any surface) keeps it vs sync-engine/system trash (routine delete, regen, inbound cancel, dead-twin demote) frees it.
+Round 5 (2026-09-25): the "server-side vs in-app" split is ALSO wrong — `POST /v1/items/:id/trash` (MCP `done_trash_item`) is server-side but spreads `existing`, keeping the instance id. Correct axis is user-initiated trash (any surface) keeps it vs sync-engine/system trash (routine delete, regen, inbound cancel, dead-twin demote) frees it.
 
 **Why:** a 2026-09-25 docs change set described "Sync now" as user-pressed-only, Reconnect as a panel affordance, and dismiss as marker-clearing — all wrong against code.
 

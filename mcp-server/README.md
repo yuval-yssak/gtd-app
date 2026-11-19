@@ -9,7 +9,7 @@ There are two ways to connect. **Most people want the first one.**
 | Install | Nothing | Clone this repo, Node.js 22+, `npm install` |
 | Credentials | Sign in with Google/GitHub in the browser | A personal API token pasted into your client config |
 | Works in | claude.ai (web + mobile), Claude Desktop, Claude Code | Claude Desktop, Claude Code (same machine) |
-| Accounts | One per connector; add a second connector for a second account | Several in one server (`GTD_API_TOKEN_<LABEL>`), incl. moving items between them (`gtd_reassign`) |
+| Accounts | One per connector; add a second connector for a second account | Several in one server (`GTD_API_TOKEN_<LABEL>`), incl. moving items between them (`done_reassign`) |
 
 Both expose the same tools and talk to the same `/v1` API, so every change reaches your other devices on their next sync.
 
@@ -43,14 +43,14 @@ claude mcp add --scope user --transport http done https://api.getting-things-don
 
 1. A browser window opens. If this browser has no Done session, a **Sign in to Done** page asks you to sign in with Google or GitHub. If it already has one, this step is skipped.
 2. The **Authorize access** page lists what Claude may do and every Done account signed in on this browser. Click **Allow** (or **Allow for <email>** when there are several) for the account Claude should use. If yours isn't listed, choose **Use a different account with Google/GitHub**. The provider's account chooser opens, and the page comes back with that account added.
-3. Back in Claude, ask *"What's in my Done inbox?"* to confirm. `gtd_me` reports the connected email and environment.
+3. Back in Claude, ask *"What's in my Done inbox?"* to confirm. `done_me` reports the connected email and environment.
 
 Claude refreshes its access on its own: an access token lasts an hour and the 30-day refresh token rotates on use, so you only sign in again after a month without use. To disconnect, remove the connector in Claude. That only makes Claude forget the tokens: no server-side revoke exists for OAuth grants yet, so the refresh token stays valid until it expires.
 
 Limits of the hosted connector:
 
 - **One account per connector.** For a second account (e.g. work), add a second connector (`done-work`) and click **Allow** for that account on the Authorize page. Each Allow button is bound to its account, so the grant goes to the account you click.
-- **No cross-account moves.** `gtd_reassign` needs a token for each account, so it fails with `multi_account_unsupported`. Use the local server for that.
+- **No cross-account moves.** `done_reassign` needs a token for each account, so the hosted connector does not list it (nor `done_list_accounts`), and its tools take no `account` argument. Use the local server, or move the item in the app.
 - The OAuth server grants items, routines, people and contexts read/write. It does not grant `reassign` or `webhooks.manage`.
 
 Server code: `api-server/src/routes/mcp.ts` (resource endpoint), `api-server/src/routes/mcpOAuth.ts` + `api-server/src/lib/mcpOAuth.ts` (authorization server). The tool modules are copied into `api-server/src/mcp/`, and a parity test keeps them in step with `mcp-server/src/tools/`. Design notes: [`docs/REMOTE_MCP_PLAN.md`](docs/REMOTE_MCP_PLAN.md).
@@ -122,11 +122,11 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (Claude
 }
 ```
 
-Ask Claude *"Which Done account am I connected to?"* to verify (`gtd_me`).
+Ask Claude *"Which Done account am I connected to?"* to verify (`done_me`).
 
 #### Web-app deep links (`url` field)
 
-Item, routine, person and work-context tool responses include a `url`, a direct web-app link (e.g. `https://getting-things-done.app/item/<id>`), so the client can show a clickable link to what it just created or edited. `gtd_batch` returns one per item/routine/person/workContext op in its `results` (deletes get none — the row is gone). The web origin is derived from `GTD_API_BASE` (`local` → `http://localhost:4173`, `staging`/`production` → their web hosts). For a self-hosted or preview deployment (`custom` environment), set `GTD_WEB_BASE` to your web-app origin; without it, `custom` deployments omit `url`.
+Item, routine, person and work-context tool responses include a `url`, a direct web-app link (e.g. `https://getting-things-done.app/item/<id>`), so the client can show a clickable link to what it just created or edited. `done_batch` returns one per item/routine/person/workContext op in its `results` (deletes get none — the row is gone). The web origin is derived from `GTD_API_BASE` (`local` → `http://localhost:4173`, `staging`/`production` → their web hosts). For a self-hosted or preview deployment (`custom` environment), set `GTD_WEB_BASE` to your web-app origin; without it, `custom` deployments omit `url`.
 
 ## Multi-account setup (local server only)
 
@@ -154,10 +154,10 @@ A single Claude session can drive multiple GTD accounts (e.g. personal + work) w
 
 ### Knowing which accounts and environment are connected
 
-`gtd_list_accounts({})` enumerates every account configured in this MCP server (one row per `GTD_API_TOKEN` / `GTD_API_TOKEN_<LABEL>` env var) and echoes the server-wide environment. `gtd_me({ account })` answers the same question for a single account. Both responses include `environment` (`local` / `staging` / `production` / `custom`, derived from `GTD_API_BASE`) and `apiBase` so the model can disambiguate accounts when several `mcpServers` blocks (e.g. `gtd-local`, `gtd-staging`, `gtd-production`) are wired into the same Claude session.
+`done_list_accounts({})` enumerates every account configured in this MCP server (one row per `GTD_API_TOKEN` / `GTD_API_TOKEN_<LABEL>` env var) and echoes the server-wide environment. `done_me({ account })` answers the same question for a single account. Both responses include `environment` (`local` / `staging` / `production` / `custom`, derived from `GTD_API_BASE`) and `apiBase` so the model can disambiguate accounts when several `mcpServers` blocks (e.g. `gtd-local`, `gtd-staging`, `gtd-production`) are wired into the same Claude session.
 
 ```jsonc
-// gtd_list_accounts({}) →
+// done_list_accounts({}) →
 {
     "environment": "production",
     "apiBase": "https://api.getting-things-done.app",
@@ -178,10 +178,10 @@ Mint two tokens in the GTD Settings UI on each account: a `reassign`-scoped toke
 Move task "Buy milk" from my personal GTD into my work account.
 ```
 
-The model resolves the item id with `gtd_list_items({ q: "Buy milk", account: "default" })`, then calls:
+The model resolves the item id with `done_list_items({ q: "Buy milk", account: "default" })`, then calls:
 
 ```jsonc
-gtd_reassign({
+done_reassign({
     entityType: "item",
     entityId: "<resolved id>",
     fromAccount: "default",
@@ -193,39 +193,49 @@ The MCP looks up the work userId via `GET /v1/me` on the recipient token, attach
 
 ## Tools
 
-Every tool except `gtd_reassign` accepts an optional `account` arg (default `"default"`). `gtd_reassign` accepts `fromAccount` (defaults to `"default"`) and `toAccount` (required). On the hosted connector only `"default"` (the signed-in account) is valid.
+Every tool except `done_reassign` accepts an optional `account` arg (default `"default"`). `done_reassign` accepts `fromAccount` (defaults to `"default"`) and `toAccount` (required). The hosted connector is one signed-in account, so there the `account` argument, `done_reassign` and `done_list_accounts` are not listed at all (`ApiClient.supportsMultipleAccounts()` decides).
+
+Every tool carries a `title` and all four MCP safety annotations, which a client uses to decide when to ask the user first:
+
+| Class (`tools/types.ts`) | `readOnlyHint` | `destructiveHint` | Tools |
+|---|---|---|---|
+| `READS` | true | false | every `done_list_*` and `done_get_*`, `done_me`, `done_list_accounts` |
+| `ADDS` | false | false | `done_capture`, `done_create_routine`, `done_create_person`, `done_create_work_context` |
+| `CHANGES` / `CHANGES_IDEMPOTENTLY` | false | true | every other tool: it edits or removes existing data |
+
+`openWorldHint` is false on all of them: a tool only ever touches the signed-in user's own account. A new tool must pick one of these classes; `toolCatalog.test.ts` pins the whole table.
 
 | Tool | Maps to | Scope | Account args |
 |---|---|---|---|
-| `gtd_capture` | `POST /v1/items` | `items.capture` | `account?` |
-| `gtd_list_items` | `GET /v1/items` | `items.read` | `sort?` — `priority` (default: the app's order) or `updated`; `account?` |
-| `gtd_get_item` | `GET /v1/items/:id` | `items.read` | `account?` |
-| `gtd_update_item` | `PATCH /v1/items/:id` | `items.write` | `account?` |
-| `gtd_complete_item` | `POST /v1/items/:id/complete` | `items.write` | `account?` |
-| `gtd_trash_item` | `POST /v1/items/:id/trash` | `items.write` | `account?` |
-| `gtd_move_item` | `POST /v1/items/:id/move` | `items.write` | `position?` (`top`/`bottom`) \| `before?` \| `after?` (exactly one), `account?` |
-| `gtd_set_brief` | `PUT /v1/items/:id/brief` | `items.write` | `account?` |
-| `gtd_generate_brief` | `POST /v1/items/:id/brief/generate` | `items.write` | `account?` |
-| `gtd_list_routines` / `gtd_get_routine` | `GET /v1/routines[/:id]` | `routines.read` | `account?` |
-| `gtd_create_routine` / `gtd_update_routine` / `gtd_delete_routine` | routines CRUD | `routines.write` | `account?` |
-| `gtd_pause_routine` / `gtd_resume_routine` / `gtd_split_routine` | composite gestures | `routines.write` | `account?` |
-| `gtd_list_people` / `gtd_get_person` / `gtd_create_person` / `gtd_update_person` / `gtd_delete_person` | people CRUD | `people.{read,write}` | `account?` |
-| `gtd_list_work_contexts` / `gtd_get_work_context` / `gtd_create_work_context` / `gtd_update_work_context` / `gtd_delete_work_context` | work-contexts CRUD | `contexts.{read,write}` | `account?` |
-| `gtd_reassign` | `POST /v1/reassign` | caller: `reassign`, recipient: `reassign.accept` | `fromAccount?` (default `"default"`), `toAccount` (required) |
-| `gtd_batch` | `POST /v1/operations/batch` | union of needed scopes | `account?` |
-| `gtd_me` / `gtd_list_accounts` | `GET /v1/me` | any | `account?` / none |
+| `done_capture` | `POST /v1/items` | `items.capture` | `account?` |
+| `done_list_items` | `GET /v1/items` | `items.read` | `sort?` — `priority` (default: the app's order) or `updated`; `account?` |
+| `done_get_item` | `GET /v1/items/:id` | `items.read` | `account?` |
+| `done_update_item` | `PATCH /v1/items/:id` | `items.write` | `account?` |
+| `done_complete_item` | `POST /v1/items/:id/complete` | `items.write` | `account?` |
+| `done_trash_item` | `POST /v1/items/:id/trash` | `items.write` | `account?` |
+| `done_move_item` | `POST /v1/items/:id/move` | `items.write` | `position?` (`top`/`bottom`) \| `before?` \| `after?` (exactly one), `account?` |
+| `done_set_brief` | `PUT /v1/items/:id/brief` | `items.write` | `account?` |
+| `done_generate_brief` | `POST /v1/items/:id/brief/generate` | `items.write` | `account?` |
+| `done_list_routines` / `done_get_routine` | `GET /v1/routines[/:id]` | `routines.read` | `account?` |
+| `done_create_routine` / `done_update_routine` / `done_delete_routine` | routines CRUD | `routines.write` | `account?` |
+| `done_pause_routine` / `done_resume_routine` / `done_split_routine` | composite gestures | `routines.write` | `account?` |
+| `done_list_people` / `done_get_person` / `done_create_person` / `done_update_person` / `done_delete_person` | people CRUD | `people.{read,write}` | `account?` |
+| `done_list_work_contexts` / `done_get_work_context` / `done_create_work_context` / `done_update_work_context` / `done_delete_work_context` | work-contexts CRUD | `contexts.{read,write}` | `account?` |
+| `done_reassign` | `POST /v1/reassign` | caller: `reassign`, recipient: `reassign.accept` | `fromAccount?` (default `"default"`), `toAccount` (required) |
+| `done_batch` | `POST /v1/operations/batch` | union of needed scopes | `account?` |
+| `done_me` / `done_list_accounts` | `GET /v1/me` | any | `account?` / none |
 
-### Why no `gtd_delete_item`?
+### Why no `done_delete_item`?
 
-Items are never hard-deleted through the public surface. Use `gtd_trash_item`, a recoverable soft-delete: the item stays in the in-app Trash and can be restored. `gtd_update_item` rejects `status: "trash"`, and `gtd_batch` rejects `{entityType:'item', opType:'delete'}` with 400. Batch `delete` stays valid for routines, people and work contexts.
+Items are never hard-deleted through the public surface. Use `done_trash_item`, a recoverable soft-delete: the item stays in the in-app Trash and can be restored. `done_update_item` rejects `status: "trash"`, and `done_batch` rejects `{entityType:'item', opType:'delete'}` with 400. Batch `delete` stays valid for routines, people and work contexts.
 
 ## Status×field matrix
 
-`gtd_update_item` enforces this server-side. Caller-supplied fields incompatible with the target status return `400 status_field_violation` with `extra: { status, field }` so the model can self-correct.
+`done_update_item` enforces this server-side. Caller-supplied fields incompatible with the target status return `400 status_field_violation` with `extra: { status, field }` so the model can self-correct.
 
-`calendarEventId` / `calendarIntegrationId` are never the way to attach an item to an existing Google Calendar event — the sync has already created and linked that item. Find it with `gtd_list_items { calendarEventId }` and update it; a second link is refused with `409 calendar_event_linked` and `extra: { ownerType, ownerId }` naming the row to edit.
+`calendarEventId` / `calendarIntegrationId` are never the way to attach an item to an existing Google Calendar event — the sync has already created and linked that item. Find it with `done_list_items { calendarEventId }` and update it; a second link is refused with `409 calendar_event_linked` and `extra: { ownerType, ownerId }` naming the row to edit.
 
-To clear an optional field that is already set, pass `null` for it — e.g. `gtd_update_item { id, waitingForPersonId: null }` unsets the person while the item stays `waitingFor`. Omitting a field leaves it unchanged; an empty string is rejected. Not clearable (`400 not_clearable`): `title`, `status`, and the Google Calendar linkage ids (`calendarEventId` / `calendarIntegrationId` / `calendarSyncConfigId`) — detach an item from its calendar event by changing its status instead.
+To clear an optional field that is already set, pass `null` for it — e.g. `done_update_item { id, waitingForPersonId: null }` unsets the person while the item stays `waitingFor`. Omitting a field leaves it unchanged; an empty string is rejected. Not clearable (`400 not_clearable`): `title`, `status`, and the Google Calendar linkage ids (`calendarEventId` / `calendarIntegrationId` / `calendarSyncConfigId`) — detach an item from its calendar event by changing its status instead.
 
 | Status | Allowed status-specific fields |
 |---|---|
@@ -240,8 +250,8 @@ To clear an optional field that is already set, pass `null` for it — e.g. `gtd
 
 An agent clarifying an item tends to set `status` and stop, which leaves the GTD metadata the method depends on empty. The MCP nudges it in two places, with no per-user memory or prompt needed:
 
-- **Before the write** — the server `instructions` and the `gtd_update_item` description (plus the `energy` / `time` / `workContextIds` / `expectedBy` property descriptions, and the `gtd_create_routine` template guidance) tell the model to send the fields together with the status.
-- **After the write** — a `gtd_update_item` response whose item still lacks them carries a `fieldGuidance` block next to the entity:
+- **Before the write** — the server `instructions` and the `done_update_item` description (plus the `energy` / `time` / `workContextIds` / `expectedBy` property descriptions, and the `done_create_routine` template guidance) tell the model to send the fields together with the status.
+- **After the write** — a `done_update_item` response whose item still lacks them carries a `fieldGuidance` block next to the entity:
 
 ```jsonc
 {
@@ -259,7 +269,7 @@ An agent clarifying an item tends to set `status` and stop, which leaves the GTD
 | `waitingFor` | `expectedBy` | The date the delegated outcome is expected. |
 | `calendar` | `location` | Checked only when the item carries a `calendarEventId`. The field is Google-Calendar-owned and read-only on the item (`PATCH` rejects it), so the hint tells the agent to set the venue on that Google event; the sync mirrors it back. An unlinked calendar item (no Google Calendar connected) is never flagged — there is nowhere to set it. |
 
-The block is advisory — the write has already succeeded — and is omitted entirely once every checked field is set, so a complete item never carries it. Only `gtd_update_item` is decorated: reads (`gtd_get_item`, `gtd_list_items`) never carry it, so a lookup cannot tempt the model into edits the user did not ask for. Rules live in `src/tools/fieldGuidance.ts`.
+The block is advisory — the write has already succeeded — and is omitted entirely once every checked field is set, so a complete item never carries it. Only `done_update_item` is decorated: reads (`done_get_item`, `done_list_items`) never carry it, so a lookup cannot tempt the model into edits the user did not ask for. Rules live in `src/tools/fieldGuidance.ts`.
 
 ## Development
 

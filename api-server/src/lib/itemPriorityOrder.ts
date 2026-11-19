@@ -10,7 +10,7 @@ dayjs.extend(utc);
 dayjs.extend(timezone);
 
 /**
- * "Priority order" for `GET /v1/items?sort=priority` (the MCP `gtd_list_items` default): items in
+ * "Priority order" for `GET /v1/items?sort=priority` (the MCP `done_list_items` default): items in
  * the app's navigation order — Inbox, Next Actions, Calendar, Waiting For, Tickler, Someday / Maybe
  * (`client/src/components/AppNav.tsx`), then Done and Trash — each list in its own page's order:
  *  - Inbox, Someday / Maybe: the manual rank (`compareByRank`, what `POST /v1/items/:id/move` writes);

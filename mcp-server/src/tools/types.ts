@@ -15,6 +15,7 @@ export const idSchema = zod.string().refine((s) => s.trim().length > 0, { messag
 /**
  * Optional `account` selector that every tool accepts. Defaults to `'default'` server-side
  * (in `apiClient.request`); a non-default value picks a non-default `GTD_API_TOKEN_<LABEL>`.
+ * Dropped from the listed schema on a single-account surface — see `registerOne`.
  */
 export const accountSchema = zod
     .string()
@@ -58,10 +59,39 @@ export function requestOptsFromArgs(args: { account?: string | undefined; recipi
  */
 export interface ToolDef<Shape extends ZodRawShape> {
     name: string;
+    /** Human-readable name a client shows in its tool list and permission prompts. */
+    title: string;
     description: string;
+    /** Sentence appended to `description` only where several accounts are configured. */
+    multiAccountNote?: string;
+    /** Needs a second account's token, so a single-account surface does not list it at all. */
+    requiresMultipleAccounts?: true;
+    safety: ToolSafety;
     inputSchema: Shape;
     handler: (args: ParsedArgs<Shape>, api: ApiClient) => Promise<unknown>;
 }
+
+/**
+ * The MCP tool annotations a client uses to decide whether a call needs the user's confirmation.
+ * All four are always sent: the spec's defaults (destructive, open-world) are the alarming ones, so
+ * an omitted hint would overstate what a tool does.
+ */
+export interface ToolSafety {
+    readOnlyHint: boolean;
+    destructiveHint: boolean;
+    idempotentHint: boolean;
+    /** Always false — a tool acts only on the signed-in user's own data and the calendars they linked, never on the open web. */
+    openWorldHint: false;
+}
+
+/** Reads the user's data and changes nothing. */
+export const READS: ToolSafety = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+/** Adds a new row and touches no existing one; a repeat adds another. */
+export const ADDS: ToolSafety = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
+/** Changes or removes existing data, and a repeat can change it again. */
+export const CHANGES: ToolSafety = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false };
+/** Changes or removes existing data; repeating the same call leaves the same state. */
+export const CHANGES_IDEMPOTENTLY: ToolSafety = { ...CHANGES, idempotentHint: true };
 
 // Mirror Zod's `z.object(...)` inference: keys whose schema produces `| undefined` become
 // optional keys (`?:`) rather than required keys with `undefined` values. Without this, tests
@@ -96,32 +126,47 @@ export function defineTool<Shape extends ZodRawShape>(def: ToolDef<Shape>): Tool
  * generics, which TypeScript flags as a contravariance error on `handler`.)
  */
 export function registerOne<Shape extends ZodRawShape>(server: McpServer, tool: ToolDef<Shape>, api: ApiClient): void {
+    // A tool that cannot succeed must not be listed: the model would offer it and every call would fail.
+    if (tool.requiresMultipleAccounts && !api.supportsMultipleAccounts()) {
+        return;
+    }
     // The SDK's BaseToolCallback type uses an indexed signature `[k: string]: unknown` because
     // it doesn't see the inputSchema's specific shape. We cast our typed handler accordingly —
     // the runtime contract is identical: the SDK validates args against inputSchema before
     // invoking, so by the time `args` lands here it conforms to ParsedArgs<Shape>.
-    server.registerTool(
-        tool.name,
-        {
-            description: tool.description,
-            inputSchema: tool.inputSchema,
-        },
-        (async (args: unknown) => {
-            try {
-                const result = await tool.handler(args as ParsedArgs<Shape>, api);
-                // Stamp a browsable deep link onto item/routine responses so the model surfaces a
-                // clickable URL without depending on any user's local memory (no-op for other tools).
-                // Then flag still-empty GTD metadata on a written item (energy/time/context on a next
-                // action, expectedBy on waiting-for, location on calendar) so the model fills it in.
-                const decorated = decorateWithFieldGuidance(tool.name, decorateWithUrls(tool.name, result, api.webBase()));
-                return {
-                    content: [{ type: 'text', text: JSON.stringify(decorated, null, 2) }],
-                };
-            } catch (err) {
-                return formatError(err);
-            }
-        }) as never,
-    );
+    server.registerTool(tool.name, listedConfig(tool, api), (async (args: unknown) => {
+        try {
+            const result = await tool.handler(args as ParsedArgs<Shape>, api);
+            // Stamp a browsable deep link onto item/routine responses so the model surfaces a
+            // clickable URL without depending on any user's local memory (no-op for other tools).
+            // Then flag still-empty GTD metadata on a written item (energy/time/context on a next
+            // action, expectedBy on waiting-for, location on calendar) so the model fills it in.
+            const decorated = decorateWithFieldGuidance(tool.name, decorateWithUrls(tool.name, result, api.webBase()));
+            // Compact on purpose: the reader is a model, and indentation is a third of a list response's tokens.
+            return { content: [{ type: 'text', text: JSON.stringify(decorated) }] };
+        } catch (err) {
+            return formatError(err);
+        }
+    }) as never);
+}
+
+/**
+ * What `tools/list` shows for a tool. Where the connection is one account (the hosted connector) the
+ * `account` argument and the note explaining it are left out — it could only ever be "default".
+ */
+function listedConfig<Shape extends ZodRawShape>(tool: ToolDef<Shape>, api: ApiClient) {
+    const hasAccounts = api.supportsMultipleAccounts();
+    return {
+        title: tool.title,
+        description: hasAccounts && tool.multiAccountNote ? `${tool.description} ${tool.multiAccountNote}` : tool.description,
+        inputSchema: hasAccounts ? tool.inputSchema : withoutAccountArg(tool.inputSchema),
+        annotations: tool.safety,
+    };
+}
+
+function withoutAccountArg(inputSchema: ZodRawShape): ZodRawShape {
+    const { account: _account, ...otherArgs } = inputSchema;
+    return otherArgs;
 }
 
 /**

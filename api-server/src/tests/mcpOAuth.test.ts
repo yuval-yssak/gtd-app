@@ -10,7 +10,7 @@ import { hashToken } from '../auth/apiTokens.js';
 import { __resetDefaultStoreForTests } from '../auth/rateLimitMiddleware.js';
 import apiTokensDAO from '../dataAccess/apiTokensDAO.js';
 import { APP_NAME } from '../lib/appName.js';
-import { pkceS256Challenge, verifyPkceS256 } from '../lib/mcpOAuth.js';
+import { pkceS256Challenge, redirectUriIsRegistered, verifyPkceS256 } from '../lib/mcpOAuth.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { mcpRoutes } from '../routes/mcp.js';
 import { authorizationServerMetadata, mcpOAuthRoutes, protectedResourceMetadata, withAccountChooser } from '../routes/mcpOAuth.js';
@@ -70,11 +70,11 @@ async function registerClient(redirectUris: string[] = [REDIRECT_URI]): Promise<
     return body.client_id;
 }
 
-function authorizeQuery(clientId: string, { scope = 'items.read items.write', state = 'xyz', challenge = CHALLENGE } = {}) {
+function authorizeQuery(clientId: string, { scope = 'items.read items.write', state = 'xyz', challenge = CHALLENGE, redirectUri = REDIRECT_URI } = {}) {
     return new URLSearchParams({
         response_type: 'code',
         client_id: clientId,
-        redirect_uri: REDIRECT_URI,
+        redirect_uri: redirectUri,
         code_challenge: challenge,
         code_challenge_method: 'S256',
         scope,
@@ -136,7 +136,7 @@ async function authorizeAndConsent(clientId: string, sessionCookie: string, chal
     return issuedCode(await postDecision(allowFormFields(html), cookieHeader), state);
 }
 
-async function exchangeCode(clientId: string, code: string, verifier: string) {
+async function exchangeCode(clientId: string, code: string, verifier: string, redirectUri = REDIRECT_URI) {
     return app.fetch(
         new Request(`${ORIGIN}/mcp-oauth/token`, {
             method: 'POST',
@@ -145,7 +145,7 @@ async function exchangeCode(clientId: string, code: string, verifier: string) {
                 grant_type: 'authorization_code',
                 code,
                 client_id: clientId,
-                redirect_uri: REDIRECT_URI,
+                redirect_uri: redirectUri,
                 code_verifier: verifier,
             }).toString(),
         }),
@@ -558,6 +558,67 @@ describe('open-redirect protection', () => {
         expect(res.status).toBe(400);
         expect(res.headers.get('location')).toBeNull();
         expect(await res.text()).toContain('redirect_uri is not registered');
+    });
+
+    // A native client (Claude Code) listens on whichever port is free at sign-in time, so RFC 8252 §7.3
+    // has the server ignore the port of a loopback redirect — and only the port.
+    describe('loopback redirect matching', () => {
+        const clientWith = (...redirectUris: string[]) => ({ redirectUris });
+
+        it.each([
+            ['http://localhost:3118/callback', 'http://localhost:51234/callback'],
+            ['http://localhost/callback', 'http://localhost:51234/callback'],
+            ['http://127.0.0.1:3118/callback', 'http://127.0.0.1/callback'],
+        ])('accepts %s registered, %s requested', (registered, requested) => {
+            expect(redirectUriIsRegistered(clientWith(registered), requested)).toBe(true);
+        });
+
+        it.each([
+            ['another path', 'http://localhost:3118/callback', 'http://localhost:3118/other'],
+            ['another loopback host', 'http://localhost:3118/callback', 'http://127.0.0.1:3118/callback'],
+            ['a query the client never registered', 'http://localhost:3118/callback', 'http://localhost:3118/callback?next=x'],
+            ['https on loopback', 'http://localhost:3118/callback', 'https://localhost:3118/callback'],
+            ['a public host on another port', 'https://claude.ai/api/mcp/auth_callback', 'https://claude.ai:8443/api/mcp/auth_callback'],
+            ['a host that merely starts with localhost', 'http://localhost:3118/callback', 'http://localhost.evil.example:3118/callback'],
+            ['something that is not a URL', 'http://localhost:3118/callback', 'not a url'],
+        ])('rejects %s', (_case, registered, requested) => {
+            expect(redirectUriIsRegistered(clientWith(registered), requested)).toBe(false);
+        });
+
+        it('still matches a public redirect only verbatim', () => {
+            const client = clientWith('https://claude.ai/api/mcp/auth_callback');
+            expect(redirectUriIsRegistered(client, 'https://claude.ai/api/mcp/auth_callback')).toBe(true);
+            expect(redirectUriIsRegistered(client, 'https://claude.ai/api/mcp/auth_callback/')).toBe(false);
+        });
+    });
+
+    it('sends the code to the port the native client asked for, and binds the code to that exact URI', async () => {
+        const registered = 'http://127.0.0.1:3118/callback';
+        const listening = 'http://127.0.0.1:51234/callback';
+        const clientId = await registerClient([registered]);
+        const cookieHeader = `${SESSION_COOKIE}=${await loginCookie()}`;
+
+        const html = await renderAuthorizePage(authorizeQuery(clientId, { redirectUri: listening }), cookieHeader);
+        const decision = await postDecision(allowFormFields(html), cookieHeader);
+        const code = issuedCode(decision);
+
+        expect(decision.headers.get('location')).toMatch(/^http:\/\/127\.0\.0\.1:51234\/callback\?/);
+        // The registered port was never the one redirected to, so it cannot redeem the code.
+        const wrongPort = await exchangeCode(clientId, code, VERIFIER, registered);
+        expect(wrongPort.status).toBe(400);
+        expect(((await wrongPort.json()) as { error: string }).error).toBe('invalid_grant');
+    });
+
+    it('redeems a code at the loopback port it was issued for', async () => {
+        const listening = 'http://127.0.0.1:51234/callback';
+        const clientId = await registerClient(['http://127.0.0.1:3118/callback']);
+        const cookieHeader = `${SESSION_COOKIE}=${await loginCookie()}`;
+        const html = await renderAuthorizePage(authorizeQuery(clientId, { redirectUri: listening }), cookieHeader);
+        const code = issuedCode(await postDecision(allowFormFields(html), cookieHeader));
+
+        const tokenRes = await exchangeCode(clientId, code, VERIFIER, listening);
+
+        expect(tokenRes.status).toBe(200);
     });
 
     it('rejects DCR with a non-loopback http redirect_uri', async () => {

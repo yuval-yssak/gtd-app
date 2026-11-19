@@ -14,7 +14,7 @@ describe('fieldGuidanceFor', () => {
         const guidance = fieldGuidanceFor(nextAction());
         expect(guidance?.missing).toEqual(['energy', 'time', 'workContextIds']);
         expect(guidance?.hint).toContain('Missing: energy, time, workContextIds.');
-        expect(guidance?.hint).toContain('gtd_list_work_contexts');
+        expect(guidance?.hint).toContain('done_list_work_contexts');
     });
 
     it('lists only the fields that are still empty', () => {
@@ -73,25 +73,25 @@ describe('fieldGuidanceFor', () => {
 });
 
 describe('decorateWithFieldGuidance', () => {
-    it('stamps fieldGuidance onto a gtd_update_item response that needs it', () => {
-        const decorated = decorateWithFieldGuidance('gtd_update_item', nextAction()) as { fieldGuidance?: { missing: string[] } };
+    it('stamps fieldGuidance onto a done_update_item response that needs it', () => {
+        const decorated = decorateWithFieldGuidance('done_update_item', nextAction()) as { fieldGuidance?: { missing: string[] } };
         expect(decorated.fieldGuidance?.missing).toEqual(['energy', 'time', 'workContextIds']);
     });
 
     it('returns the same object when nothing is missing', () => {
         const complete = nextAction({ energy: 'low', time: 10, workContextIds: ['wc1'] });
-        expect(decorateWithFieldGuidance('gtd_update_item', complete)).toBe(complete);
+        expect(decorateWithFieldGuidance('done_update_item', complete)).toBe(complete);
     });
 
     it('leaves read tools alone so a lookup never tempts the model into unrequested edits', () => {
         const bare = nextAction();
-        expect(decorateWithFieldGuidance('gtd_get_item', bare)).toBe(bare);
-        expect(decorateWithFieldGuidance('gtd_list_items', { items: [bare] })).toEqual({ items: [bare] });
+        expect(decorateWithFieldGuidance('done_get_item', bare)).toBe(bare);
+        expect(decorateWithFieldGuidance('done_list_items', { items: [bare] })).toEqual({ items: [bare] });
     });
 
     it('passes non-record payloads through untouched', () => {
-        expect(decorateWithFieldGuidance('gtd_update_item', null)).toBeNull();
-        expect(decorateWithFieldGuidance('gtd_update_item', [nextAction()])).toEqual([nextAction()]);
+        expect(decorateWithFieldGuidance('done_update_item', null)).toBeNull();
+        expect(decorateWithFieldGuidance('done_update_item', [nextAction()])).toEqual([nextAction()]);
     });
 });
 

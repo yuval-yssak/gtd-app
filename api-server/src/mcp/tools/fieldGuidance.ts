@@ -3,16 +3,16 @@
  * Field-completeness guidance for item writes. The GTD method only works when a next action
  * carries the metadata the Do phase filters on (energy, duration, work context), a waiting-for
  * item says when the delegated outcome is expected, and a calendar event names its venue. An
- * LLM driving `gtd_update_item` tends to set `status` and stop, so after every update the MCP
+ * LLM driving `done_update_item` tends to set `status` and stop, so after every update the MCP
  * inspects the returned item and, when any of those fields is still empty, stamps a
  * `fieldGuidance` block next to the entity: the list of missing fields plus a hint telling the
  * model how to fill each one (or to ask the user). The hint is advisory — the write already
  * succeeded — and disappears once the fields are populated, so it never nags a complete item.
  *
- * Only write tools are decorated: a read (`gtd_get_item`, `gtd_list_items`) must not tempt the
- * model into "fixing" items the user only asked to look at. `gtd_capture` lands in `inbox`,
+ * Only write tools are decorated: a read (`done_get_item`, `done_list_items`) must not tempt the
+ * model into "fixing" items the user only asked to look at. `done_capture` lands in `inbox`,
  * which has no required metadata, and complete/trash leave the active statuses, so in practice
- * `gtd_update_item` is the one tool whose response can carry the block.
+ * `done_update_item` is the one tool whose response can carry the block.
  *
  * Every field inspected here must be one the `/v1` item projection actually returns
  * (`api-server/src/routes/v1/projections/item.ts`) — a field the allowlist drops would look
@@ -20,7 +20,7 @@
  */
 
 /**
- * Guidance text shared by the `gtd_update_item` description and the server instructions, so the
+ * Guidance text shared by the `done_update_item` description and the server instructions, so the
  * model learns the rule before it writes (and sends the fields with the status change) rather
  * than only after the response points out what it forgot.
  */
@@ -28,12 +28,12 @@ export const FIELD_COMPLETENESS_GUIDANCE =
     'Completeness: when you set or keep a status, send the metadata the GTD method relies on in the SAME call — ' +
     'a nextAction needs `energy`, `time` and `workContextIds`; a waitingFor needs `expectedBy`. A calendar item ' +
     'linked to Google Calendar should also name its `location`; that field is Google-owned and read-only here, so ' +
-    'set it on the linked Google event instead of sending it to gtd_update_item. Infer the values from what you ' +
+    'set it on the linked Google event instead of sending it to done_update_item. Infer the values from what you ' +
     'know about the task, or ask the user. If any of them is still empty after the write, the response carries ' +
     '`fieldGuidance: { missing, hint }` — the write succeeded; fill in the listed fields and update again.';
 
 /** Tools whose item response gets inspected. Keep to writes — see the header comment. */
-const GUIDED_TOOLS: ReadonlySet<string> = new Set(['gtd_update_item']);
+const GUIDED_TOOLS: ReadonlySet<string> = new Set(['done_update_item']);
 
 type PublicItem = Record<string, unknown>;
 
@@ -58,13 +58,13 @@ const hasText = (value: unknown) => !lacksText(value);
 const NEXT_ACTION_HINT =
     'A next action is only actionable in the Do phase when it carries all three: `energy` (low / medium / high), ' +
     '`time` (estimated duration in minutes) and `workContextIds` (the condition it needs — usually exactly one id ' +
-    'from gtd_list_work_contexts). Fill in the missing ones from what you know about the task, or ask the user, ' +
-    'then call gtd_update_item again.';
+    'from done_list_work_contexts). Fill in the missing ones from what you know about the task, or ask the user, ' +
+    'then call done_update_item again.';
 
 const WAITING_FOR_HINT =
     'A waiting-for item should say when the delegated outcome is expected: set `expectedBy` (YYYY-MM-DD) so the ' +
     'review can flag it as overdue. Use the date the other person committed to, or ask the user, then call ' +
-    'gtd_update_item again.';
+    'done_update_item again.';
 
 /**
  * `location` is owned by Google Calendar (read-only on the item, never writable through PATCH),
