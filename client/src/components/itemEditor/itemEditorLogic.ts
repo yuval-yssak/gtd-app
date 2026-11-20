@@ -433,16 +433,6 @@ export function notesAreEmpty(notes: string): boolean {
 }
 
 /**
- * Decides whether a page-level Escape keydown should navigate back. Stands down when the event was
- * already claimed (`defaultPrevented` — an open Autocomplete popup, the notes editor's
- * ESC-to-preview), when it's an IME composition cancel, or when any modal popup is open (Select
- * popups and inner Dialogs — their own ESC handling must win; see `isModalOpen`).
- */
-export function shouldHandlePageEscape(event: { defaultPrevented: boolean; isComposing: boolean }, isModalOpen: boolean): boolean {
-    return !event.defaultPrevented && !event.isComposing && !isModalOpen;
-}
-
-/**
  * Builds the optional `opts` argument for `clarifyToDone` so the spread in `ItemEditorBody`'s
  * status-transition dispatch is a named helper instead of an inline ternary. `exactOptionalPropertyTypes`
  * forbids passing `{ onReadOnlyGCal: undefined }`, so when no callback is supplied we must pass

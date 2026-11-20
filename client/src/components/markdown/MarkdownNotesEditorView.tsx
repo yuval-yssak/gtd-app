@@ -1,6 +1,7 @@
 import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { useEffect, useRef } from 'react';
+import { FIELD_PARKING_ATTR } from '../../lib/keyboardRegionDom';
 import styles from './MarkdownNotesEditor.module.css';
 import { buildNotesEditorExtensions } from './markdownEditorSetup';
 
@@ -93,5 +94,6 @@ export default function MarkdownNotesEditorView({
         });
     }, [value]);
 
-    return <div ref={containerRef} className={styles.editor} data-testid="markdownNotesEditor" />;
+    // A parking spot for Escape (useEscapeStepsOutOfFields): Enter from it steps back into the editor.
+    return <div ref={containerRef} className={styles.editor} data-testid="markdownNotesEditor" tabIndex={-1} {...{ [FIELD_PARKING_ATTR]: '' }} />;
 }

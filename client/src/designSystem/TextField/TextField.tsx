@@ -1,6 +1,7 @@
 import { Field } from '@base-ui/react/field';
 import { clsx } from 'clsx';
 import { type ChangeEvent, type ComponentProps, type FocusEvent, type KeyboardEvent, type ReactNode, type Ref, useRef } from 'react';
+import { FIELD_PARKING_ATTR } from '../../lib/keyboardRegionDom';
 import styles from './TextField.module.css';
 import { useAutosizeTextarea } from './useAutosizeTextarea';
 
@@ -70,6 +71,10 @@ export function TextField({
             data-size={size}
             data-full-width={fullWidth || undefined}
             data-testid={testId}
+            // Where Escape from the control parks focus (useEscapeStepsOutOfFields): focusable by
+            // script only, so it adds no Tab stop — Tab from it enters the control, its first child.
+            tabIndex={-1}
+            {...{ [FIELD_PARKING_ATTR]: '' }}
             className={clsx(styles.root, className)}
         >
             {label !== undefined && (

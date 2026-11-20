@@ -1,4 +1,4 @@
-import { Fragment, useSyncExternalStore } from 'react';
+import { Fragment, useRef, useSyncExternalStore } from 'react';
 import { Dialog, DialogContent, DialogTitle, Text } from '../designSystem';
 import { STATUS_KEYS } from '../lib/editorShortcuts';
 import { GO_TO_TARGETS } from '../lib/globalShortcuts';
@@ -33,6 +33,7 @@ const GROUPS: ShortcutGroup[] = [
                 chords: [['f6'], ['shift', 'f6']],
                 does: 'Jump to the next / previous region',
             },
+            { chords: [['esc']], does: 'Leave a text field, so the shortcuts work again — Enter goes back in, Esc again closes an editor page' },
             { sequence: '?', does: 'This list of shortcuts' },
             { sequence: '/', does: 'Search the list' },
             { sequence: 'c', does: 'Capture to the inbox (outside a list row, where c copies the id)' },
@@ -96,7 +97,7 @@ const GROUPS: ShortcutGroup[] = [
         title: 'In the item editor',
         rows: [
             { chords: [['mod', 'enter']], does: 'Save' },
-            { chords: [['esc']], does: 'Close' },
+            { chords: [['esc']], does: 'Close (from a text field: press it twice)' },
             {
                 sequence: STATUS_KEYS.map((entry) => entry.key).join(' '),
                 does: 'Pick a status: Inbox, Next Action, Calendar, Waiting For, Someday, Routine, Done, Trash (outside a text field)',
@@ -127,10 +128,21 @@ function keysOf(row: ShortcutRow, isApple: boolean): string {
 export function KeyboardShortcutsDialog() {
     const open = useSyncExternalStore(subscribeShortcutsDialog, isShortcutsDialogOpen);
     const isApple = isApplePlatform();
+    // The legend holds no controls, so focus starts on the list itself: arrows, Page Up/Down,
+    // Space and Home/End then scroll it natively (they only scroll the focused scroller).
+    const listRef = useRef<HTMLDivElement>(null);
     return (
-        <Dialog open={open} onClose={closeShortcutsDialog} fullWidth size="sm" data-testid="keyboardShortcutsDialog">
+        <Dialog open={open} onClose={closeShortcutsDialog} fullWidth size="sm" initialFocus={listRef} data-testid="keyboardShortcutsDialog">
             <DialogTitle>Keyboard shortcuts</DialogTitle>
-            <DialogContent>
+            <DialogContent
+                ref={listRef}
+                role="region"
+                aria-label="Shortcut list"
+                // A scrollable region must be focusable so keyboard users can scroll it (WCAG scrollable-region-focusable).
+                tabIndex={0}
+                className={styles.list}
+                data-testid="keyboardShortcutsList"
+            >
                 <table className={styles.table}>
                     <tbody>
                         {GROUPS.map((group) => (

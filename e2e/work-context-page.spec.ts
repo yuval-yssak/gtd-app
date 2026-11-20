@@ -53,7 +53,11 @@ test.describe('Work context editor — page mode', () => {
             await gtd.flush(page);
 
             await page.goto(`/work-context/${workContext._id}`);
-            await page.getByTestId('workContextEditName').locator('input').fill('@yard');
+            const nameInput = page.getByTestId('workContextEditName').locator('input');
+            await nameInput.fill('@yard');
+            // First ESC only steps out of the name field; the second leaves the page.
+            await page.keyboard.press('Escape');
+            await expect(nameInput).not.toBeFocused();
             await page.keyboard.press('Escape');
 
             await expect(page).toHaveURL(/\/work-contexts$/);

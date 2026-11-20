@@ -58,11 +58,15 @@ test.describe('weekly review', () => {
             // Escape must NOT consume the item as a review decision — it steps PAST it: the walk
             // is linear, so the single item lands on the end card with the skip called out. The
             // end card is not an item, so the counter drops its ordinal there (the bar fills); the
-            // no-decision pin is the end card's "1 skipped". ◀ steps back to it. Escape is pressed
-            // from INSIDE the title field (which has no testid of its own): the recorded
-            // disconnection sentinel is the card container, so focus still lands on the end
-            // card's primary, not <body>.
-            await clarifyStage.getByRole('textbox', { name: 'Title' }).click();
+            // no-decision pin is the end card's "1 skipped". ◀ steps back to it. Started from
+            // INSIDE the title field (which has no testid of its own): the first Escape only leaves
+            // the field, the second steps past; the recorded disconnection sentinel is the card
+            // container, so focus still lands on the end card's primary, not <body>.
+            const clarifyTitle = clarifyStage.getByRole('textbox', { name: 'Title' });
+            await clarifyTitle.click();
+            await page.keyboard.press('Escape');
+            await expect(clarifyTitle).not.toBeFocused();
+            await expect(page.getByTestId('stageEmptyCard')).toHaveCount(0);
             await page.keyboard.press('Escape');
             await expect(page.getByTestId('stageEmptyCard')).toContainText('Inbox — 1 skipped');
             await expect(page.getByTestId('stageContinue')).toBeFocused();
@@ -1137,8 +1141,14 @@ test.describe('weekly review', () => {
             await expect(routineCard.getByTestId('pageNotesPreview')).toContainText('Bring a towel');
             // Notes links on the review card open in a new tab (shared MarkdownPreview contract).
             await expect(routineCard.getByTestId('pageNotesPreview').getByRole('link', { name: 'pool hours' })).toHaveAttribute('target', '_blank');
-            // Edit opens the routine editor inside the card; Escape closes it without deciding.
+            // Edit opens the routine editor inside the card with its title focused; the first
+            // Escape leaves the title, the second closes the editor without deciding.
             await page.getByTestId('routineCardEdit').click();
+            await expect(routineCard.getByTestId('routineEditorSaveButton')).toBeVisible();
+            const routineTitle = routineCard.getByRole('textbox', { name: 'Title' });
+            await expect(routineTitle).toBeFocused();
+            await page.keyboard.press('Escape');
+            await expect(routineTitle).not.toBeFocused();
             await expect(routineCard.getByTestId('routineEditorSaveButton')).toBeVisible();
             await page.keyboard.press('Escape');
             await expect(page.getByTestId('routineEditorSaveButton')).toHaveCount(0);

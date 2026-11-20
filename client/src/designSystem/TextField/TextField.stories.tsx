@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/react';
 import { Search } from 'lucide-react';
 import { userEvent, within } from 'storybook/test';
+import { withEscapeStepOut } from '../../test-utils/storybookEscapeStepOut';
 import { TextField } from './TextField';
 
 const meta = {
@@ -17,7 +18,8 @@ export const Empty: Story = {};
 export const Filled: Story = { args: { defaultValue: 'Call the dentist' } };
 export const Required: Story = { args: { required: true } };
 export const WithHelperText: Story = { args: { helperText: 'Shown in the weekly review' } };
-export const ErrorState: Story = { args: { label: 'Email', defaultValue: 'not-an-email', error: true, helperText: 'Enter a valid email' } };
+const invalidEmail = { label: 'Email', defaultValue: 'not-an-email', error: true, helperText: 'Enter a valid email' };
+export const ErrorState: Story = { args: invalidEmail };
 export const Disabled: Story = { args: { defaultValue: 'Read only', disabled: true } };
 export const MediumSize: Story = { args: { size: 'md' } };
 export const FullWidth: Story = { args: { fullWidth: true } };
@@ -39,4 +41,23 @@ export const Focused: Story = {
     play: async ({ canvasElement }) => {
         await userEvent.click(within(canvasElement).getByRole('textbox'));
     },
+};
+
+async function parkField(canvasElement: HTMLElement) {
+    await userEvent.click(within(canvasElement).getByRole('textbox'));
+    await userEvent.keyboard('{Escape}');
+}
+
+/** Escape from the control parks focus on the field box: the focus ring, not the typing accent. */
+export const Parked: Story = {
+    args: { defaultValue: 'Call the dentist' },
+    decorators: [withEscapeStepOut],
+    play: ({ canvasElement }) => parkField(canvasElement),
+};
+
+/** An invalid field keeps its error colour on the parked ring. */
+export const ParkedErrorState: Story = {
+    args: invalidEmail,
+    decorators: [withEscapeStepOut],
+    play: ({ canvasElement }) => parkField(canvasElement),
 };

@@ -12,6 +12,22 @@ export const LIST_SEARCH_TOGGLE_ATTR = 'data-list-search-toggle';
 export const LIST_SEARCH_INPUT_ATTR = 'data-list-search-input';
 
 /**
+ * Marks a field's box (the design-system TextField, the notes editor): a focusable spot around the
+ * text control where Escape parks focus, so the user is ON the field, not in it — Enter steps back in.
+ */
+export const FIELD_PARKING_ATTR = 'data-field-parking';
+
+/** The box an Escape from `field` parks focus on, or null when the field has none. */
+export function parkingSpotOf(field: HTMLElement): HTMLElement | null {
+    return field.parentElement?.closest<HTMLElement>(`[${FIELD_PARKING_ATTR}]`) ?? null;
+}
+
+/** The text control inside a parking spot, for Enter to step back into. */
+export function textControlIn(spot: HTMLElement): HTMLElement | null {
+    return spot.querySelector<HTMLElement>('input:not([type="hidden"]), textarea, [contenteditable="true"]');
+}
+
+/**
  * Stamped by every design-system popup that must silence page shortcuts while open (dialogs,
  * drawers, menus, popovers, select and combobox lists) — never by tooltips or toasts.
  */

@@ -9,6 +9,11 @@
             display: flex;
             inline-size: 100%;
         }
+
+        /* Parked by Escape: the ring goes on the box the user sees, not the label column. */
+        &:focus {
+            outline: none;
+        }
     }
 
     .label {
@@ -50,6 +55,11 @@
         &:focus-within {
             border-color: var(--color-accent);
             outline: 1px solid var(--color-accent);
+        }
+
+        .root:focus-visible > & {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
         }
 
         .root[data-size="md"] & {

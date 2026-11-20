@@ -18,6 +18,12 @@ function mountPopup(attributes: Record<string, string>) {
     return popup;
 }
 
+function mountTextInput() {
+    const input = document.createElement('input');
+    document.body.append(input);
+    return input;
+}
+
 function pressEscape() {
     fireEvent.keyDown(document, { key: 'Escape' });
 }
@@ -49,6 +55,13 @@ describe('usePageEscapeToClose', () => {
         mountPopup({ [MODAL_POPUP_ATTR]: '', 'data-closed': '' });
         pressEscape();
         expect(onEscape).toHaveBeenCalledTimes(1);
+    });
+
+    it('stays on the page when Escape comes from a focused text field', () => {
+        const onEscape = vi.fn();
+        render(<EscapeHost enabled onEscape={onEscape} />);
+        fireEvent.keyDown(mountTextInput(), { key: 'Escape' });
+        expect(onEscape).not.toHaveBeenCalled();
     });
 
     it('does nothing while disabled', () => {

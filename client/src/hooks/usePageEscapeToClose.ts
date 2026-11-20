@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
-import { shouldHandlePageEscape } from '../components/itemEditor/itemEditorLogic';
+import { isEditableEventTarget } from '../components/quickCapture/quickCaptureLogic';
+import { shouldHandlePageEscape } from '../lib/escapeStepOut';
 import { isModalOpen } from '../lib/keyboardRegionDom';
 
 interface PageEscapeToCloseOptions {
@@ -9,8 +10,8 @@ interface PageEscapeToCloseOptions {
 
 /**
  * ESC-to-leave for the editor pages, which have no modal wrapper to give them ESC-to-close. It
- * stands down (via shouldHandlePageEscape) while any popup or inner dialog is open, so ESC always
- * closes the innermost surface first.
+ * stands down (via shouldHandlePageEscape) while any popup or inner dialog is open, and for an ESC
+ * from a text field (that one only leaves the field), so ESC always closes the innermost surface first.
  */
 export function usePageEscapeToClose({ enabled, onEscape }: PageEscapeToCloseOptions) {
     // Ref-routed so the listener attaches once per `enabled` flip, not per render.
@@ -25,7 +26,7 @@ export function usePageEscapeToClose({ enabled, onEscape }: PageEscapeToCloseOpt
             if (event.key !== 'Escape') {
                 return;
             }
-            if (shouldHandlePageEscape(event, isModalOpen())) {
+            if (shouldHandlePageEscape(event, { isModalOpen: isModalOpen(), isEditableTarget: isEditableEventTarget(event.target) })) {
                 onEscapeRef.current();
             }
         };

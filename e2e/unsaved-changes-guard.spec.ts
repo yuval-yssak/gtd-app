@@ -179,8 +179,12 @@ test.describe('unsaved-changes guard — routine editor', () => {
         await withOneLoggedInDevice(browser, `guard-routine-title-esc-${uniqueStamp()}@example.com`, async (page) => {
             const routine = await gtd.createRoutine(page, { ...DAILY, title: 'Rename me routine' });
             await page.goto(`/routine/${routine._id}`);
-            await page.getByRole('textbox', { name: 'Title' }).fill('Renamed routine on the way out');
+            const title = page.getByRole('textbox', { name: 'Title' });
+            await title.fill('Renamed routine on the way out');
 
+            // First ESC only steps out of the title field; the second leaves the page.
+            await page.keyboard.press('Escape');
+            await expect(title).not.toBeFocused();
             await page.keyboard.press('Escape');
             await expect(page).toHaveURL(/\/routines/); // no prompt — text is autosaved, not at risk
             await expect(page.getByTestId('unsavedChangesDialog')).toHaveCount(0);

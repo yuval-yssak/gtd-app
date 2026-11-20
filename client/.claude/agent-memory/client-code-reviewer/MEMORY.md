@@ -84,3 +84,5 @@
 - [Supervisor health-predicate loops](project_supervisor_health_predicate_loops.md) — repair loops wedge on a hung step (shared in-flight pass) or retry forever on reauth/permission states.
 - [Derived view swap unmounts dirty form](project_derived_view_swap_unmounts_dirty_form.md) — summary/fold predicates over live status/brief freshness flip on sync and hide a dirty form or active notes editor; demand a latch.
 - [Legal copy: calendar items omit routines](project_legal_copy_calendar_items_omit_routines.md) — imported GCal series are routines w/ title+description; "used only for A, B" lists get uses bolted on after.
+- [Key semantics change strands legend](project_key_semantics_change_stale_legend.md) — new key behavior gets one legend row; other GROUPS rows + flow comments keep the old meaning.
+- [Focusable wrapper :focus-within self-match](project_focusable_wrapper_focus_within_self_match.md) — tabIndex on a container makes its editing-state :focus-within ring show when parked; also satisfies [tabindex] canFocus.

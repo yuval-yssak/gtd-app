@@ -15,6 +15,14 @@
     outline: 1px solid var(--color-accent);
 }
 
+/* Parked by Escape (the container itself focused, not the editor inside): the plain focus ring,
+ * never the typing accent above — letters are shortcuts here, and must not look like typing. */
+.editor:focus-visible {
+    border-color: var(--color-border-strong);
+    outline: var(--focus-ring-width) solid var(--focus-ring-color);
+    outline-offset: var(--focus-ring-offset);
+}
+
 /* Suspense fallback keeps the editor's footprint while the CodeMirror chunk loads. */
 .loadingFallback {
     display: block;

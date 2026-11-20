@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { isParkedEditorFocus } from '../../hooks/useEditorShortcuts';
+import { FIELD_PARKING_ATTR } from '../../lib/keyboardRegionDom';
 
 /**
  * Interchangeable pinned-bar primaries: a lost control restores onto whichever of these the new
@@ -46,7 +47,9 @@ const domLookup = (root: HTMLElement): FocusControlLookup<HTMLElement> => ({
     byTestId: (testId) => root.querySelector<HTMLElement>(`[data-testid="${testId}"]`),
     // Genuinely focusable only: a recorded CONTAINER sentinel (see onFocusIn) also carries a
     // testid, but focusing a plain Box would silently no-op — it must fall to the bar primary.
-    canFocus: (control) => control.matches('button, [href], input, select, textarea, [tabindex]') && !control.matches(':disabled'),
+    // A field's Escape parking box carries tabindex but is no control to land on either.
+    canFocus: (control) =>
+        control.matches('button, [href], input, select, textarea, [tabindex]') && !control.matches(':disabled') && !control.hasAttribute(FIELD_PARKING_ATTR),
 });
 
 interface FocusedControl {
@@ -93,9 +96,11 @@ export function useTransitionFocusRestore(rootRef: React.RefObject<HTMLElement |
         // Every focus move inside the wizard re-records, so the ref always describes where focus
         // is RIGHT NOW, never a stale control the user left. A focused text field records its
         // closest testid'd ancestor (the card container) as a disconnection SENTINEL, whatever
-        // testid the field itself carries (focusRecordOf): Escape from the field remounts the
-        // whole card, and without the sentinel that unmount would go undetected. resolveFocusTarget never focuses the
-        // container itself (canFocus rejects it) — the bar primary takes it instead.
+        // testid the field itself carries (focusRecordOf): the first Escape parks focus on the field
+        // box (its record resolves to the same container, or to a box canFocus rejects) and the
+        // second remounts the whole card — without the sentinel that unmount would go undetected.
+        // resolveFocusTarget never focuses the container itself (canFocus rejects it) — the bar
+        // primary takes it instead.
         const onFocusIn = (event: FocusEvent) => {
             const target = event.target instanceof HTMLElement ? event.target : null;
             // A click on an editor's empty space focuses the editor root (for its shortcuts): parked

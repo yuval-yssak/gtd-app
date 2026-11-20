@@ -120,7 +120,8 @@ function ExpandedNotes({ notes, onNotesChange, emptyRest, onEditStarted }: Expan
                     onBlurOutside={exitEditIfNotesExist}
                     // First ESC steps out to the preview; claiming the key (return true) makes
                     // CodeMirror preventDefault so the page-level ESC listener doesn't also navigate
-                    // back. With empty notes the editor is the resting state — ESC falls through.
+                    // back. With empty notes the editor is the resting state — ESC falls through to
+                    // useEscapeStepsOutOfFields, which only blurs it; the next ESC leaves the page.
                     onEscape={exitEditExplicitly}
                 />
             </div>

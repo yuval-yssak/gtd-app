@@ -389,6 +389,7 @@ function InboxPage() {
                     fullWidth
                     placeholder="What's on your mind?"
                     aria-label="Capture to inbox"
+                    data-testid="inboxCaptureField"
                     value={draft}
                     onChange={(e) => onCaptureFieldsChange(e.target.value, notes)}
                     onKeyDown={onKeyDown}

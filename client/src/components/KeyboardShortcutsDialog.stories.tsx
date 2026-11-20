@@ -19,5 +19,7 @@ export const Open: Story = {
     },
     play: async () => {
         await waitFor(() => expect(within(document.body).getByTestId('keyboardShortcutsDialog')).toBeVisible());
+        // The legend holds no controls: focus starts on the list so the keyboard can scroll it.
+        await waitFor(() => expect(within(document.body).getByTestId('keyboardShortcutsList')).toHaveFocus());
     },
 };
