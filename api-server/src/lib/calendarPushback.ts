@@ -1,6 +1,6 @@
 import dayjs from 'dayjs';
 import type { CalendarProvider } from '../calendarProviders/CalendarProvider.js';
-import { attendeesEqual, buildDeterministicGCalId, isDuplicateIdError } from '../calendarProviders/GoogleCalendarProvider.js';
+import { attendeesEqual, buildDeterministicGCalId, isDuplicateIdError, isGoogleApiError } from '../calendarProviders/GoogleCalendarProvider.js';
 import calendarIntegrationsDAO from '../dataAccess/calendarIntegrationsDAO.js';
 import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
@@ -1525,19 +1525,47 @@ export async function runMissedPushSweep(scope: MissedPushSweepScope, buildProvi
     console.log(`[gcal-pushback] missed-push sweep | userId=${userId} integrationId=${scope.integrationId} candidates=${candidates.length}`);
     // Sequential + paced like the outbound backfill; one failing push must not abort the sweep.
     // handleItemPush converts provider throws into a `failed` outcome (captureFailedOutcome), so
-    // failure detection reads the outcome instead of catching. The sweep has no driving op to mark
-    // syncFailed — a failed candidate just stays a missed push and the next sweep retries it.
+    // failure detection reads the outcome instead of catching (captureFailedOutcome has already
+    // logged the error). The sweep has no driving op to mark syncFailed — see settleFailedRepush.
     const outcomes = await candidates.reduce(async (prevPromise: Promise<number>, item) => {
         const repushed = await prevPromise;
         const outcome = await handleItemPush(item, userId, buildProvider, 'none');
         await sleep(MISSED_PUSH_PACE_MS);
         if (outcome?.status === 'failed') {
-            console.error(`[gcal-pushback] missed-push re-push failed | itemId=${item._id}:`, outcome.failureError);
+            await settleFailedRepush(item, userId, outcome.failureError);
             return repushed;
         }
         return repushed + 1;
     }, Promise.resolve(0));
     return { repushedItems: outcomes };
+}
+
+/**
+ * Google statuses that reject the request itself: resending the same state can never succeed.
+ * Narrower than the panel's `terminal` bucket on purpose — a non-rate-limit 403 can be a daily
+ * quota or a missing scope, which clear on their own, and the sweep has no panel row to show it.
+ */
+const PERMANENT_REJECTION_STATUSES = new Set([400, 404, 410]);
+
+/**
+ * A failed re-push normally stays a missed push and the next sweep retries it. A permanent
+ * rejection would then fail on every client sync forever, so the item is stamped as pushed: it
+ * drops out of `isMissedPush` until its next edit, the only thing that could change the answer.
+ */
+async function settleFailedRepush(item: ItemInterface, userId: string, failureError: unknown): Promise<void> {
+    if (!(isGoogleApiError(failureError) && PERMANENT_REJECTION_STATUSES.has(failureError.code))) {
+        console.log('[gcal-pushback] missed-push re-push failed; retrying on the next sweep', { itemId: item._id });
+        return;
+    }
+    console.log('[gcal-pushback] missed-push re-push rejected by Google; not retrying until the item changes', { itemId: item._id, status: failureError.code });
+    await stampRejectedRepush(item, userId);
+}
+
+/** Matches the `updatedTs` the push was built from, so an edit made while it was in flight still counts as missed. */
+async function stampRejectedRepush(item: ItemInterface, userId: string): Promise<void> {
+    const { _id: itemId, updatedTs } = item;
+    if (!itemId) return;
+    await itemsDAO.updateOne({ _id: itemId, user: userId, updatedTs }, { $set: { lastPushedToGCalTs: dayjs().toISOString() } });
 }
 
 /**

@@ -14,11 +14,14 @@ import dayjs from 'dayjs';
 import { GaxiosError } from 'gaxios';
 import { google } from 'googleapis';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { categorizeGCalError } from '../lib/gcalErrorCategorization.js';
 import { installGoogleErrorRedactor } from '../lib/googleErrorRedactor.js';
 
 const SECRET_TITLE = 'SECRET TITLE 7d1e';
 const SECRET_NOTES = 'SECRET NOTES 9c4a';
 const SECRET_ATTENDEE = 'secret-attendee@example.com';
+// Google addresses a user's primary calendar by their email address, so it sits in the request path.
+const SECRET_CALENDAR_ID = 'secret-owner@example.com';
 const SECRET_ACCESS_TOKEN = 'ya29.secret-access-token-3f2b';
 const SECRET_RESPONSE_HEADER = 'response-secret-5e1c';
 const REDACTED = '<<redacted>>';
@@ -35,7 +38,23 @@ function startRateLimitedGoogle() {
         // A credential-looking response header: native Response headers are immutable, so this proves
         // the redactor's response-side pass never throws (which would swap the GaxiosError for a TypeError).
         res.writeHead(403, { 'content-type': 'application/json', 'x-goog-client-secret': SECRET_RESPONSE_HEADER });
-        res.end(JSON.stringify({ error: { code: 403, message: 'Rate Limit Exceeded', errors: [{ reason: 'rateLimitExceeded' }] } }));
+        res.end(
+            JSON.stringify({
+                error: {
+                    code: 403,
+                    message: 'Rate Limit Exceeded',
+                    errors: [{ domain: 'usageLimits', reason: 'rateLimitExceeded', message: 'Rate Limit Exceeded' }],
+                },
+            }),
+        );
+    });
+    return new Promise<Server>((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
+}
+
+function startGoogleAnswering(status: number, body: object) {
+    const server = createServer((_req, res) => {
+        res.writeHead(status, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(body));
     });
     return new Promise<Server>((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
 }
@@ -59,7 +78,7 @@ async function failedInsert(rootUrl: string, redactor: 'installed' | 'disabled')
         ...(redactor === 'disabled' && { errorRedactor: false }),
     });
     const insert = calendar.events.insert({
-        calendarId: 'primary',
+        calendarId: SECRET_CALENDAR_ID,
         requestBody: { summary: SECRET_TITLE, description: SECRET_NOTES, attendees: [{ email: SECRET_ATTENDEE }] },
     });
     const error: unknown = await insert.then(
@@ -107,6 +126,57 @@ describe('installGoogleErrorRedactor', () => {
         expect(serialised).not.toContain(SECRET_ATTENDEE);
         // Immutable on a native Response, so it cannot be blanked — the test above proves the error survives it.
         expect(error.response?.headers.get('x-goog-client-secret')).toBe(SECRET_RESPONSE_HEADER);
+    });
+
+    it("keeps the calendar id (the owner's email address) out of the logged error and its request URL", async () => {
+        const error = await failedInsert(rootUrl, 'installed');
+        expect(inspect(error, { depth: 8 })).not.toContain(SECRET_CALENDAR_ID);
+        expect(inspect(error, { depth: 8 })).not.toContain(encodeURIComponent(SECRET_CALENDAR_ID));
+        expect(error.config.url.toString()).not.toContain(encodeURIComponent(SECRET_CALENDAR_ID));
+        expect(error.config.url.pathname).toContain('/events');
+    });
+
+    // console.error renders at util.inspect's default depth of 2, where gaxios' raw dump showed
+    // Google's reason only as `errors: [ [Object] ]` — the one fact needed to diagnose a 400.
+    it("logs as a short summary that names the status, method and Google's reason at console depth", async () => {
+        const error = await failedInsert(rootUrl, 'installed');
+        const logged = inspect(error);
+        expect(logged).toContain('403');
+        expect(logged).toContain('POST');
+        expect(logged).toContain('rateLimitExceeded');
+        expect(logged).toContain('Rate Limit Exceeded');
+        expect(logged).not.toContain('retryConfig');
+        expect(logged.split('\n').length).toBeLessThan(25);
+    });
+
+    it('scrubs an email address Google echoes back in its error message', async () => {
+        const echoing = await startGoogleAnswering(400, {
+            error: { code: 400, message: `Bad calendar ${SECRET_CALENDAR_ID}`, errors: [{ reason: 'invalid' }] },
+        });
+        try {
+            const error = await failedInsert(listeningRootUrl(echoing), 'installed');
+            const logged = inspect(error);
+            expect(logged).not.toContain(SECRET_CALENDAR_ID);
+            expect(logged).toContain('invalid');
+        } finally {
+            await new Promise<void>((resolve) => echoing.close(() => resolve()));
+        }
+    });
+
+    it('names the network cause when no response came back', async () => {
+        const closed = await startGoogleAnswering(200, {});
+        const deadUrl = listeningRootUrl(closed);
+        await new Promise<void>((resolve) => closed.close(() => resolve()));
+
+        const error = await failedInsert(deadUrl, 'installed');
+
+        expect(inspect(error)).toMatch(/cause: '.*(ECONNREFUSED|fetch failed)/);
+    });
+
+    it('leaves the error categorisable — status and nested reasons survive', async () => {
+        const error = await failedInsert(rootUrl, 'installed');
+        expect(error.status).toBe(403);
+        expect(categorizeGCalError(error)).toBe('transient_exhausted');
     });
 
     it('carries over global options that were already set', () => {

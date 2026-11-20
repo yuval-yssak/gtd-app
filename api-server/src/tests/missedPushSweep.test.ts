@@ -385,7 +385,89 @@ describe('runMissedPushSweep — standalone linked items', () => {
         expect(result.repushedItems).toBe(1);
         expect(provider.updateEvent).toHaveBeenCalledTimes(2);
     });
+
+    // Google answered 400 to the color-only done marker on Gmail-created events in production, and
+    // the unstamped row was re-sent on every sync — ~1000 identical failures a day for 13 items.
+    describe('a push Google rejects for good', () => {
+        const sweepNow = () => ({ userId, integrationId, before: dayjs().toISOString() });
+
+        async function seedRejectedFromGmailItem() {
+            await seedCalendarIntegration();
+            await itemsDAO.insertOne(standaloneItem({ status: 'done', eventType: 'fromGmail' }));
+        }
+
+        it('is sent once, then left alone until the item changes', async () => {
+            await seedRejectedFromGmailItem();
+            const provider = fakeProvider();
+            provider.updateEvent.mockRejectedValue(googleError(400));
+
+            const first = await runMissedPushSweep(sweepNow(), () => provider as never);
+            const second = await runMissedPushSweep(sweepNow(), () => provider as never);
+
+            expect(first.repushedItems).toBe(0);
+            expect(second.repushedItems).toBe(0);
+            expect(provider.updateEvent).toHaveBeenCalledTimes(1);
+        });
+
+        it('is sent again after a later edit of the item', async () => {
+            await seedRejectedFromGmailItem();
+            const provider = fakeProvider();
+            provider.updateEvent.mockRejectedValueOnce(googleError(400));
+            await runMissedPushSweep(sweepNow(), () => provider as never);
+            await itemsDAO.updateOne({ _id: 'item-mps-standalone', user: userId }, { $set: { updatedTs: dayjs().add(1, 'second').toISOString() } });
+
+            const result = await runMissedPushSweep({ ...sweepNow(), before: dayjs().add(1, 'minute').toISOString() }, () => provider as never);
+
+            expect(result.repushedItems).toBe(1);
+            expect(provider.updateEvent).toHaveBeenCalledTimes(2);
+        });
+
+        // Quota and permission 403s clear on their own (daily reset, re-consent); with no op and no
+        // panel row, stamping them would silently drop the edit the sweep exists to deliver.
+        it('a quota 403 is still retried on the next sweep', async () => {
+            await seedRejectedFromGmailItem();
+            const provider = fakeProvider();
+            provider.updateEvent.mockRejectedValueOnce(Object.assign(googleError(403), { errors: [{ reason: 'quotaExceeded' }] }));
+
+            await runMissedPushSweep(sweepNow(), () => provider as never);
+            const retry = await runMissedPushSweep(sweepNow(), () => provider as never);
+
+            expect(retry.repushedItems).toBe(1);
+            expect(provider.updateEvent).toHaveBeenCalledTimes(2);
+        });
+
+        it('an edit landing while the rejected push is in flight is not hidden by the stamp', async () => {
+            await seedRejectedFromGmailItem();
+            const provider = fakeProvider();
+            provider.updateEvent.mockImplementationOnce(async () => {
+                await itemsDAO.updateOne({ _id: 'item-mps-standalone', user: userId }, { $set: { updatedTs: '2026-08-09T00:00:00.000Z' } });
+                throw googleError(400);
+            });
+
+            await runMissedPushSweep(sweepNow(), () => provider as never);
+            const retry = await runMissedPushSweep(sweepNow(), () => provider as never);
+
+            expect(retry.repushedItems).toBe(1);
+        });
+
+        it('a transient failure is still retried on the next sweep', async () => {
+            await seedRejectedFromGmailItem();
+            const provider = fakeProvider();
+            provider.updateEvent.mockRejectedValueOnce(googleError(503));
+
+            await runMissedPushSweep(sweepNow(), () => provider as never);
+            const retry = await runMissedPushSweep(sweepNow(), () => provider as never);
+
+            expect(retry.repushedItems).toBe(1);
+            expect(provider.updateEvent).toHaveBeenCalledTimes(2);
+        });
+    });
 });
+
+/** The shape googleapis throws: an Error carrying Google's numeric HTTP status as `code`. */
+function googleError(status: number) {
+    return Object.assign(new Error(`Google answered ${status}`), { code: status });
+}
 
 describe('inbound exception apply stamps the item-level anchor', () => {
     // These pin the invariant the sweep depends on: every Google-originated item write carries

@@ -315,7 +315,7 @@ The sweep re-pushes linked rows whose local edit post-dates every sync anchor: `
 
 `pushRoutineInstanceOverride` always sends `timeStart`/`timeEnd`, so a sweep re-push of a row whose Google instance moved afterwards moves it back to the app's time.
 
-Pushes are paced at `MISSED_PUSH_PACE_MS` (150 ms) and every success stamps `lastPushedToGCalTs` so the row leaves the candidate set.
+Pushes are paced at `MISSED_PUSH_PACE_MS` (150 ms) and every success stamps `lastPushedToGCalTs` so the row leaves the candidate set. A re-push Google rejects outright (400, 404 or 410) is stamped the same way, provided the row was not edited while the push was in flight, because resending the same state can never succeed and the sweep runs on every client sync — the row is retried only after its next edit. Every other failure stays a candidate and is retried on the next sweep, 403s included: unlike the SyncIssuesPanel's `terminal` bucket, a quota or missing-scope 403 clears on its own, and the sweep has no panel row to show the user.
 
 ### `invalid_grant` escalation
 
