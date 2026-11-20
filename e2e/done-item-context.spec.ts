@@ -1,5 +1,6 @@
 import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
+import { formatDisplayDate } from '../client/src/lib/displayDate';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
 import { uniqueStamp } from './helpers/uniqueStamp';
@@ -10,7 +11,7 @@ import { uniqueStamp } from './helpers/uniqueStamp';
 /** Yesterday 14:00–15:30 local — in the past, so marking it done never asks the future-done confirm. */
 const eventStart = dayjs().subtract(1, 'day').hour(14).minute(0).second(0).millisecond(0);
 const eventEnd = eventStart.add(90, 'minute');
-const expectedWhen = `${eventStart.format('ddd, MMM D')} · 2:00 pm – 3:30 pm`;
+const expectedWhen = `${formatDisplayDate(eventStart, 'ddd, MMM D')} · 2:00 pm – 3:30 pm`;
 
 const doneRow = (page: Page, title: string) => page.getByRole('link', { name: new RegExp(title) });
 

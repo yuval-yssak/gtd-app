@@ -2,6 +2,7 @@ import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import { RRule, type Weekday } from 'rrule';
 import type { StoredRoutine } from '../types/MyDB';
+import { formatDisplayDate } from './displayDate';
 import { hasAtLeastOne } from './typeUtils';
 
 dayjs.extend(utc);
@@ -161,18 +162,10 @@ export function formatRoutineSchedule(routine: StoredRoutine): string {
     return routine.routineType === 'calendar' ? formatCalendarRrule(routine) : formatRrule(routine.rrule);
 }
 
-/**
- * "MMM D" within the current year, "MMM D, YYYY" otherwise — a bare "from Oct 21" on a series
- * split last October reads as seven weeks ahead, not ten months of history.
- */
-function formatRangeDate(date: dayjs.Dayjs): string {
-    return date.format(date.year() === dayjs().year() ? 'MMM D' : 'MMM D, YYYY');
-}
-
 /** "until Apr 14" when the rrule caps the series, or null. */
 function untilPart(rrule: string): string | null {
     const untilMatch = rrule.match(/UNTIL=(\d{4})(\d{2})(\d{2})/);
-    return untilMatch ? `until ${formatRangeDate(dayjs(`${untilMatch[1]}-${untilMatch[2]}-${untilMatch[3]}`))}` : null;
+    return untilMatch ? `until ${formatDisplayDate(dayjs(`${untilMatch[1]}-${untilMatch[2]}-${untilMatch[3]}`), 'MMM D')}` : null;
 }
 
 /** "5 occurrences" when the rrule is COUNT-bounded, or null. */
@@ -188,7 +181,7 @@ function countPart(rrule: string): string | null {
 /** Extracts date range context for split routines (UNTIL for the head, start date for the tail). */
 function formatDateRange(routine: StoredRoutine): string {
     const parts = [
-        routine.splitFromRoutineId ? `from ${formatRangeDate(dayjs(routine.createdTs))}` : null,
+        routine.splitFromRoutineId ? `from ${formatDisplayDate(dayjs(routine.createdTs), 'MMM D')}` : null,
         untilPart(routine.rrule),
         countPart(routine.rrule),
     ].filter((part): part is string => part !== null);

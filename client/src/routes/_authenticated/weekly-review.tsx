@@ -31,6 +31,7 @@ import { Button, Card, Spinner, Text } from '../../designSystem';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useExclusiveTabLock } from '../../hooks/useExclusiveTabLock';
 import { getTodayIso } from '../../lib/dayClock';
+import { formatDisplayDate } from '../../lib/displayDate';
 import { lazyChunkLoaders } from '../../lib/lazyChunks';
 import { hasAtLeastOne, type NonEmptyArray } from '../../lib/typeUtils';
 import styles from './-weekly-review.module.css';
@@ -352,7 +353,7 @@ function IntroScreen({ resumableFlow, lastCompletedTs, onStart, onResume, onStar
                 </Text>
                 {lastCompletedTs && (
                     <Text variant="caption" tone="secondary" data-testid="lastCompletedLabel">
-                        Last completed {dayjs(lastCompletedTs).format('dddd, MMM D')}
+                        Last completed {formatDisplayDate(dayjs(lastCompletedTs), 'dddd, MMM D')}
                     </Text>
                 )}
                 {resumableFlow ? (

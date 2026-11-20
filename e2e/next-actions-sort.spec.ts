@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
+import { formatDisplayDate } from '../client/src/lib/displayDate';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
 import { uniqueStamp } from './helpers/uniqueStamp';
@@ -25,7 +26,7 @@ test.describe('Next actions list — sort order', () => {
             await page.waitForSelector('text=Late first');
 
             const headers = await page.getByTestId('nextActionSectionHeader').allInnerTexts();
-            expect(headers).toEqual([dayjs(earlyDay).format('ddd MMM D'), dayjs(lateDay).format('ddd MMM D'), 'No date']);
+            expect(headers).toEqual([formatDisplayDate(dayjs(earlyDay), 'ddd MMM D'), formatDisplayDate(dayjs(lateDay), 'ddd MMM D'), 'No date']);
 
             const titles = (await page.getByTestId('nextActionItemRow').allInnerTexts()).map((t) => t.split('\n')[0]?.trim() ?? '');
             expect(titles).toEqual(['Early newer', 'Early older', 'Late first', 'No-date newer', 'No-date older']);
@@ -76,7 +77,11 @@ test.describe('Next actions list — sort order', () => {
             await page.goto('/next-actions');
             await page.waitForSelector('text=Today item');
             const headers = await page.getByTestId('nextActionSectionHeader').allInnerTexts();
-            expect(headers).toEqual([`Overdue · ${dayjs(lastWeek).format('ddd MMM D')}`, `Overdue · ${dayjs(yesterday).format('ddd MMM D')}`, 'Today']);
+            expect(headers).toEqual([
+                `Overdue · ${formatDisplayDate(dayjs(lastWeek), 'ddd MMM D')}`,
+                `Overdue · ${formatDisplayDate(dayjs(yesterday), 'ddd MMM D')}`,
+                'Today',
+            ]);
         });
     });
 });

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { doneContextSummary, doneItemContext, priorStatusOf } from '../components/doneItemContextLogic';
 import { buildItemFactLookups } from '../components/itemFactsLogic';
 import type { OpenItemStatus, StoredItem, StoredPerson, StoredWorkContext } from '../types/MyDB';
+import { pinClockAt } from './pinClock';
 
 const person = (id: string, name: string): StoredPerson => ({
     _id: id,
@@ -51,6 +52,9 @@ describe('priorStatusOf', () => {
 });
 
 describe('doneItemContext', () => {
+    // The year is omitted only for the current year, so the 2026 fixtures need a pinned 2026 clock.
+    pinClockAt('2026-06-01T12:00:00');
+
     it('is null for an item that is not done', () => {
         expect(doneItemContext(doneItem({ status: 'calendar', timeStart: '2026-10-27T14:00:00' }), LOOKUPS)).toBeNull();
     });
@@ -90,11 +94,18 @@ describe('doneItemContext', () => {
         expect(doneItemContext(item, LOOKUPS)?.facts[0]).toEqual({ label: 'When', value: 'Tue, Oct 27 · 9:15 am' });
     });
 
+    it('an event outside the current year names its year', () => {
+        const timed = doneItem({ statusBeforeDone: 'calendar', timeStart: '2025-12-30T09:15:00' });
+        expect(doneItemContext(timed, LOOKUPS)?.facts[0]).toEqual({ label: 'When', value: 'Tue, Dec 30, 2025 · 9:15 am' });
+        const allDay = doneItem({ statusBeforeDone: 'calendar', allDay: true, timeStart: '2026-12-30', timeEnd: '2027-01-02' });
+        expect(doneItemContext(allDay, LOOKUPS)?.facts[0]).toEqual({ label: 'When', value: 'Wed, Dec 30 – Fri, Jan 1, 2027 · all day' });
+    });
+
     it('a waiting-for names whom it waited on, then when it was expected', () => {
         const item = doneItem({ statusBeforeDone: 'waitingFor', waitingForPersonId: 'p-omer', expectedBy: '2026-11-03' });
         expect(doneItemContext(item, LOOKUPS)?.facts).toEqual([
             { label: 'Waiting for', value: 'Omer' },
-            { label: 'Expected by', value: 'Nov 3, 2026' },
+            { label: 'Expected by', value: 'Nov 3' },
         ]);
     });
 
@@ -116,8 +127,16 @@ describe('doneItemContext', () => {
     it('a someday/maybe shows its deferral dates', () => {
         const item = doneItem({ statusBeforeDone: 'somedayMaybe', expectedBy: '2026-12-01', ignoreBefore: '2026-11-15' });
         expect(doneItemContext(item, LOOKUPS)?.facts).toEqual([
-            { label: 'Expected by', value: 'Dec 1, 2026' },
-            { label: 'Hidden until', value: 'Nov 15, 2026' },
+            { label: 'Expected by', value: 'Dec 1' },
+            { label: 'Hidden until', value: 'Nov 15' },
+        ]);
+    });
+
+    it('deferral dates outside the current year name their year', () => {
+        const item = doneItem({ statusBeforeDone: 'somedayMaybe', expectedBy: '2027-01-08', ignoreBefore: '2025-12-30' });
+        expect(doneItemContext(item, LOOKUPS)?.facts).toEqual([
+            { label: 'Expected by', value: 'Jan 8, 2027' },
+            { label: 'Hidden until', value: 'Dec 30, 2025' },
         ]);
     });
 

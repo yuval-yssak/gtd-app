@@ -1,6 +1,7 @@
 import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import type { ReviewStageId } from '../client/src/components/weeklyReview/reviewFlowState';
+import { formatDisplayDate } from '../client/src/lib/displayDate';
 import { resetServerForEmails, withOneLoggedInDevice, withTwoAccountsOnOneDevice } from './helpers/context';
 import { evaluateWithHarness, gtd } from './helpers/gtd';
 import { openReviewDetailsForm } from './helpers/itemEditorLocators';
@@ -1339,7 +1340,9 @@ test.describe('weekly review', () => {
             await expect(revisit.getByTestId('reviewRoutineBanner')).toBeVisible();
             await expect(revisit.getByRole('textbox', { name: 'Title' })).toHaveValue('Water the garden');
             // A done row shows its pre-completion slot under "Before it was done".
-            await expect(revisit.getByRole('region', { name: 'Before it was done' })).toContainText(dayjs(endedToday.timeStart).format('ddd, MMM D'));
+            await expect(revisit.getByRole('region', { name: 'Before it was done' })).toContainText(
+                formatDisplayDate(dayjs(endedToday.timeStart), 'ddd, MMM D'),
+            );
             await expect(revisit.getByRole('button', { name: 'Done', exact: true })).toHaveAttribute('aria-pressed', 'true');
 
             // Done advanced the series — no undo, and the disabled button says why.

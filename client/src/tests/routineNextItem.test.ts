@@ -2,6 +2,7 @@ import dayjs from 'dayjs';
 import { describe, expect, it } from 'vitest';
 import { buildRoutineNextItemIndex, describeNextItemDate, findRoutineNextItem } from '../lib/routineNextItem';
 import type { StoredItem, StoredRoutine } from '../types/MyDB';
+import { pinClockAt } from './pinClock';
 
 const NOW = dayjs('2026-07-02T12:00:00.000Z');
 
@@ -195,6 +196,9 @@ describe('buildRoutineNextItemIndex', () => {
 });
 
 describe('describeNextItemDate', () => {
+    // The year is omitted only for the current year, so the 2026 fixtures need a pinned 2026 clock.
+    pinClockAt('2026-06-01T12:00:00');
+
     it('formats timed calendar items with date and time', () => {
         const item = makeItem({ _id: 'i1', status: 'calendar', timeStart: '2026-07-03T09:30:00.000Z', timeEnd: '2026-07-03T10:00:00.000Z' });
         expect(describeNextItemDate(item)).toBe(dayjs('2026-07-03T09:30:00.000Z').format('ddd, MMM D HH:mm'));
@@ -209,5 +213,16 @@ describe('describeNextItemDate', () => {
         expect(describeNextItemDate(makeItem({ _id: 'i1', expectedBy: '2026-07-04' }))).toBe('due Jul 4');
         expect(describeNextItemDate(makeItem({ _id: 'i2', ignoreBefore: '2026-07-06' }))).toBe('hidden until Jul 6');
         expect(describeNextItemDate(makeItem({ _id: 'i3' }))).toBe('');
+    });
+
+    it('adds the year to dates outside the current year', () => {
+        expect(describeNextItemDate(makeItem({ _id: 'i1', status: 'calendar', timeStart: '2027-01-08', timeEnd: '2027-01-09', allDay: true }))).toBe(
+            'Fri, Jan 8, 2027',
+        );
+        expect(describeNextItemDate(makeItem({ _id: 'i2', status: 'calendar', timeStart: '2027-01-08T09:30:00', timeEnd: '2027-01-08T10:00:00' }))).toBe(
+            'Fri, Jan 8, 2027 09:30',
+        );
+        expect(describeNextItemDate(makeItem({ _id: 'i3', expectedBy: '2025-12-30' }))).toBe('due Dec 30, 2025');
+        expect(describeNextItemDate(makeItem({ _id: 'i4', ignoreBefore: '2027-02-01' }))).toBe('hidden until Feb 1, 2027');
     });
 });

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { ResolvedTag } from '../lib/itemSearch';
 import { buildRowSecondary, RowTags, readShowTags } from '../routes/_authenticated/next-actions';
 import type { StoredItem, StoredPerson, StoredWorkContext } from '../types/MyDB';
+import { pinClockAt } from './pinClock';
 
 // RowTags returns a single <Box> wrapper; these helpers walk its children without a DOM (vitest runs in node env).
 function childrenOf(el: ReactElement): ReactNode[] {
@@ -66,6 +67,9 @@ describe('RowTags', () => {
 });
 
 describe('buildRowSecondary', () => {
+    // The year is omitted only for the current year, so the 2026 fixtures need a pinned 2026 clock.
+    pinClockAt('2026-06-01T12:00:00');
+
     const context = (id: string, name: string): StoredWorkContext => ({ _id: id, name, userId: 'u', createdTs: '', updatedTs: '' });
     const person = (id: string, name: string): StoredPerson => ({ _id: id, name, userId: 'u', createdTs: '', updatedTs: '' });
     const item = (over: Partial<StoredItem>): StoredItem =>
@@ -77,6 +81,11 @@ describe('buildRowSecondary', () => {
     it('returns the "Due" string (not chips) when tags are hidden', () => {
         const result = buildRowSecondary(item({ expectedBy: '2026-06-06', workContextIds: ['c1'] }), { showTags: false, contextsById, peopleById });
         expect(result).toBe('Due Jun 6');
+    });
+
+    it('adds the year to a due date outside the current year', () => {
+        const result = buildRowSecondary(item({ expectedBy: '2027-01-08' }), { showTags: false, contextsById, peopleById });
+        expect(result).toBe('Due Jan 8, 2027');
     });
 
     it('returns undefined when tags hidden and there is no due date', () => {

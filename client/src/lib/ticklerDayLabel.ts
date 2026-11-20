@@ -1,4 +1,5 @@
 import dayjs from 'dayjs';
+import { formatDisplayDate } from './displayDate';
 
 /**
  * Human-friendly header for a tickler group, keyed by an `ignoreBefore` date (YYYY-MM-DD).
@@ -9,7 +10,7 @@ export function ticklerDayLabel(dateStr: string, now = dayjs()) {
     const day = dayjs(dateStr).startOf('day');
     // Compare calendar days, not elapsed 24h spans — otherwise tomorrow reads as "Today" for most of today.
     const daysUntil = day.diff(now.startOf('day'), 'day');
-    const date = day.format(day.isSame(now, 'year') ? 'ddd, MMM D' : 'ddd, MMM D, YYYY');
+    const date = formatDisplayDate(day, 'ddd, MMM D', now);
     if (daysUntil === 0) return `Today · ${date}`;
     if (daysUntil === 1) return `Tomorrow · ${date}`;
     return date;

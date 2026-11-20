@@ -1,4 +1,5 @@
 import dayjs from 'dayjs';
+import { type DisplayDatePattern, formatDisplayDate } from './displayDate';
 
 /**
  * Inclusive (user-visible) end-date → GCal exclusive end-date. A single-day all-day event on
@@ -14,13 +15,14 @@ export function fromGCalExclusive(exclusiveEndDate: string): string {
 }
 
 /**
- * Renders a YYYY-MM-DD all-day date as `MMM D` (or your chosen short format) WITHOUT applying
- * any timezone adjustment. dayjs(s).tz(...) would shift "May 23" to "May 22" in negative-offset
- * zones — for all-day events the date is the calendar owner's local date, not a tz-anchored
- * moment, so we parse and format in the naive parser to keep the string verbatim.
+ * Renders a YYYY-MM-DD all-day date as `MMM D` (or another display pattern; the year is added
+ * outside the current year) WITHOUT applying any timezone adjustment. dayjs(s).tz(...) would shift
+ * "May 23" to "May 22" in negative-offset zones — for all-day events the date is the calendar
+ * owner's local date, not a tz-anchored moment, so we parse and format in the naive parser to keep
+ * the string verbatim.
  */
-export function formatAllDayDate(dateStr: string, format = 'MMM D'): string {
-    return dayjs(dateStr).format(format);
+export function formatAllDayDate(dateStr: string, pattern: DisplayDatePattern = 'MMM D'): string {
+    return formatDisplayDate(dayjs(dateStr), pattern);
 }
 
 /** True when timeStart looks like a YYYY-MM-DD all-day date (no T component). */

@@ -1,6 +1,7 @@
 import dayjs from 'dayjs';
 import { useState } from 'react';
 import { Chip, RadioGroup, type RadioOption, Text, TextField, ToggleGroup } from '../../designSystem';
+import { formatDisplayDate } from '../../lib/displayDate';
 import { computeNextOccurrence, deriveRecurrenceAnchor } from '../../lib/rruleUtils';
 import styles from './FrequencyPicker.module.css';
 
@@ -116,7 +117,7 @@ function NextDuePreview({ rrule }: { rrule: string }) {
         const next = computeNextOccurrence(rrule, dayjs().toDate());
         return (
             <Text variant="caption" tone="secondary" className={styles.preview}>
-                Next due: {dayjs(next).format('ddd, MMM D, YYYY')}
+                Next due: {formatDisplayDate(dayjs(next), 'ddd, MMM D')}
             </Text>
         );
     } catch {

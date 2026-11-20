@@ -25,6 +25,7 @@ import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import { useListSearch } from '../../hooks/useListSearch';
 import { formatAllDayDate, fromGCalExclusive } from '../../lib/allDayDate';
+import { formatDisplayDate } from '../../lib/displayDate';
 import { filterItemsByQuery } from '../../lib/itemSearch';
 import { parseListQuerySearch } from '../../lib/listQueryUrlParams';
 import { SHORTCUT_ROW_PROPS } from '../../lib/rowShortcuts';
@@ -68,7 +69,7 @@ function CalendarPage() {
         if (d.isSame(dayjs().add(1, 'day'), 'day')) {
             return 'Tomorrow';
         }
-        return d.format('dddd, MMM D');
+        return formatDisplayDate(d, 'dddd, MMM D');
     }
 
     const isPast = (dateKey: string) => dateKey !== NO_DATE_KEY && dayjs(dateKey).isBefore(dayjs(), 'day');

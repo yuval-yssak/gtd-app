@@ -32,6 +32,7 @@ import { type RovingRegionApi, useRovingRegion } from '../../hooks/useRovingRegi
 import { useTodayIso } from '../../hooks/useTodayIso';
 import { compareNextActions } from '../../lib/compareNextActions';
 import { getTodayIso } from '../../lib/dayClock';
+import { formatDisplayDate } from '../../lib/displayDate';
 import { omitArchived, rankMergedOptionsByUsage } from '../../lib/entityUsage';
 import { filterItemsByQuery, itemContextTags, itemPersonRefIds, itemPersonTags, type ResolvedTag } from '../../lib/itemSearch';
 import { isGhostOf } from '../../lib/listGhosts';
@@ -217,7 +218,7 @@ interface RowSecondaryDeps {
 // Builds a row's second line. Tags hidden → just the "Due" text (original behaviour, undefined when no date);
 // tags shown → work-context + people chips precede it. Extracted so both branches are unit-testable.
 export function buildRowSecondary(item: StoredItem, { showTags, contextsById, peopleById }: RowSecondaryDeps) {
-    const dueLabel = item.expectedBy ? `Due ${dayjs(item.expectedBy).format('MMM D')}` : null;
+    const dueLabel = item.expectedBy ? `Due ${formatDisplayDate(dayjs(item.expectedBy), 'MMM D')}` : null;
     if (!showTags) {
         return dueLabel ?? undefined;
     }

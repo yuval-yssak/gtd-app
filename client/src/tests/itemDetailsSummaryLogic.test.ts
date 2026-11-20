@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { isDetailsSummaryShown, itemDetailFacts, ownerAccountFacts } from '../components/itemEditor/itemDetailsSummaryLogic';
 import { buildItemFactLookups } from '../components/itemFactsLogic';
 import type { StoredAccount, StoredItem, StoredPerson, StoredWorkContext } from '../types/MyDB';
+import { pinClockAt } from './pinClock';
 
 const person = (id: string, name: string): StoredPerson => ({
     _id: id,
@@ -28,6 +29,9 @@ function item(overrides: Partial<StoredItem>): StoredItem {
 }
 
 describe('itemDetailFacts', () => {
+    // The year is omitted only for the current year, so the 2026 fixtures need a pinned 2026 clock.
+    pinClockAt('2026-06-01T12:00:00');
+
     it('lists every filled next-action field, contexts first, in the order the form shows them', () => {
         const nextAction = item({
             status: 'nextAction',
@@ -45,8 +49,8 @@ describe('itemDetailFacts', () => {
             { label: 'Energy', value: 'Low' },
             { label: 'Time', value: '15 min' },
             { label: 'Priority', value: 'Urgent' },
-            { label: 'Expected by', value: 'Nov 21, 2026' },
-            { label: 'Hidden until', value: 'Nov 19, 2026' },
+            { label: 'Expected by', value: 'Nov 21' },
+            { label: 'Hidden until', value: 'Nov 19' },
         ]);
     });
 
@@ -87,15 +91,15 @@ describe('itemDetailFacts', () => {
         const waiting = item({ status: 'waitingFor', waitingForPersonId: 'p-dana', expectedBy: '2026-11-21', ignoreBefore: '2026-11-20' });
         expect(itemDetailFacts(waiting, LOOKUPS)).toEqual([
             { label: 'Waiting for', value: 'Dana' },
-            { label: 'Expected by', value: 'Nov 21, 2026' },
-            { label: 'Hidden until', value: 'Nov 20, 2026' },
+            { label: 'Expected by', value: 'Nov 21' },
+            { label: 'Hidden until', value: 'Nov 20' },
         ]);
     });
 
     it('shows a someday/maybe deadline and tickler date', () => {
         expect(itemDetailFacts(item({ status: 'somedayMaybe', expectedBy: '2027-01-01', ignoreBefore: '2026-12-01' }), LOOKUPS)).toEqual([
             { label: 'Expected by', value: 'Jan 1, 2027' },
-            { label: 'Hidden until', value: 'Dec 1, 2026' },
+            { label: 'Hidden until', value: 'Dec 1' },
         ]);
     });
 

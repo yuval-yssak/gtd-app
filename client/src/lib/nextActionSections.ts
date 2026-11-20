@@ -1,6 +1,7 @@
 import dayjs from 'dayjs';
 import type { StoredItem } from '../types/MyDB';
 import { expectedDayKey } from './compareNextActions';
+import { formatDisplayDate } from './displayDate';
 
 /** What a manually ordered list needs of its rows: an identity, and a title to name the row by (announcements, the Move to sheet). */
 export interface RankedRow {
@@ -31,7 +32,7 @@ export function sectionLabel(dayKey: string | null, todayIso: string): string {
     if (dayKey === dayjs(todayIso).add(1, 'day').format('YYYY-MM-DD')) {
         return 'Tomorrow';
     }
-    const formatted = dayjs(dayKey).format('ddd MMM D');
+    const formatted = formatDisplayDate(dayjs(dayKey), 'ddd MMM D', dayjs(todayIso));
     return dayKey < todayIso ? `Overdue · ${formatted}` : formatted;
 }
 

@@ -1,5 +1,6 @@
 import { expect, type Locator, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
+import { formatDisplayDate } from '../client/src/lib/displayDate';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
 import { uniqueStamp } from './helpers/uniqueStamp';
@@ -40,7 +41,7 @@ test.describe('Weekly review — read-only details summary', () => {
             await expect(card.getByRole('textbox', { name: 'Title' })).toHaveValue('Call the plumber');
 
             // Filled fields, in the form's order; the unset ones (people, urgency, tickler) are absent.
-            await expect(factsOf(card)).toHaveText(['Contextsphone', 'EnergyLow', 'Time15 min', `Expected by${expectedBy.format('MMM D, YYYY')}`]);
+            await expect(factsOf(card)).toHaveText(['Contextsphone', 'EnergyLow', 'Time15 min', `Expected by${formatDisplayDate(expectedBy, 'MMM D')}`]);
             await expect(card.getByRole('group', { name: 'Energy' })).toHaveCount(0);
             await expect(card.getByText('Tickler — hide until')).toHaveCount(0);
 

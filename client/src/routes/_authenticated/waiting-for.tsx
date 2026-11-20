@@ -24,6 +24,7 @@ import { useListGhosts } from '../../hooks/useListGhosts';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import { useRankedList } from '../../hooks/useRankedList';
 import { useTodayIso } from '../../hooks/useTodayIso';
+import { formatDisplayDate } from '../../lib/displayDate';
 import { groupIntoSections, type NextActionSection } from '../../lib/nextActionSections';
 import { ownerIdsOfStatus } from '../../lib/rankSections';
 import { RANKED_LIST_ROW_ACTIONS, SHORTCUT_ROW_PROPS } from '../../lib/rowShortcuts';
@@ -175,7 +176,7 @@ function WaitingForPage() {
                             secondary={
                                 item.expectedBy ? (
                                     <Text as="span" variant="caption" tone={isOverdue(item) ? 'error' : 'secondary'}>
-                                        Expected by {dayjs(item.expectedBy).format('MMM D')}
+                                        Expected by {formatDisplayDate(dayjs(item.expectedBy), 'MMM D')}
                                         {isOverdue(item) && ' — overdue'}
                                     </Text>
                                 ) : undefined

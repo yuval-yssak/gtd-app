@@ -5,6 +5,7 @@
  */
 import dayjs from 'dayjs';
 import { formatAllDayDate, fromGCalExclusive } from '../lib/allDayDate';
+import { formatDisplayDate } from '../lib/displayDate';
 import type { StoredItem, StoredPerson, StoredWorkContext } from '../types/MyDB';
 import { isMultiDayAllDay } from './calendarRouteSort';
 
@@ -87,7 +88,7 @@ function namesOf(ids: ReadonlyArray<string>, nameById: ReadonlyMap<string, strin
     return ids.flatMap((id) => nameById.get(id) ?? []).join(', ');
 }
 
-const formatDay = (date: string | undefined) => (date ? dayjs(date).format('MMM D, YYYY') : '');
+const formatDay = (date: string | undefined) => (date ? formatDisplayDate(dayjs(date), 'MMM D') : '');
 
 /**
  * "Tue, Oct 27 · 2:00 pm – 3:30 pm", in the /calendar page's `h:mm a`. All-day dates go through the
@@ -103,7 +104,7 @@ function formatEventWhen(item: StoredItem): string {
     }
     const start = dayjs(item.timeStart);
     const endPart = item.timeEnd ? ` – ${dayjs(item.timeEnd).format('h:mm a')}` : '';
-    return `${start.format('ddd, MMM D')} · ${start.format('h:mm a')}${endPart}`;
+    return `${formatDisplayDate(start, 'ddd, MMM D')} · ${start.format('h:mm a')}${endPart}`;
 }
 
 function formatAllDayWhen(timeStart: string, multiDayExclusiveEnd: string | undefined): string {

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { compareNextActions } from '../lib/compareNextActions';
 import { flatIndexOfItem, flattenSections, groupIntoSections, NO_DATE_SECTION_KEY, sectionLabel } from '../lib/nextActionSections';
 import type { StoredItem } from '../types/MyDB';
+import { pinClockAt } from './pinClock';
 
 const TODAY = '2026-10-23';
 
@@ -18,12 +19,20 @@ function makeItem(overrides: Partial<StoredItem> & { _id: string }): StoredItem 
 }
 
 describe('sectionLabel', () => {
+    // The year is omitted only for the current year, so the 2026 fixtures need a pinned 2026 clock.
+    pinClockAt('2026-06-01T12:00:00');
+
     it('names today, tomorrow, future days, overdue days and the undated tail', () => {
         expect(sectionLabel(TODAY, TODAY)).toBe('Today');
         expect(sectionLabel('2026-10-24', TODAY)).toBe('Tomorrow');
         expect(sectionLabel('2026-10-30', TODAY)).toBe('Fri Oct 30');
         expect(sectionLabel('2026-10-20', TODAY)).toBe('Overdue · Tue Oct 20');
         expect(sectionLabel(null, TODAY)).toBe('No date');
+    });
+
+    it('adds the year to a day outside the current year', () => {
+        expect(sectionLabel('2027-01-08', TODAY)).toBe('Fri Jan 8, 2027');
+        expect(sectionLabel('2025-12-30', TODAY)).toBe('Overdue · Tue Dec 30, 2025');
     });
 
     it('rolls at midnight: yesterday\'s "Today" becomes overdue once todayIso advances', () => {

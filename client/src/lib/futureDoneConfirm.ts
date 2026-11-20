@@ -1,5 +1,6 @@
 import dayjs from 'dayjs';
 import type { StoredItem } from '../types/MyDB';
+import { formatDisplayDate } from './displayDate';
 
 /**
  * True when a calendar item starts on a later calendar day than today, in the device's time zone —
@@ -14,5 +15,6 @@ export function startsOnFutureDay(item: StoredItem, now = dayjs()) {
 /** "Tue, Oct 27 at 9:30 am", or just the day for an all-day event. */
 export function describeEventStart(item: StoredItem) {
     const start = dayjs(item.timeStart);
-    return item.allDay ? start.format('ddd, MMM D') : start.format('ddd, MMM D [at] h:mm a');
+    const day = formatDisplayDate(start, 'ddd, MMM D');
+    return item.allDay ? day : `${day} at ${start.format('h:mm a')}`;
 }

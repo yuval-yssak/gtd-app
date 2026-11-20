@@ -1,5 +1,6 @@
 import dayjs, { type Dayjs } from 'dayjs';
 import type { StoredItem, StoredRoutine } from '../types/MyDB';
+import { formatDisplayDate } from './displayDate';
 
 /**
  * `isOverdue` marks a calendar occurrence whose end has already passed but which is still open —
@@ -93,13 +94,14 @@ export function isOverdueCalendarItem(item: StoredItem, now = dayjs()): boolean 
 export function describeNextItemDate(item: StoredItem): string {
     if (item.timeStart) {
         const start = dayjs(item.timeStart);
-        return item.allDay ? start.format('ddd, MMM D') : start.format('ddd, MMM D HH:mm');
+        const day = formatDisplayDate(start, 'ddd, MMM D');
+        return item.allDay ? day : `${day} ${start.format('HH:mm')}`;
     }
     if (item.expectedBy) {
-        return `due ${dayjs(item.expectedBy).format('MMM D')}`;
+        return `due ${formatDisplayDate(dayjs(item.expectedBy), 'MMM D')}`;
     }
     if (item.ignoreBefore) {
-        return `hidden until ${dayjs(item.ignoreBefore).format('MMM D')}`;
+        return `hidden until ${formatDisplayDate(dayjs(item.ignoreBefore), 'MMM D')}`;
     }
     return '';
 }

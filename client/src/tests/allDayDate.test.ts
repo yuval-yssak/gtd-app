@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { formatAllDayDate, fromGCalExclusive, isAllDayDateString, toGCalExclusive } from '../lib/allDayDate';
+import { pinClockAt } from './pinClock';
 
 describe('toGCalExclusive', () => {
     // Plan canonical case: Wed (inclusive end) → Thu (GCal exclusive end) for a single-day event.
@@ -50,46 +51,46 @@ describe('toGCalExclusive / fromGCalExclusive round-trip', () => {
 });
 
 describe('formatAllDayDate', () => {
+    // The year is omitted only for the current year, so the 2026 fixtures need a pinned 2026 clock.
+    pinClockAt('2026-06-01T12:00:00');
+
     it('formats with the default MMM D format', () => {
         expect(formatAllDayDate('2026-05-27')).toBe('May 27');
     });
 
     it('respects a custom format', () => {
-        expect(formatAllDayDate('2026-05-27', 'YYYY-MM-DD')).toBe('2026-05-27');
         expect(formatAllDayDate('2026-05-27', 'ddd, MMM D')).toBe('Wed, May 27');
+    });
+
+    it('adds the year to a date outside the current year', () => {
+        expect(formatAllDayDate('2027-01-02')).toBe('Jan 2, 2027');
+        expect(formatAllDayDate('2025-12-30', 'ddd, MMM D')).toBe('Tue, Dec 30, 2025');
     });
 
     // Regression: dayjs(date).tz(...) would shift "May 23" to "May 22" in negative-offset zones.
     // The naive parser preserves the calendar date verbatim, which is what all-day semantics demand.
     it('does not tz-shift — the formatted day equals the input day', () => {
-        const inputDay = '2026-05-23';
-        expect(formatAllDayDate(inputDay, 'YYYY-MM-DD')).toBe(inputDay);
-    });
-});
-
-describe('formatAllDayDate — multi-day range pairs', () => {
-    // The calendar route renders multi-day all-day events with two formatAllDayDate calls separated by an
-    // en-dash. The inclusive end is recovered via fromGCalExclusive, so pinning both sides here protects
-    // the visible "All day · May 27 – May 29" label from drift.
-    it('formats both ends of a 3-day inclusive range', () => {
-        const start = '2026-05-27';
-        const exclusiveEnd = '2026-05-30';
-        const inclusiveEnd = fromGCalExclusive(exclusiveEnd);
-        expect(`${formatAllDayDate(start)} – ${formatAllDayDate(inclusiveEnd)}`).toBe('May 27 – May 29');
+        expect(formatAllDayDate('2026-05-23')).toBe('May 23');
     });
 
-    it('formats a range that crosses a month boundary', () => {
-        const start = '2026-05-30';
-        const exclusiveEnd = '2026-06-02';
-        const inclusiveEnd = fromGCalExclusive(exclusiveEnd);
-        expect(`${formatAllDayDate(start)} – ${formatAllDayDate(inclusiveEnd)}`).toBe('May 30 – Jun 1');
-    });
+    describe('multi-day range pairs', () => {
+        // The calendar route renders multi-day all-day events with two formatAllDayDate calls separated by an
+        // en-dash. The inclusive end is recovered via fromGCalExclusive, so pinning both sides here protects
+        // the visible "All day · May 27 – May 29" label from drift.
+        it('formats both ends of a 3-day inclusive range', () => {
+            const inclusiveEnd = fromGCalExclusive('2026-05-30');
+            expect(`${formatAllDayDate('2026-05-27')} – ${formatAllDayDate(inclusiveEnd)}`).toBe('May 27 – May 29');
+        });
 
-    it('formats a range that crosses a year boundary', () => {
-        const start = '2026-12-30';
-        const exclusiveEnd = '2027-01-02';
-        const inclusiveEnd = fromGCalExclusive(exclusiveEnd);
-        expect(`${formatAllDayDate(start)} – ${formatAllDayDate(inclusiveEnd)}`).toBe('Dec 30 – Jan 1');
+        it('formats a range that crosses a month boundary', () => {
+            const inclusiveEnd = fromGCalExclusive('2026-06-02');
+            expect(`${formatAllDayDate('2026-05-30')} – ${formatAllDayDate(inclusiveEnd)}`).toBe('May 30 – Jun 1');
+        });
+
+        it('dates the next-year end of a range that crosses a year boundary', () => {
+            const inclusiveEnd = fromGCalExclusive('2027-01-02');
+            expect(`${formatAllDayDate('2026-12-30')} – ${formatAllDayDate(inclusiveEnd)}`).toBe('Dec 30 – Jan 1, 2027');
+        });
     });
 });
 

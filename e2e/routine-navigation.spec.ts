@@ -1,5 +1,6 @@
 import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
+import { formatDisplayDate } from '../client/src/lib/displayDate';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
 import { uniqueStamp } from './helpers/uniqueStamp';
@@ -219,7 +220,7 @@ test.describe('Routine deep links from items', () => {
             const latestId = occurrences[occurrences.length - 1]?._id;
             const latest = (await gtd.listItems(page)).find((item) => item._id === latestId);
             if (!latest?.timeStart) throw new Error('expected an aged most-recent occurrence');
-            const latestDate = dayjs(latest.timeStart).format('MMM D');
+            const latestDate = formatDisplayDate(dayjs(latest.timeStart), 'MMM D');
             await expect(nextItemLink).toContainText(latestDate);
 
             // Mark done in place: the occurrence is completed without opening the item.
