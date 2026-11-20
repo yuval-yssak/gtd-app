@@ -1,4 +1,7 @@
-// One-shot cleanup for e2e-leaked calendar seeds in gtd_dev.
+// Cleanup for e2e-leaked calendar seeds in an e2e database (`gtd_e2e_<api port>`).
+//
+// E2E-ONLY: the sentEmails step below deletes every calendar-auth email row in the database, not
+// just those of fake integrations — never point this at a dev, staging or production database.
 //
 // Why this exists: every e2e spec that calls /dev/calendar/seed-integration leaves a
 // `calendarIntegrations` row + one or more `calendarSyncConfigs` rows behind. Each row carries an
@@ -11,9 +14,8 @@
 // We treat any integration with a 90-char refreshToken as a seed and remove it + its configs +
 // any items linked exclusively to it.
 //
-// Run with:
-//   mongosh "$MONGO_DB_URL/$MONGO_DB_NAME" --quiet --file e2e/scripts/cleanupE2ECalendarSeeds.js
-// Defaults to mongodb://127.0.0.1:27017/gtd_dev when invoked via `npm run cleanup-e2e-seeds`.
+// Run with `npm run cleanup-e2e-seeds` from e2e/: it takes MONGO_DB_URL from api-server/.env and
+// targets `gtd_e2e_${GTD_E2E_API_PORT:-4100}`.
 
 const FAKE_REFRESH_TOKEN_LEN = 90;
 
@@ -47,8 +49,8 @@ print(`[cleanup-e2e-seeds] deleted ${itemsResult.deletedCount} linked items`);
 const integrationsResult = db.calendarIntegrations.deleteMany({ _id: { $in: fakeIntegrationIds } });
 print(`[cleanup-e2e-seeds] deleted ${integrationsResult.deletedCount} integrations`);
 
-// Drop matching webhook-renewal-driving sentEmails too — they reference fake integrations and
-// otherwise just waste rows. Optional; comment out if you want to preserve the audit trail.
+// Drop the calendar-auth warning emails the fake integrations triggered. Unscoped by integration
+// (all such rows go), which is fine only because an e2e database holds no real users.
 const emailsResult = db.sentEmails.deleteMany({ kind: { $in: ['calendar_auth_warning', 'calendar_auth_revoked'] } });
 print(`[cleanup-e2e-seeds] deleted ${emailsResult.deletedCount} stale sentEmails (calendar auth)`);
 
