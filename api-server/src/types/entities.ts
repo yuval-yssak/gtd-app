@@ -12,7 +12,7 @@ export type ItemStatus = (typeof ItemStatus)[keyof typeof ItemStatus];
 export type OpenItemStatus = Exclude<ItemStatus, 'done' | 'trash'>;
 
 export type EnergyLevel = 'low' | 'medium' | 'high';
-export type EntityType = 'item' | 'routine' | 'person' | 'workContext' | 'reviewInbox' | 'itemBrief';
+export type EntityType = 'item' | 'routine' | 'person' | 'workContext' | 'reviewInbox' | 'itemBrief' | 'claudeAsk';
 export type OpType = 'create' | 'update' | 'delete' | 'rsvp';
 
 /**
@@ -513,6 +513,55 @@ export interface ItemBriefInterface {
     updatedTs: string;
 }
 
+/** How a Claude routine session ended, as reported back by Claude through `done_report_claude_ask`. */
+export type ClaudeAskOutcome = 'completed' | 'needsInput';
+
+/** Claude's one-line report on what a started session did — written by the `/v1` result route. */
+export interface ClaudeAskResult {
+    summary: string;
+    outcome: ClaudeAskOutcome;
+    reportedTs: string;
+}
+
+/**
+ * One "Ask Claude" request on an item: the prompt the user typed, the Claude Code session it
+ * started (through the user's Claude routine), and Claude's result once it reports one. A synced
+ * entity written ONLY by the server — devices read it but never push it (`/sync/push` drops it).
+ * Many per item, newest shown first.
+ */
+export interface ClaudeAskInterface {
+    _id?: string;
+    user: string;
+    itemId: string;
+    prompt: string;
+    /** Claude Code session id returned by the Claude routine start call. */
+    sessionId: string;
+    /** claude.ai link to that session. */
+    sessionUrl: string;
+    /** Absent until Claude reports back; a session stuck on a permission prompt never does. */
+    result?: ClaudeAskResult;
+    createdTs: string;
+    updatedTs: string;
+}
+
+/**
+ * The user's Claude routine (a Claude Code cloud routine, NOT a Done routine): the id and the
+ * per-routine bearer token Done uses to start it. Server-only — the token is encrypted at rest
+ * (`lib/tokenEncryption.ts`) and never returned to a client. One row per user.
+ */
+export interface ClaudeRoutineConnectionInterface {
+    _id?: string;
+    user: string;
+    /** `trig_…` id of the Claude routine. */
+    claudeRoutineId: string;
+    /** `encrypt(token)` — `iv:authTag:ciphertext`. */
+    tokenEncrypted: string;
+    /** Last four characters of the token, so Settings can say which token is stored. */
+    tokenHint: string;
+    createdTs: string;
+    updatedTs: string;
+}
+
 export type BriefBatchStatus = 'processing' | 'harvested' | 'expired' | 'failed';
 
 /** Per-result tallies of one harvested Message Batch (`lib/brief/briefBatch.ts`). */
@@ -613,7 +662,7 @@ export interface OperationInterface {
      * Stored to allow any device to reconstruct state by replaying operations in ts order.
      * For opType === 'rsvp', snapshot is null and rsvp lives in `rsvp` sidecar instead.
      */
-    snapshot: ItemInterface | RoutineInterface | PersonInterface | WorkContextInterface | ReviewInboxInterface | ItemBriefInterface | null;
+    snapshot: ItemInterface | RoutineInterface | PersonInterface | WorkContextInterface | ReviewInboxInterface | ItemBriefInterface | ClaudeAskInterface | null;
     /**
      * Sidecar for GCal-coupled writes. Populated when the user picked Send/Don't Send in the
      * SendUpdatesDialog so the choice survives offline queueing and replays through pushback.
@@ -879,7 +928,14 @@ export interface CalendarSyncConfigInterface {
 }
 
 /** Union of all entity types that can appear as an operation snapshot. */
-export type EntitySnapshot = ItemInterface | RoutineInterface | PersonInterface | WorkContextInterface | ReviewInboxInterface | ItemBriefInterface;
+export type EntitySnapshot =
+    | ItemInterface
+    | RoutineInterface
+    | PersonInterface
+    | WorkContextInterface
+    | ReviewInboxInterface
+    | ItemBriefInterface
+    | ClaudeAskInterface;
 
 /** Discrete event types webhooks can subscribe to. Adding a new event requires extending `mapOpToEvents`. */
 export type WebhookEvent = 'item.created' | 'item.completed';

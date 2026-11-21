@@ -111,7 +111,7 @@ Each token has two independent buckets that refill continuously over a one-minut
 
 | Bucket | Endpoints | Capacity |
 |---|---|---|
-| Write | Every write endpoint under `/v1/*` — `POST` / `PATCH` / `DELETE` / `PUT` on items (including `complete`, `trash`, `brief`), routines, people, work-contexts, composite gestures, reassign, operations/batch | **60 / minute** |
+| Write | Every write endpoint under `/v1/*` — `POST` / `PATCH` / `DELETE` / `PUT` on items (including `complete`, `trash`, `brief`), routines, people, work-contexts, composite gestures, reassign, operations/batch, `claude-asks/:id/result` | **60 / minute** |
 | Read | All `GET` under `/v1/*` (items, routines, people, work-contexts) | **600 / minute** |
 | Brief generation | `POST /v1/items/:id/brief/generate` — **per user** (not per token), on top of the write bucket; charged only when a model call is made (skip-rule hits are free) | **30 / 10 minutes** (`BRIEF_GENERATE_PER_10MIN`) |
 
@@ -348,6 +348,29 @@ Asks the server's model (`claude-haiku-5-5`) to write a `model`-origin brief fro
 | `422` | `brief_generation_failed` | The model refused or returned unusable output for this item. (Was `502` before 2026-10-04.) |
 | `500` | `brief_generation_failed` | Unexpected failure (connection drop, server bug). Retryable. |
 | `503` | `agent_unavailable` | The model service is unavailable (missing key, out of credits, upstream outage). Try later. |
+
+---
+
+### `PUT /v1/claude-asks/:id/result` — report what an "Ask Claude" session did
+
+Requires the `items.write` scope. When a user asks Claude about an item in the Done app, Done starts the user's Claude routine (a Claude Code cloud routine) with a request that names an **ask id**; the session calls this endpoint (MCP `done_report_claude_ask`) when it finishes, and the item's Ask Claude history in the app shows the summary. Reporting again replaces the earlier report.
+
+**Request body**
+
+```json
+{ "summary": "Renamed the item from the WINN-1234 ticket; left it in the inbox.", "outcome": "completed" }
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `summary` | string | One line, trimmed; 1–280 characters. |
+| `outcome` | `"completed"` \| `"needsInput"` | Optional, defaults to `completed`. Use `needsInput` when the user must decide or answer before the work can continue. |
+
+**Response** — `200 OK` with the ask: `{ _id, user, itemId, prompt, sessionId, sessionUrl, result: { summary, outcome, reportedTs }, createdTs, updatedTs }`.
+
+**Errors** — `400 validation_failed`, `404 not_found` (no such ask for the caller), `403 forbidden_scope`.
+
+Starting a Claude routine is deliberately **not** on `/v1`: the token that starts sessions on the user's Claude subscription is stored and used only through the session-authed `/account/claude-routine` endpoints the app calls.
 
 ---
 

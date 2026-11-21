@@ -37,6 +37,7 @@ function scopesRequestedOnConnect() {
 
 /** The connector's use of calendar data — one clause the policy, the landing page and the noscript mirror must all carry. */
 const CONNECTOR_CALENDAR_USE = 'your calendar items and routines to Claude when it reads them on your behalf';
+const ASK_CLAUDE_CALENDAR_USE = "a calendar item's title, status and notes to your Claude routine when you ask Claude about that item";
 
 describe('Google Calendar data uses', () => {
     it('name exactly the scopes the API server requests on connect, userinfo.email included', () => {
@@ -52,6 +53,8 @@ describe('Google Calendar data uses', () => {
         expect(GOOGLE_LIMITED_USE_STATEMENT).toContain('never used for advertising');
         expect(GOOGLE_LIMITED_USE_STATEMENT).toContain(CONNECTOR_CALENDAR_USE);
         expect(LEGAL_DOCUMENTS.privacy.markdown).toContain(CONNECTOR_CALENDAR_USE);
+        expect(GOOGLE_LIMITED_USE_STATEMENT).toContain(ASK_CLAUDE_CALENDAR_USE);
+        expect(LEGAL_DOCUMENTS.privacy.markdown).toContain(ASK_CLAUDE_CALENDAR_USE);
     });
 });
 
@@ -106,6 +109,7 @@ describe('index.html <noscript> mirror', () => {
         expect(noscript).not.toMatch(/clarify-with-AI|assistant/i);
         expect(noscript).toContain('never used for advertising');
         expect(noscript).toContain(CONNECTOR_CALENDAR_USE);
+        expect(noscript).toContain(ASK_CLAUDE_CALENDAR_USE);
         expect(noscript).toContain(LANDING_TRADEMARK_NOTICE);
     });
 });

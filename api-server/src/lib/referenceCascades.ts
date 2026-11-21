@@ -1,7 +1,7 @@
 import dayjs from 'dayjs';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import type { ItemInterface, OperationInterface } from '../types/entities.js';
-import { cascadeItemBriefRemoval } from './itemBriefCascade.js';
+import { cascadeItemSidecarRemoval } from './itemSidecarCascade.js';
 import { notifyChange } from './notifyChange.js';
 import { recordOperation } from './operationHelpers.js';
 
@@ -164,8 +164,9 @@ function appendBreadcrumb(title: string, tag: string): string {
  * been persisted. Reads `entityType` + the (hydrated) pre-delete snapshot off the op to drive the
  * correct cascade. No-ops for any other entity / opType.
  *
- * Item deletes drop the item's brief sidecar (`itemBriefs`, keyed by the item id) — that arm
- * needs no snapshot, so it runs even when the item row was already gone by hydration time.
+ * Item deletes drop the item's brief sidecar (`itemBriefs`, keyed by the item id) and its Claude
+ * asks (`claudeAsks.itemId`) — that arm needs no snapshot, so it runs even when the item row was
+ * already gone by hydration time.
  *
  * Best-effort: a cascade failure logs but does not throw — the original delete has already been
  * persisted + fan-out has fired for the deleted entity itself, and unwinding that would create
@@ -177,7 +178,7 @@ export async function maybeCascadeReferenceRemoval(op: OperationInterface): Prom
     }
     try {
         if (op.entityType === 'item') {
-            await cascadeItemBriefRemoval(op.user, op.entityId);
+            await cascadeItemSidecarRemoval(op.user, op.entityId);
             return;
         }
         if (!op.snapshot) {

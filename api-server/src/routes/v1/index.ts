@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import type { BearerVariables } from '../../auth/bearerMiddleware.js';
+import { v1ClaudeAsksRoutes } from './claudeAsks.js';
 import { v1ItemsRoutes } from './items.js';
 import { v1MeRoutes } from './me.js';
 import { v1OperationsRoutes } from './operations.js';
@@ -28,4 +29,5 @@ export const v1Routes = new Hono<{ Variables: BearerVariables }>()
     .route('/', v1RoutinesRoutes)
     .route('/', v1ReassignRoutes)
     .route('/', v1OperationsRoutes)
-    .route('/', v1MeRoutes);
+    .route('/', v1MeRoutes)
+    .route('/', v1ClaudeAsksRoutes);

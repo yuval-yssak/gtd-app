@@ -1,6 +1,7 @@
 import dayjs from 'dayjs';
 import { type Context, Hono } from 'hono';
 import { authenticateRequest } from '../auth/middleware.js';
+import claudeAsksDAO from '../dataAccess/claudeAsksDAO.js';
 import deviceSyncStateDAO from '../dataAccess/deviceSyncStateDAO.js';
 import itemBriefsDAO from '../dataAccess/itemBriefsDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
@@ -81,6 +82,22 @@ function sanitizeItemSnapshot<T extends Record<string, unknown>>(op: ClientOp, s
     }
     // Width-only assertion: stripping removes keys, it never changes remaining value types.
     return sanitized as T;
+}
+
+/** Entities only the server writes. A device that pushes one is out of contract (or forging a row). */
+const SERVER_WRITTEN_ENTITY_TYPES: ReadonlySet<EntityType> = new Set(['claudeAsk']);
+
+/**
+ * Drops device-pushed ops for server-written entities instead of rejecting the batch: a 400 would
+ * jam the device's whole push queue over an op it can never fix, while dropping it loses nothing —
+ * the server's own row (and its op) is what every device converges on.
+ */
+function dropServerWrittenOps(ops: ClientOp[], deviceId: string): ClientOp[] {
+    const accepted = ops.filter((op) => !SERVER_WRITTEN_ENTITY_TYPES.has(op.entityType));
+    if (accepted.length < ops.length) {
+        console.log('[sync-push] dropped server-written ops pushed by a device', { deviceId, dropped: ops.length - accepted.length });
+    }
+    return accepted;
 }
 
 /**
@@ -288,13 +305,14 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
         const bootstrapCursor = existingCursor && isCursorAfter(existingCursor, heldBack) ? existingCursor : heldBack;
         const serverTs = bootstrapCursor.ts;
 
-        const [items, routines, people, workContexts, reviewInboxes, itemBriefs] = await Promise.all([
+        const [items, routines, people, workContexts, reviewInboxes, itemBriefs, claudeAsks] = await Promise.all([
             itemsDAO.findArray({ user: user.id }),
             routinesDAO.findArray({ user: user.id }),
             peopleDAO.findArray({ user: user.id }),
             workContextsDAO.findArray({ user: user.id }),
             reviewInboxesDAO.findArray({ user: user.id }),
             itemBriefsDAO.findArray({ user: user.id }),
+            claudeAsksDAO.findArray({ user: user.id }),
         ]);
 
         // Register the device as soon as we've decided what's in the response. Bootstrap delivers
@@ -328,7 +346,7 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
             );
         }
 
-        return c.json({ items, routines, people, workContexts, reviewInboxes, itemBriefs, serverTs, serverId: bootstrapCursor.id });
+        return c.json({ items, routines, people, workContexts, reviewInboxes, itemBriefs, claudeAsks, serverTs, serverId: bootstrapCursor.id });
     })
 
     // ---------------------------------------------------------------------------
@@ -336,7 +354,8 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
     // ---------------------------------------------------------------------------
     .post('/push', authenticateRequest, async (c) => {
         const { user } = c.get('session');
-        const { deviceId, ops } = await c.req.json<{ deviceId: string; ops: ClientOp[] }>();
+        const { deviceId, ops: pushedOps } = await c.req.json<{ deviceId: string; ops: ClientOp[] }>();
+        const ops = dropServerWrittenOps(pushedOps, deviceId);
         if (!ops.length) {
             return c.json({ ok: true }, 200);
         }

@@ -1,6 +1,7 @@
 import type { z } from 'zod';
 import { z as zod } from 'zod';
 import type { EntitySnapshot, EntityType, OpType } from '../../types/entities.js';
+import { ClaudeAskCreateSchema, ClaudeAskDeleteSchema, ClaudeAskUpdateSchema } from './claudeAsk.js';
 import { assertStatusFieldRules, ItemCreateSchema, ItemDeleteSchema, ItemRsvpSchema, ItemUpdateSchema } from './item.js';
 import { ItemBriefCreateSchema, ItemBriefDeleteSchema, ItemBriefUpdateSchema } from './itemBrief.js';
 import { PersonCreateSchema, PersonDeleteSchema, PersonUpdateSchema } from './person.js';
@@ -8,6 +9,7 @@ import { ReviewInboxCreateSchema, ReviewInboxDeleteSchema, ReviewInboxUpdateSche
 import { RoutineCreateSchema, RoutineDeleteSchema, RoutineUpdateSchema } from './routine.js';
 import { WorkContextCreateSchema, WorkContextDeleteSchema, WorkContextUpdateSchema } from './workContext.js';
 
+export { ClaudeAskSnapshotSchema } from './claudeAsk.js';
 export type { ItemSnapshot, StatusFieldViolation } from './item.js';
 export { assertStatusFieldRules, ItemSnapshotSchema, RsvpOpPayloadSchema, stripDisallowedStatusFields } from './item.js';
 export { ItemBriefSnapshotSchema } from './itemBrief.js';
@@ -27,6 +29,7 @@ export const OperationSchema = zod.discriminatedUnion('entityType', [
     zod.discriminatedUnion('opType', [WorkContextCreateSchema, WorkContextUpdateSchema, WorkContextDeleteSchema]),
     zod.discriminatedUnion('opType', [ReviewInboxCreateSchema, ReviewInboxUpdateSchema, ReviewInboxDeleteSchema]),
     zod.discriminatedUnion('opType', [ItemBriefCreateSchema, ItemBriefUpdateSchema, ItemBriefDeleteSchema]),
+    zod.discriminatedUnion('opType', [ClaudeAskCreateSchema, ClaudeAskUpdateSchema, ClaudeAskDeleteSchema]),
 ]);
 
 export type ValidatedOperation = z.infer<typeof OperationSchema>;

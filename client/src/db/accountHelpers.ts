@@ -163,7 +163,7 @@ export function removeAllAccountsAndData(db: IDBPDatabase<MyDB>): Promise<void> 
 
 /**
  * Wipes every IDB row owned by a single user when their session ends — items, routines, people,
- * workContexts, reviewInboxes, itemBriefs, drafts, the stored calendar list, the per-user sync
+ * workContexts, reviewInboxes, itemBriefs, claudeAsks, drafts, the stored calendar list, the per-user sync
  * cursor, and any sync operations still queued under that userId.
  * `deviceMeta` and other accounts' rows are intentionally untouched: the deviceId must outlive
  * any single sign-out so push subscriptions and operation log purges stay attached to the same
@@ -174,7 +174,19 @@ export function removeAllAccountsAndData(db: IDBPDatabase<MyDB>): Promise<void> 
  */
 export async function wipeUserData(userId: string, db: IDBPDatabase<MyDB>): Promise<void> {
     const tx = db.transaction(
-        ['items', 'routines', 'people', 'workContexts', 'reviewInboxes', 'itemBriefs', 'syncOperations', 'syncCursors', 'drafts', 'calendarOptions'],
+        [
+            'items',
+            'routines',
+            'people',
+            'workContexts',
+            'reviewInboxes',
+            'itemBriefs',
+            'claudeAsks',
+            'syncOperations',
+            'syncCursors',
+            'drafts',
+            'calendarOptions',
+        ],
         'readwrite',
     );
     await Promise.all([
@@ -184,6 +196,7 @@ export async function wipeUserData(userId: string, db: IDBPDatabase<MyDB>): Prom
         deleteByUserIdIndexInTx(tx, 'workContexts', userId),
         deleteByUserIdIndexInTx(tx, 'reviewInboxes', userId),
         deleteByUserIdIndexInTx(tx, 'itemBriefs', userId),
+        deleteByUserIdIndexInTx(tx, 'claudeAsks', userId),
         deleteSyncOperationsForUserInTx(tx, userId),
         tx.objectStore('syncCursors').delete(userId),
         tx.objectStore('calendarOptions').delete(userId),
@@ -192,7 +205,7 @@ export async function wipeUserData(userId: string, db: IDBPDatabase<MyDB>): Prom
     await tx.done;
 }
 
-type UserScopedStore = 'items' | 'routines' | 'people' | 'workContexts' | 'reviewInboxes' | 'itemBriefs';
+type UserScopedStore = 'items' | 'routines' | 'people' | 'workContexts' | 'reviewInboxes' | 'itemBriefs' | 'claudeAsks';
 
 type WipeStores = Array<UserScopedStore | 'syncOperations' | 'syncCursors' | 'drafts' | 'calendarOptions'>;
 type WipeTx = IDBPTransaction<MyDB, WipeStores, 'readwrite'>;

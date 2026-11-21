@@ -1,4 +1,5 @@
 import type AbstractDAO from '../dataAccess/abstractDAO.js';
+import claudeAsksDAO from '../dataAccess/claudeAsksDAO.js';
 import itemBriefsDAO from '../dataAccess/itemBriefsDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import peopleDAO from '../dataAccess/peopleDAO.js';
@@ -6,6 +7,7 @@ import reviewInboxesDAO from '../dataAccess/reviewInboxesDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import workContextsDAO from '../dataAccess/workContextsDAO.js';
 import {
+    type ClaudeAskInterface,
     type EntitySnapshot,
     type EntityType,
     type ItemBriefInterface,
@@ -120,6 +122,8 @@ export function applyEntityOp(userId: string, op: OperationInterface): Promise<A
             return applyEntitySnapshotOp(reviewInboxesDAO, userId, entityId, opType, snapshot as ReviewInboxInterface | null);
         case 'itemBrief':
             return applyEntitySnapshotOp(itemBriefsDAO, userId, entityId, opType, snapshot as ItemBriefInterface | null);
+        case 'claudeAsk':
+            return applyEntitySnapshotOp(claudeAsksDAO, userId, entityId, opType, snapshot as ClaudeAskInterface | null);
     }
 }
 
@@ -230,5 +234,7 @@ function pickHydrationLookup(entityType: EntityType): HydrationLookup | null {
             return (id, uid) => reviewInboxesDAO.findByOwnerAndId(id, uid);
         case 'itemBrief':
             return (id, uid) => itemBriefsDAO.findByOwnerAndId(id, uid);
+        case 'claudeAsk':
+            return (id, uid) => claudeAsksDAO.findByOwnerAndId(id, uid);
     }
 }

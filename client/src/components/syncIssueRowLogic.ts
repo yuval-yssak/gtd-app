@@ -38,6 +38,7 @@ const ENTITY_TYPE_LABELS: Partial<Record<EntityType, string>> = {
     workContext: 'Work context',
     reviewInbox: 'Review inbox',
     itemBrief: 'Brief',
+    claudeAsk: 'Claude ask',
 };
 
 function entityTypeLabel(entityType: EntityType): string {

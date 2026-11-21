@@ -42,6 +42,7 @@ import type {
     MyDB,
     OAuthProvider,
     StoredAccount,
+    StoredClaudeAsk,
     StoredItem,
     StoredItemBrief,
     StoredPerson,
@@ -83,6 +84,7 @@ export interface AppData {
     routines: StoredRoutine[];
     reviewInboxes: StoredReviewInbox[];
     itemBriefs: StoredItemBrief[];
+    claudeAsks: StoredClaudeAsk[];
     /**
      * Unfiltered variants — include entities owned by hidden accounts. Use for by-id resolution
      * (deep-linked /item/:id and /routine/:id pages, editors' live-row lookups) so an existing
@@ -94,12 +96,14 @@ export interface AppData {
     allRoutines: StoredRoutine[];
     allReviewInboxes: StoredReviewInbox[];
     allItemBriefs: StoredItemBrief[];
+    allClaudeAsks: StoredClaudeAsk[];
     refreshItems: () => Promise<void>;
     refreshWorkContexts: () => Promise<void>;
     refreshPeople: () => Promise<void>;
     refreshRoutines: () => Promise<void>;
     refreshReviewInboxes: () => Promise<void>;
     refreshItemBriefs: () => Promise<void>;
+    refreshClaudeAsks: () => Promise<void>;
     /** Re-reads accounts from IDB after a sign-in/out. Triggers refreshes for unified-view consumers. */
     refreshAccounts: () => Promise<void>;
     syncAndRefresh: () => Promise<void>;
@@ -159,6 +163,7 @@ interface AuthBundle {
     refreshRoutines: () => Promise<void>;
     refreshReviewInboxes: () => Promise<void>;
     refreshItemBriefs: () => Promise<void>;
+    refreshClaudeAsks: () => Promise<void>;
     refreshAccounts: () => Promise<void>;
     syncAndRefresh: () => Promise<void>;
     isInitialSyncing: boolean;
@@ -209,6 +214,7 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
     const refreshRoutines = useCallback(async () => triggerAppResourceRefresh('routines'), []);
     const refreshReviewInboxes = useCallback(async () => triggerAppResourceRefresh('reviewInboxes'), []);
     const refreshItemBriefs = useCallback(async () => triggerAppResourceRefresh('itemBriefs'), []);
+    const refreshClaudeAsks = useCallback(async () => triggerAppResourceRefresh('claudeAsks'), []);
 
     // Mirrors Better Auth's device-multi-session list into the IDB `accounts` store before
     // reading from it. Without this seed, only the active session's account row exists at boot
@@ -571,6 +577,7 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             refreshRoutines,
             refreshReviewInboxes,
             refreshItemBriefs,
+            refreshClaudeAsks,
             refreshAccounts,
             syncAndRefresh,
             isInitialSyncing,
@@ -588,6 +595,7 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             refreshRoutines,
             refreshReviewInboxes,
             refreshItemBriefs,
+            refreshClaudeAsks,
             refreshAccounts,
             syncAndRefresh,
             isInitialSyncing,
@@ -776,6 +784,7 @@ function AppDataInner({ authBundle, children }: { authBundle: AuthBundle; childr
     const routines = use(snapshot.routines);
     const reviewInboxes = use(snapshot.reviewInboxes);
     const itemBriefs = use(snapshot.itemBriefs);
+    const claudeAsks = use(snapshot.claudeAsks);
 
     // Cross-account reassign overlay: while a /sync/reassign is in flight the source-account row
     // is rewritten to render under the target account. Touches only fields safe to forge (userId
@@ -810,6 +819,7 @@ function AppDataInner({ authBundle, children }: { authBundle: AuthBundle; childr
     const visibleWorkContexts = useMemo(() => filterOutHiddenAccounts(workContexts, hiddenUserIds), [workContexts, hiddenUserIds]);
     const visibleReviewInboxes = useMemo(() => filterOutHiddenAccounts(reviewInboxes, hiddenUserIds), [reviewInboxes, hiddenUserIds]);
     const visibleItemBriefs = useMemo(() => filterOutHiddenAccounts(itemBriefs, hiddenUserIds), [itemBriefs, hiddenUserIds]);
+    const visibleClaudeAsks = useMemo(() => filterOutHiddenAccounts(claudeAsks, hiddenUserIds), [claudeAsks, hiddenUserIds]);
 
     const appData: AppData = useMemo(
         () => ({
@@ -820,12 +830,14 @@ function AppDataInner({ authBundle, children }: { authBundle: AuthBundle; childr
             routines: visibleRoutines,
             reviewInboxes: visibleReviewInboxes,
             itemBriefs: visibleItemBriefs,
+            claudeAsks: visibleClaudeAsks,
             allItems: overlaidItems,
             allWorkContexts: workContexts,
             allPeople: people,
             allRoutines: overlaidRoutines,
             allReviewInboxes: reviewInboxes,
             allItemBriefs: itemBriefs,
+            allClaudeAsks: claudeAsks,
         }),
         [
             authBundle,
@@ -835,12 +847,14 @@ function AppDataInner({ authBundle, children }: { authBundle: AuthBundle; childr
             visibleRoutines,
             visibleReviewInboxes,
             visibleItemBriefs,
+            visibleClaudeAsks,
             overlaidItems,
             workContexts,
             people,
             overlaidRoutines,
             reviewInboxes,
             itemBriefs,
+            claudeAsks,
         ],
     );
 

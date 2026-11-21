@@ -52,6 +52,16 @@ async function seedUserRows(db: IDBPDatabase<MyDB>, userId: string): Promise<voi
         createdTs: NOW,
         updatedTs: NOW,
     });
+    await db.put('claudeAsks', {
+        _id: `ask-${userId}`,
+        userId,
+        itemId: `item-${userId}`,
+        prompt: 'Rename it',
+        sessionId: 's',
+        sessionUrl: 'https://claude.ai/code/s',
+        createdTs: NOW,
+        updatedTs: NOW,
+    });
     await db.put('syncOperations', { userId, entityType: 'item', entityId: `item-${userId}`, opType: 'create', queuedAt: NOW, snapshot: null });
     await db.put('syncCursors', { userId, lastSyncedTs: NOW, lastSyncedId: '' });
     await db.put('drafts', { key: `inboxCapture:${userId}`, kind: 'inboxCapture', userId, title: 'draft', notes: '', updatedTs: NOW });
@@ -64,6 +74,7 @@ interface UserRowCounts {
     workContexts: number;
     reviewInboxes: number;
     itemBriefs: number;
+    claudeAsks: number;
     syncOps: number;
     hasCursor: boolean;
     drafts: number;
@@ -71,13 +82,14 @@ interface UserRowCounts {
 }
 
 async function countUserRows(db: IDBPDatabase<MyDB>, userId: string): Promise<UserRowCounts> {
-    const [items, routines, people, workContexts, reviewInboxes, itemBriefs, ops, cursor, drafts, account] = await Promise.all([
+    const [items, routines, people, workContexts, reviewInboxes, itemBriefs, claudeAsks, ops, cursor, drafts, account] = await Promise.all([
         db.getAllFromIndex('items', 'userId', userId),
         db.getAllFromIndex('routines', 'userId', userId),
         db.getAllFromIndex('people', 'userId', userId),
         db.getAllFromIndex('workContexts', 'userId', userId),
         db.getAllFromIndex('reviewInboxes', 'userId', userId),
         db.getAllFromIndex('itemBriefs', 'userId', userId),
+        db.getAllFromIndex('claudeAsks', 'userId', userId),
         db.getAll('syncOperations'),
         db.get('syncCursors', userId),
         db.getAll('drafts'),
@@ -90,6 +102,7 @@ async function countUserRows(db: IDBPDatabase<MyDB>, userId: string): Promise<Us
         workContexts: workContexts.length,
         reviewInboxes: reviewInboxes.length,
         itemBriefs: itemBriefs.length,
+        claudeAsks: claudeAsks.length,
         syncOps: ops.filter((op) => op.userId === userId).length,
         hasCursor: cursor !== undefined,
         drafts: drafts.filter((draft) => draft.userId === userId).length,
@@ -104,6 +117,7 @@ const EMPTY: UserRowCounts = {
     workContexts: 0,
     reviewInboxes: 0,
     itemBriefs: 0,
+    claudeAsks: 0,
     syncOps: 0,
     hasCursor: false,
     drafts: 0,
@@ -117,6 +131,7 @@ const FULL: UserRowCounts = {
     workContexts: 1,
     reviewInboxes: 1,
     itemBriefs: 1,
+    claudeAsks: 1,
     syncOps: 1,
     hasCursor: true,
     drafts: 1,

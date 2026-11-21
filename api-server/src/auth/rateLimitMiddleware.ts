@@ -67,6 +67,7 @@ export function classifyRequest(method: string, path: string): 'write' | 'read' 
         // This classifier is an allowlist, not a method rule: an unlisted route gets NO limiter
         // at all (see authenticatedRateLimit), so every new write route must be added here.
         (method === 'PUT' && /^\/v1\/items\/[^/]+\/brief$/.test(path)) ||
+        (method === 'PUT' && /^\/v1\/claude-asks\/[^/]+\/result$/.test(path)) ||
         // Brief generation also has its own per-user cap (see routes/v1/itemBriefGenerate.ts);
         // the write bucket still applies so it counts against the token's overall write budget.
         (method === 'POST' && /^\/v1\/items\/[^/]+\/brief\/generate$/.test(path));

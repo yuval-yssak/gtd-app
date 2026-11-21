@@ -12,6 +12,7 @@ import {
     SyncAuthError,
 } from '#api/syncClient';
 import type { ServerItemBriefSnapshot } from '../api/briefApi';
+import type { ServerClaudeAskSnapshot } from '../api/claudeRoutineApi';
 import { describeDevice } from '../lib/deviceLabel';
 import { forgetNetworkVerificationFor, markVerifiedWithNetwork, notifySyncQueueChanged } from '../lib/syncFreshness';
 import { hasAtLeastOne } from '../lib/typeUtils';
@@ -19,6 +20,7 @@ import type {
     EntityType,
     MyDB,
     OpType,
+    StoredClaudeAsk,
     StoredEntity,
     StoredItem,
     StoredItemBrief,
@@ -497,7 +499,7 @@ async function runBootstrap(db: IDBPDatabase<MyDB>, userId: string): Promise<voi
 
     // describeDevice gives the row a human-readable label for Settings → Connected devices.
     // navigator.userAgent exists in both window and Service Worker globals.
-    const { items, routines, people, workContexts, reviewInboxes, itemBriefs, serverTs, serverId } = await fetchBootstrap({
+    const { items, routines, people, workContexts, reviewInboxes, itemBriefs, claudeAsks, serverTs, serverId } = await fetchBootstrap({
         deviceId,
         deviceLabel: describeDevice(navigator.userAgent),
         expectUserId: userId,
@@ -511,6 +513,8 @@ async function runBootstrap(db: IDBPDatabase<MyDB>, userId: string): Promise<voi
     const mappedReviewInboxes = (reviewInboxes ?? []).map((doc) => remapUser(doc) as unknown as StoredReviewInbox);
     // Same `?? []` for itemBriefs — a server deployed before the entity omits the field entirely.
     const mappedItemBriefs = (itemBriefs ?? []).map((doc) => remapUser(doc) as unknown as StoredItemBrief);
+    // And for claudeAsks — servers predating "Ask Claude" omit it.
+    const mappedClaudeAsks = (claudeAsks ?? []).map((doc) => remapUser(doc) as unknown as StoredClaudeAsk);
 
     await withCrossContextLock(SYNC_APPLY_LOCK, async () => {
         if (await isRemovedFromDevice(db, userId)) {
@@ -532,6 +536,9 @@ async function runBootstrap(db: IDBPDatabase<MyDB>, userId: string): Promise<voi
 
         const itemBriefsTx = db.transaction('itemBriefs', 'readwrite');
         await Promise.all([...mappedItemBriefs.map((brief) => itemBriefsTx.store.put(brief)), itemBriefsTx.done]);
+
+        const claudeAsksTx = db.transaction('claudeAsks', 'readwrite');
+        await Promise.all([...mappedClaudeAsks.map((ask) => claudeAsksTx.store.put(ask)), claudeAsksTx.done]);
 
         // Per-user compound cursor at (serverTs, serverId) — the snapshot already delivered the current
         // state, so incremental pull starts from here. The server holds the boundary a few seconds back
@@ -944,6 +951,8 @@ async function applyServerOp(db: IDBPDatabase<MyDB>, pullUserId: string, op: Ser
             return applyEntityOp(db, 'reviewInboxes', pullUserId, op);
         case 'itemBrief':
             return applyEntityOp(db, 'itemBriefs', pullUserId, op);
+        case 'claudeAsk':
+            return applyEntityOp(db, 'claudeAsks', pullUserId, op);
         default: {
             // Compile-time exhaustiveness: a new EntityType without a case here becomes a type
             // error. At runtime this branch IS reachable — a server deployed ahead of this client
@@ -958,7 +967,7 @@ async function applyServerOp(db: IDBPDatabase<MyDB>, pullUserId: string, op: Ser
 }
 
 /** The IDB stores that back syncable entities. */
-type EntityStoreName = 'items' | 'routines' | 'people' | 'workContexts' | 'reviewInboxes' | 'itemBriefs';
+type EntityStoreName = 'items' | 'routines' | 'people' | 'workContexts' | 'reviewInboxes' | 'itemBriefs' | 'claudeAsks';
 
 /**
  * Applies a brief row the server handed straight back to this device (the on-demand generate
@@ -969,6 +978,15 @@ type EntityStoreName = 'items' | 'routines' | 'people' | 'workContexts' | 'revie
  */
 export async function applyServerItemBrief(db: IDBPDatabase<MyDB>, snapshot: ServerItemBriefSnapshot): Promise<void> {
     await applyEntityOp(db, 'itemBriefs', snapshot.user, { entityType: 'itemBrief', entityId: snapshot._id, opType: 'update', snapshot });
+}
+
+/**
+ * Applies the ask row the start endpoint handed back through the same owner/LWW rule as the pull
+ * path, so the SSE-driven pull delivering the identical op moments later is an idempotent no-op.
+ * Server-authored, so no sync op is queued.
+ */
+export async function applyServerClaudeAsk(db: IDBPDatabase<MyDB>, snapshot: ServerClaudeAskSnapshot): Promise<void> {
+    await applyEntityOp(db, 'claudeAsks', snapshot.user, { entityType: 'claudeAsk', entityId: snapshot._id, opType: 'update', snapshot });
 }
 
 /**

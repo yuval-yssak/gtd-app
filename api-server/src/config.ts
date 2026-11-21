@@ -19,6 +19,17 @@ export function assertBriefFakeModelNotInProduction(env: { NODE_ENV?: string; BR
 }
 
 /**
+ * `CLAUDE_ROUTINE_FAKE=1` makes starting a Claude routine return a fake session instead of calling
+ * Anthropic (e2e and local dev — see lib/claudeRoutine/startClaudeRoutine.ts). Production refuses
+ * to boot with it, so a copied env file can never hand real users sessions that do not exist.
+ */
+export function assertClaudeRoutineFakeNotInProduction(env: { NODE_ENV?: string; CLAUDE_ROUTINE_FAKE?: string }): void {
+    if (env.NODE_ENV === 'production' && env.CLAUDE_ROUTINE_FAKE === '1') {
+        throw new Error('CLAUDE_ROUTINE_FAKE=1 is a test-only flag and must not be set in production');
+    }
+}
+
+/**
  * Better Auth signs every session cookie with `BETTER_AUTH_SECRET` — and, since
  * `account.encryptOAuthTokens` is on, also encrypts the stored Google/GitHub sign-in tokens with
  * it, so rotating the secret invalidates those tokens too (users simply sign in again). `auth/betterAuth.ts` falls back

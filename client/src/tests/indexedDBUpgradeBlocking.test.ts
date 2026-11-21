@@ -22,10 +22,10 @@ async function openNextVersionOrFailFast() {
     // let: the timer handle must escape the promise executor so the finally can clear it
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error('v11 open stayed blocked — the existing connection was never released')), 1000);
+        timer = setTimeout(() => reject(new Error('v12 open stayed blocked — the existing connection was never released')), 1000);
     });
     try {
-        return await Promise.race([openDB('gtd-app', 11, { upgrade() {} }), timeout]);
+        return await Promise.race([openDB('gtd-app', 12, { upgrade() {} }), timeout]);
     } finally {
         clearTimeout(timer);
     }
@@ -44,7 +44,7 @@ describe('openAppDB upgrade blocking', () => {
 
             staleConnection.close();
             const db = await opening;
-            expect(db.version).toBe(10);
+            expect(db.version).toBe(11);
             db.close();
         });
     });
@@ -62,7 +62,7 @@ describe('openAppDB upgrade blocking', () => {
         await withFreshIDB(async () => {
             const ours = await openAppDB();
             const upgraded = await openNextVersionOrFailFast();
-            expect(upgraded.version).toBe(11);
+            expect(upgraded.version).toBe(12);
             // Proves the release came from our `blocking` handler closing the connection —
             // a transaction on a closed connection throws InvalidStateError synchronously.
             expect(() => ours.transaction('accounts')).toThrow();
@@ -79,9 +79,9 @@ describe('withAppDB', () => {
                     throw new Error('boom');
                 }),
             ).rejects.toThrow('boom');
-            // A v11 open completing proves nothing is still holding the v10 connection.
+            // A v12 open completing proves nothing is still holding the v11 connection.
             const upgraded = await openNextVersionOrFailFast();
-            expect(upgraded.version).toBe(11);
+            expect(upgraded.version).toBe(12);
             upgraded.close();
         });
     });
@@ -89,9 +89,9 @@ describe('withAppDB', () => {
     it('runs the task against the opened DB and releases on success', async () => {
         await withFreshIDB(async () => {
             const version = await withAppDB(async (db) => db.version);
-            expect(version).toBe(10);
+            expect(version).toBe(11);
             const upgraded = await openNextVersionOrFailFast();
-            expect(upgraded.version).toBe(11);
+            expect(upgraded.version).toBe(12);
             upgraded.close();
         });
     });

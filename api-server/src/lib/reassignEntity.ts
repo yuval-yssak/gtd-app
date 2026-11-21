@@ -17,7 +17,7 @@ import {
     type WorkContextInterface,
 } from '../types/entities.js';
 import { applyAndPublishOperation, OperationValidationError } from './applyOperation.js';
-import { cascadeItemBriefRemoval } from './itemBriefCascade.js';
+import { cascadeItemSidecarRemoval } from './itemSidecarCascade.js';
 import { KeyedMutex } from './keyedMutex.js';
 import { notifyChanges } from './notifyChange.js';
 import { applyAndPublishOwnerMove, republishOwnerMoveOps } from './ownerMove.js';
@@ -153,6 +153,13 @@ async function dispatchByEntityType(params: ReassignParams): Promise<ReassignRes
                 error: 'itemBriefs follow their item — reassign the item instead (its brief is dropped on the source side)',
                 code: 'validation_failed',
             };
+        case 'claudeAsk':
+            return {
+                ok: false,
+                status: 400,
+                error: 'claudeAsks follow their item — reassign the item instead (its asks are dropped on the source side)',
+                code: 'validation_failed',
+            };
     }
 }
 
@@ -209,14 +216,15 @@ async function reassignItem(params: ReassignParams): Promise<ReassignResult> {
         // the same idempotency branch as the up-front miss.
         return resolveItemAlreadyMoved(params);
     }
-    // The brief stays behind: it is not part of the owner flip (separate collection), and the
-    // target's sweeper regenerates one from the moved content.
-    await cascadeItemBriefRemoval(params.fromUserId, params.entityId);
+    // The brief and the Claude asks stay behind: neither is part of the owner flip (separate
+    // collections). The target's sweeper regenerates a brief; the asks recorded sessions on the
+    // source account's Claude routine.
+    await cascadeItemSidecarRemoval(params.fromUserId, params.entityId);
     return { ok: true };
 }
 
 /**
- * Item arm of the already-moved branch. Re-runs the brief cascade on success: `ownerMove` bypasses
+ * Item arm of the already-moved branch. Re-runs the brief + Claude-ask cascades on success: `ownerMove` bypasses
  * the pipeline's reference cascades, so a crash between the atomic flip and the cascade above
  * would otherwise strand the source user's brief row forever — this retry is the only heal path.
  * The cascade is idempotent (no-op without a row).
@@ -226,7 +234,7 @@ async function resolveItemAlreadyMoved(params: ReassignParams): Promise<Reassign
     if (!alreadyMoved) {
         return { ok: false, status: 404, error: 'Item not found under fromUserId' };
     }
-    await cascadeItemBriefRemoval(params.fromUserId, params.entityId);
+    await cascadeItemSidecarRemoval(params.fromUserId, params.entityId);
     return alreadyMoved;
 }
 

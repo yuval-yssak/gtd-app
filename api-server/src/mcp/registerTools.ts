@@ -29,4 +29,6 @@ export const SERVER_INSTRUCTIONS = [
     "`done_generate_brief` asks the server's model for a brief immediately — use it only when the user wants one now.",
     'Briefs are only generated for OPEN items; a done or trashed item is never briefed (409 `brief_not_applicable`),',
     'though a brief written before it was closed is kept.',
+    'A request that comes from the Done app ("Ask Claude") names an `askId`: when you finish it, call',
+    '`done_report_claude_ask` with that id and a one-line summary (outcome `needsInput` if the user must answer first).',
 ].join(' ');

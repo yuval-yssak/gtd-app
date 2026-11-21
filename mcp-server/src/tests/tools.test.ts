@@ -4,6 +4,7 @@ import type { ApiClient } from '../apiClient.js';
 import { GtdApiError } from '../apiClient.js';
 import type { GtdEnvironment } from '../config.js';
 import { _batchToolsForTesting } from '../tools/batch.js';
+import { _claudeAskToolsForTesting } from '../tools/claudeAsks.js';
 import { _itemToolsForTesting } from '../tools/items.js';
 import { _meToolsForTesting } from '../tools/me.js';
 import { _peopleToolsForTesting } from '../tools/people.js';
@@ -617,5 +618,27 @@ describe('field-completeness guidance in tool descriptions', () => {
         for (const field of ['`energy`', '`time`', '`workContextIds`']) {
             expect(description).toContain(field);
         }
+    });
+});
+
+describe('done_report_claude_ask', () => {
+    const { reportClaudeAsk } = _claudeAskToolsForTesting;
+
+    it('PUTs /v1/claude-asks/:id/result with the summary, URL-encoding the id', async () => {
+        const { api, calls } = makeFakeApi();
+        await reportClaudeAsk.handler({ askId: 'ask/1', summary: 'Renamed the item' }, api);
+        const [call] = calls;
+        if (!call) throw new Error('expected one call');
+        expect(call.method).toBe('PUT');
+        expect(call.path).toBe('/v1/claude-asks/ask%2F1/result');
+        expect(call.body).toEqual({ summary: 'Renamed the item' });
+    });
+
+    it('forwards the outcome only when given', async () => {
+        const { api, calls } = makeFakeApi();
+        await reportClaudeAsk.handler({ askId: 'a', summary: 'Which ticket?', outcome: 'needsInput' }, api);
+        const [call] = calls;
+        if (!call) throw new Error('expected one call');
+        expect(call.body).toEqual({ summary: 'Which ticket?', outcome: 'needsInput' });
     });
 });

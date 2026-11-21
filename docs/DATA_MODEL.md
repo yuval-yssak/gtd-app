@@ -140,7 +140,7 @@ The app is designed to work **100% offline**. All mutations are recorded as oper
 
 ### Operations log (server-side)
 
-Every change to any entity (`item`, `routine`, `person`, `workContext`, `reviewInbox`, `itemBrief`) is recorded as an `OperationInterface` document on the server. Each operation stores:
+Every change to any entity (`item`, `routine`, `person`, `workContext`, `reviewInbox`, `itemBrief`, `claudeAsk`) is recorded as an `OperationInterface` document on the server. Each operation stores:
 
 - `deviceId` — which device originated the change
 - `ts` — when the change was made on the device (ISO datetime)
@@ -272,6 +272,15 @@ It is **tri-state**: `true` = needs a sweep, `false` = swept and settled, absent
 
 It is a **selection hint, not an authority** — `lib/brief/briefWriter.ts`'s compare-and-set re-reads the item and hashes for real, and settling is guarded on the item's content so a write racing the sweep cannot have its mark erased. `presentItem`'s allowlist hides it from the public API; the op schema accepts it only to stay a strict superset of the interface (a narrower schema would 400 the whole `/sync/push` batch). See `lib/brief/briefStaleMarker.ts`.
 
+### Ask Claude (`claudeAsks`, `claudeRoutineConnections`)
+
+"Ask Claude" on an item starts the user's **Claude routine** — a Claude Code cloud routine on claude.ai (not a Done [routine](#routines-recurring-tasks)) — with the item's id, link, title, status, notes and the user's prompt, through `POST /account/claude-routine/asks` (session-authed). The session runs on the user's Claude subscription with that Claude account's connectors and reports back through MCP `done_report_claude_ask` (`PUT /v1/claude-asks/:id/result`).
+
+- **`claudeRoutineConnections`** (server-only) — one row per user: the Claude routine id (`trig_…`) and its bearer token, encrypted at rest with `lib/tokenEncryption.ts`. The token never leaves the server; Settings sees only its last four characters. Exported with the token removed.
+- **`claudeAsk`** (synced entity, collection `claudeAsks`) — one row per ask: prompt, Claude Code session id + link, and Claude's `result` once reported. **Server-written only**: `/sync/push` drops a device-pushed `claudeAsk` op (never a 400, so a stray op cannot jam a queue) and `/v1/operations/batch` does not accept the type.
+- **Double submits** — the start endpoint has no idempotency key, so a start is refused with `409 claude_ask_in_flight` while the item's latest ask is under 20 s old (checked under a per-item lock).
+- **Lifecycle** — like briefs: item hard-delete and cross-account reassign drop the asks with recorded `claudeAsk` delete ops (`deviceId: 'server:claude-ask-cascade'`); trash and done keep them. Never web-pushed.
+
 ---
 
 ### `itemBriefs`
@@ -296,6 +305,46 @@ interface ItemBriefInterface {
 ```
 
 MongoDB indexes: `{ user }`, `{ user, sourceHash }` (`_id` is the implicit unique key). Op schema `schemas/operations/itemBrief.ts` is strict and a superset of the interface; it also pins `_id === itemId`.
+
+### `claudeAsks`
+
+Per-item history of "Ask Claude" requests (see [Ask Claude](#ask-claude-claudeasks-clauderoutineconnections)). Many per item.
+
+```typescript
+interface ClaudeAskInterface {
+    _id?: string;            // server-generated UUID (the askId Claude reports back with)
+    user: string;
+    itemId: string;
+    prompt: string;          // what the user asked, trimmed, ≤ 4000 chars
+    sessionId: string;       // Claude Code session started by the Claude routine
+    sessionUrl: string;      // https claude.ai link to that session
+    result?: {               // absent until Claude reports back
+        summary: string;     // one line, ≤ 280 chars
+        outcome: 'completed' | 'needsInput';
+        reportedTs: string;
+    };
+    createdTs: string;
+    updatedTs: string;       // LWW anchor for THIS entity only
+}
+```
+
+MongoDB indexes: `{ user }`, `{ user, itemId, createdTs: -1 }`. Op schema `schemas/operations/claudeAsk.ts` is strict and a superset of the interface.
+
+### `claudeRoutineConnections` (server-only)
+
+```typescript
+interface ClaudeRoutineConnectionInterface {
+    _id?: string;            // === user (one row per user)
+    user: string;
+    claudeRoutineId: string; // trig_…
+    tokenEncrypted: string;  // encrypt(token) — iv:authTag:ciphertext
+    tokenHint: string;       // last four characters, shown in Settings
+    createdTs: string;
+    updatedTs: string;
+}
+```
+
+MongoDB index: `{ user }` (unique).
 
 ### `briefBatches` / `briefBatchRequests` (server-only)
 
@@ -447,7 +496,7 @@ interface OperationInterface {
     user: string;
     deviceId: string;
     ts: string;                      // ISO datetime — stamped by the server at insert time (op identity), not the device clock
-    entityType: 'item' | 'routine' | 'person' | 'workContext' | 'reviewInbox' | 'itemBrief';
+    entityType: 'item' | 'routine' | 'person' | 'workContext' | 'reviewInbox' | 'itemBrief' | 'claudeAsk';
     entityId: string;
     opType: 'create' | 'update' | 'delete' | 'rsvp';
     snapshot: ItemInterface | RoutineInterface | PersonInterface | WorkContextInterface | ReviewInboxInterface | ItemBriefInterface | null;

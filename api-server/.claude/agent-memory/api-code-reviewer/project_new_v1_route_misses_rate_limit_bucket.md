@@ -8,8 +8,10 @@ metadata:
 Every new `/v1/*` route so far has shipped without its arm in `classifyRequest`
 (`auth/rateLimitMiddleware.ts`). `classifyRequest` returns `null` for unmatched
 method+path and the middleware then calls `next()` — i.e. **no limiter at all**,
-not a fallback bucket. Confirmed unrate-limited so far: `POST /v1/items/:id/trash`
-and `PUT /v1/items/:id/brief`. The `PUT` method is not matched by any arm at all.
+not a fallback bucket. Confirmed unrate-limited so far: `POST /v1/items/:id/trash`,
+`POST /v1/items/:id/move`, and (2026-11-21 ask-claude review) `PUT /v1/claude-asks/:id/result`.
+(`PUT /v1/items/:id/brief` was since added.) Still happening even after a comment
+was added in the classifier saying "every new write route must be added here".
 
 **Why:** the classifier is a hand-maintained literal/regex list decoupled from the
 Hono route table, so nothing fails when they drift. `docs/PUBLIC_API.md` compounds

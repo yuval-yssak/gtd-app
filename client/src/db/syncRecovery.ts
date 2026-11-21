@@ -23,12 +23,15 @@ export async function countQueuedOpsForUser(db: IDBPDatabase<MyDB>, userId: stri
     return (await readQueuedOpsForUser(db, userId)).length;
 }
 
-/** The display text of a queued snapshot: items/routines carry a title, people/contexts/inboxes a name, briefs their text. */
+/** The display text of a queued snapshot: items/routines carry a title, people/contexts/inboxes a name, Claude asks a prompt, briefs their text. */
 function snapshotLabel(snapshot: NonNullable<SyncOperation['snapshot']>): string | null {
     if ('title' in snapshot) {
         return snapshot.title;
     }
-    return 'name' in snapshot ? snapshot.name : snapshot.text;
+    if ('name' in snapshot) {
+        return snapshot.name;
+    }
+    return 'prompt' in snapshot ? snapshot.prompt : snapshot.text;
 }
 
 /** One human-readable line per queued op, e.g. `create item: "Buy milk"` — used by exports + the flush-failure dialog. */

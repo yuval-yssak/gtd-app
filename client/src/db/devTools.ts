@@ -12,6 +12,7 @@ import { setItemsReadDelayForTesting } from '../data/appResource';
 import { setLongAwayMs } from '../lib/appResume';
 import { briefSourceHash } from '../lib/briefSource';
 import type { MyDB, StoredItem, StoredItemBrief } from '../types/MyDB';
+import { getClaudeAskById, getClaudeAsksByUser } from './claudeAskHelpers';
 import { getOrCreateDeviceId } from './deviceId';
 import { getItemBriefById, getItemBriefsByUser, putItemBrief } from './itemBriefHelpers';
 import { clearBrief, setUserBrief } from './itemBriefMutations';
@@ -152,6 +153,10 @@ export function mountDevTools(db: IDBPDatabase<MyDB>): void {
         setUserBrief: (item: StoredItem, text: string) => setUserBrief(db, item, text),
         clearBrief: (itemId: string) => clearBrief(db, itemId),
         seedDeclinedBrief: (item: StoredItem, origin: 'model' | 'skipped') => seedDeclinedBrief(db, item, origin),
+
+        // ── Claude asks ("Ask Claude" history, server-written) ──────────────
+        listClaudeAsks: () => resolveUserId(db).then((uid) => getClaudeAsksByUser(db, uid)),
+        getClaudeAsk: (askId: string) => getClaudeAskById(db, askId),
 
         // ── Routines ─────────────────────────────────────────────────────────
         listRoutines: () => resolveUserId(db).then((uid) => getRoutinesByUser(db, uid)),

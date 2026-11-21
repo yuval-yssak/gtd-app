@@ -19,8 +19,31 @@ describe('LEGAL_EFFECTIVE_DATE', () => {
 
 /** The connector's use of calendar data, worded identically in the policy, the landing page and the noscript mirror. */
 const CONNECTOR_CALENDAR_USE = 'your calendar items and routines to Claude when it reads them on your behalf';
+/** Ask Claude's use of calendar data, worded identically in the policy, the landing page and the noscript mirror. */
+const ASK_CLAUDE_CALENDAR_USE = "a calendar item's title, status and notes to your Claude routine when you ask Claude about that item";
 
 describe('privacy policy', () => {
+    it('discloses Ask Claude: what it sends, to whose Claude routine, and what Done keeps', () => {
+        const [, afterHeading] = privacy.markdown.split('## AI processing');
+        if (afterHeading === undefined) {
+            throw new Error('expected an "AI processing" section');
+        }
+        const [aiSection] = afterHeading.split('\n## ');
+        expect(aiSection).toContain('**Ask Claude**');
+        expect(aiSection).toContain('title, status, notes and your prompt to your own Claude routine');
+        expect(aiSection).toContain('token (encrypted at rest), your prompt');
+        expect(aiSection).toContain('one-line report');
+    });
+
+    it('lists Ask Claude among the Google Limited Use purposes, not after them', () => {
+        const match = privacy.markdown.match(/Calendar data is used only to provide user-facing features of the app: ([^.]*)\./);
+        if (!match) {
+            throw new Error('expected the Google Limited Use "used only to" sentence');
+        }
+        const [, usedOnlyTo] = match;
+        expect(usedOnlyTo).toContain(ASK_CLAUDE_CALENDAR_USE);
+    });
+
     it('names every processor from the data-flow inventory', () => {
         for (const processor of ['Google Cloud', 'MongoDB Atlas', 'Cloudflare', 'Anthropic', 'GitHub', 'push services']) {
             expect(privacy.markdown).toContain(processor);
@@ -66,7 +89,7 @@ describe('privacy policy', () => {
     });
 
     it('says what connecting Claude shares with Anthropic, and what of the conversation reaches the Service', () => {
-        expect(privacy.markdown).toContain('Done itself sends content to Anthropic, the provider of the Claude models, for one feature:');
+        expect(privacy.markdown).toContain('Done itself sends content to Anthropic, the provider of the Claude models, for two features:');
         expect(privacy.markdown).toContain('If you connect Claude to your account (Settings → Connect Claude)');
         expect(privacy.markdown).toContain(
             "the items, routines, people and work contexts Claude reads through the connector, and your account's email address,",
@@ -101,7 +124,9 @@ describe('privacy policy', () => {
 
     it('lists every use of Google Calendar data in the Limited Use paragraph, including the AI features that receive it', () => {
         expect(privacy.markdown).not.toContain('used only to provide the calendar-sync features');
-        expect(privacy.markdown).toContain('calendar sync; item briefs for calendar items, as described under "AI processing"; and, if you connect Claude');
+        expect(privacy.markdown).toContain(
+            `calendar sync; item briefs for calendar items, as described under "AI processing"; sending ${ASK_CLAUDE_CALENDAR_USE}, as described under "AI processing"; and, if you connect Claude`,
+        );
         expect(privacy.markdown).toContain(CONNECTOR_CALENDAR_USE);
         expect(privacy.markdown).toContain('for calendar items this can include an event description imported from Google Calendar');
     });

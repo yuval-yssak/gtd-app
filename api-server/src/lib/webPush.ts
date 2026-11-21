@@ -1,7 +1,7 @@
 import webPush from 'web-push';
 import deviceUsersDAO from '../dataAccess/deviceUsersDAO.js';
 import pushSubscriptionsDAO from '../dataAccess/pushSubscriptionsDAO.js';
-import type { OperationInterface, PushSubscriptionRecord } from '../types/entities.js';
+import type { EntityType, OperationInterface, PushSubscriptionRecord } from '../types/entities.js';
 import { entityDisplayName } from './entityDisplayName.js';
 
 const { VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT } = process.env;
@@ -14,6 +14,8 @@ if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY && VAPID_SUBJECT) {
 
 // Exposed so the client can subscribe with the correct key without a DB round-trip
 export const vapidPublicKey = VAPID_PUBLIC_KEY ?? null;
+
+const SILENT_ENTITY_TYPES: ReadonlySet<EntityType> = new Set(['itemBrief', 'claudeAsk']);
 
 export async function sendPushToSubscription(record: PushSubscriptionRecord, payload: object): Promise<void> {
     if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
@@ -49,9 +51,10 @@ export async function notifyViaWebPush(userId: string, excludeDeviceId: string |
         return;
     }
     // Item briefs are derived metadata — "Added: <brief text>" as an OS notification is noise on
-    // an authored write and a storm once the generation sweep runs. Devices still learn about them
-    // through SSE / the next pull; only the push leg is skipped.
-    const announced = ops.filter((op) => op.entityType !== 'itemBrief');
+    // an authored write and a storm once the generation sweep runs. Claude asks are side records
+    // of an item, not commitments. Devices still learn about both through SSE / the next pull;
+    // only the push leg is skipped.
+    const announced = ops.filter((op) => !SILENT_ENTITY_TYPES.has(op.entityType));
     if (!announced.length) {
         return;
     }

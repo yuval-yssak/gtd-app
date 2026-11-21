@@ -72,6 +72,8 @@ import { RoutineIndicator } from '../RoutineIndicator';
 import { RoutineScheduleFields } from '../routineEditor/RoutineScheduleFields';
 import type { FormState as RoutineFormState } from '../routineEditor/routineFormState';
 import { UnsavedChangesDialog } from '../UnsavedChangesDialog';
+import { AskClaudeSection } from './AskClaudeSection';
+import { asksForItem, isAskClaudeAvailable } from './askClaudeLogic';
 import { BriefSection } from './BriefSection';
 import {
     decideBriefCommit,
@@ -121,6 +123,7 @@ import { NotesSection } from './NotesSection';
 import { ReassignInFlightInline } from './ReassignInFlightInline';
 import { SendUpdatesDialog } from './SendUpdatesDialog';
 import { shouldFireSendUpdatesDialog } from './sendUpdatesDialogLogic';
+import { useAskClaude } from './useAskClaude';
 import { useBriefGeneration } from './useBriefGeneration';
 
 interface StatusChipConfig {
@@ -306,7 +309,7 @@ export function ItemEditorBody({
     const { options: calendarOptions } = useCalendarOptions(db);
     // all* (unfiltered) sets: the live-row lookup and routine-link resolution must keep working
     // when this item's owner account is toggled out of view (editor reached via deep link).
-    const { loggedInAccounts, allRoutines, allItems, allWorkContexts, allPeople, allItemBriefs, refreshItemBriefs } = useAppData();
+    const { loggedInAccounts, allRoutines, allItems, allWorkContexts, allPeople, allItemBriefs, allClaudeAsks, refreshItemBriefs } = useAppData();
     const { runReassignWithOverlay, isPending } = usePendingReassign();
     const reassignInFlight = isPending('item', item._id);
 
@@ -326,6 +329,8 @@ export function ItemEditorBody({
     const flushItemTextRef = useRef(async () => {});
     const flushItemTextLocallyRef = useRef(async () => {});
     const briefGeneration = useBriefGeneration(db, { item: liveItem, brief: liveBrief, flushItemText: () => flushItemTextRef.current() });
+    const askClaudeState = useAskClaude(db, { item: liveItem, flushItemText: () => flushItemTextRef.current() });
+    const itemAsks = useMemo(() => asksForItem(allClaudeAsks, item._id), [allClaudeAsks, item._id]);
 
     const [title, setTitle] = useState(item.title);
     const [notes, setNotes] = useState(item.notes ?? '');
@@ -1375,6 +1380,8 @@ export function ItemEditorBody({
                 collapsible={isNotesFolded}
                 emptyRestingState={presentation === 'review' ? 'header' : 'editor'}
             />
+
+            {isAskClaudeAvailable(liveItem.status) && <AskClaudeSection state={askClaudeState} asks={itemAsks} isCollapsible={presentation === 'review'} />}
 
             {/* The item's place in its list's manual order — only while the chosen status is the SAVED one
                 (an item being moved to another list lands at that list's top on save) and the list has a

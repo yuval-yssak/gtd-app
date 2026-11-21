@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { entityDisplayName } from '../lib/entityDisplayName.js';
-import type { ItemBriefInterface, ItemInterface, PersonInterface } from '../types/entities.js';
+import type { ClaudeAskInterface, ItemBriefInterface, ItemInterface, PersonInterface } from '../types/entities.js';
 
 const TS = '2026-01-01T00:00:00.000Z';
 
@@ -22,6 +22,20 @@ describe('entityDisplayName', () => {
         expect(entityDisplayName(item)).toBe('Call dentist');
         expect(entityDisplayName(person)).toBe('Jane');
         expect(entityDisplayName(brief)).toBe('Still waiting on X');
+    });
+
+    it('labels a Claude ask by its prompt', () => {
+        const ask: ClaudeAskInterface = {
+            _id: 'a',
+            user: 'u',
+            itemId: 'i',
+            prompt: 'Rename it',
+            sessionId: 's',
+            sessionUrl: 'https://claude.ai/code/s',
+            createdTs: TS,
+            updatedTs: TS,
+        };
+        expect(entityDisplayName(ask)).toBe('Rename it');
     });
 
     it('returns no label (undefined, not an empty string) for a skipped brief', () => {

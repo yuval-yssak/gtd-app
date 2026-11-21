@@ -391,3 +391,49 @@ function openAppDBAtVersion9() {
         },
     });
 }
+
+describe('indexedDB v10 → v11 migration (claudeAsks store)', () => {
+    it('creates the claudeAsks store with userId and itemId indexes without touching existing data', async () => {
+        await withFreshIDB(async () => {
+            const v10 = await openAppDBAtVersion10();
+            await v10.put('itemBriefs', {
+                _id: 'i1',
+                userId: 'u1',
+                itemId: 'i1',
+                text: 'brief',
+                origin: 'user',
+                sourceHash: 'h',
+                generatedTs: '2026-01-01T00:00:00.000Z',
+                createdTs: '2026-01-01T00:00:00.000Z',
+                updatedTs: '2026-01-01T00:00:00.000Z',
+            });
+            v10.close();
+
+            const upgraded = await openAppDB();
+            expect([...upgraded.objectStoreNames]).toContain('claudeAsks');
+            const store = upgraded.transaction('claudeAsks').store;
+            expect([...store.indexNames].sort()).toEqual(['itemId', 'userId']);
+            expect(await upgraded.get('itemBriefs', 'i1')).toMatchObject({ text: 'brief' });
+            expect(await upgraded.getAll('claudeAsks')).toEqual([]);
+            upgraded.close();
+        });
+    });
+});
+
+/** The full v10 schema, created directly so the v11 step runs alone. */
+function openAppDBAtVersion10() {
+    return openDB<MyDB>('gtd-app', 10, {
+        upgrade(db) {
+            db.createObjectStore('accounts', { keyPath: 'id' }).createIndex('email', 'email', { unique: true });
+            db.createObjectStore('activeAccount');
+            for (const store of ['items', 'routines', 'people', 'workContexts', 'reviewInboxes', 'itemBriefs'] as const) {
+                db.createObjectStore(store, { keyPath: '_id' }).createIndex('userId', 'userId', { unique: false });
+            }
+            db.createObjectStore('syncOperations', { autoIncrement: true, keyPath: 'id' });
+            db.createObjectStore('deviceMeta', { keyPath: '_id' });
+            db.createObjectStore('syncCursors', { keyPath: 'userId' });
+            db.createObjectStore('drafts', { keyPath: 'key' });
+            db.createObjectStore('calendarOptions', { keyPath: 'userId' });
+        },
+    });
+}

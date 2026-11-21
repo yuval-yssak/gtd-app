@@ -6,6 +6,7 @@ import { AppErrorBoundary } from '../../components/AppErrorBoundary';
 import { AccountDataSection } from '../../components/settings/AccountDataSection';
 import { CalendarIntegrations } from '../../components/settings/CalendarIntegrations';
 import { CalendarIntegrationsSkeleton } from '../../components/settings/CalendarIntegrationsSkeleton';
+import { ClaudeRoutineSection } from '../../components/settings/ClaudeRoutineSection';
 import { ConnectClaude } from '../../components/settings/ConnectClaude';
 import { ConnectedDevices } from '../../components/settings/ConnectedDevices';
 import { PersonalApiTokens } from '../../components/settings/PersonalApiTokens';
@@ -87,6 +88,14 @@ function SettingsPage() {
                 isDivided
             >
                 <ConnectClaude />
+            </SettingsSection>
+            {/* "Ask Claude" on an item starts this Claude Code cloud routine (not a Done routine) */}
+            <SettingsSection
+                title="Claude routine"
+                description="Ask Claude about any item from inside Done. Done starts your Claude routine, a Claude Code session in Anthropic's cloud that runs on your Claude plan with your claude.ai connectors, and keeps a link to each session on the item."
+                isDivided
+            >
+                <ClaudeRoutineSection />
             </SettingsSection>
             <SettingsSection
                 title="Personal API tokens"

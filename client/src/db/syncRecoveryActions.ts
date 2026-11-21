@@ -80,13 +80,14 @@ async function runBootstrapPhase(db: IDBPDatabase<MyDB>, userId: string, task: (
     }
 }
 
-const ENTITY_STORE_BY_TYPE: Record<EntityType, 'items' | 'routines' | 'people' | 'workContexts' | 'reviewInboxes' | 'itemBriefs'> = {
+const ENTITY_STORE_BY_TYPE: Record<EntityType, 'items' | 'routines' | 'people' | 'workContexts' | 'reviewInboxes' | 'itemBriefs' | 'claudeAsks'> = {
     item: 'items',
     routine: 'routines',
     person: 'people',
     workContext: 'workContexts',
     reviewInbox: 'reviewInboxes',
     itemBrief: 'itemBriefs',
+    claudeAsk: 'claudeAsks',
 };
 
 async function deleteQueuedOpsForUser(db: IDBPDatabase<MyDB>, userId: string): Promise<void> {

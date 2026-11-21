@@ -69,6 +69,7 @@ export const USER_DATA_COLLECTIONS: readonly UserCollectionSpec[] = [
     { collection: 'workContexts', ownedBy: 'user', filter: byUser, export: { kind: 'full' } },
     { collection: 'reviewInboxes', ownedBy: 'user', filter: byUser, export: { kind: 'full' } },
     { collection: 'itemBriefs', ownedBy: 'user', filter: byUser, export: { kind: 'full' } },
+    { collection: 'claudeAsks', ownedBy: 'user', filter: byUser, export: { kind: 'full' } },
     // ── Sync bookkeeping ──────────────────────────────────────────────────────
     {
         collection: 'operations',
@@ -113,6 +114,9 @@ export const USER_DATA_COLLECTIONS: readonly UserCollectionSpec[] = [
         // The Google sync token is an opaque incremental-sync cursor, not user data.
         export: { kind: 'redacted', redact: omitFields('syncToken') },
     },
+    // ── Claude routine ────────────────────────────────────────────────────────
+    // The Claude routine bearer token starts sessions on the user's Claude subscription.
+    { collection: 'claudeRoutineConnections', ownedBy: 'user', filter: byUser, export: { kind: 'redacted', redact: omitFields('tokenEncrypted') } },
     // ── Public API, webhooks, MCP OAuth ───────────────────────────────────────
     { collection: 'apiTokens', ownedBy: 'user', filter: byUser, export: { kind: 'redacted', redact: omitFields('tokenHash') } },
     { collection: 'webhookSubscriptions', ownedBy: 'user', filter: byUser, export: { kind: 'redacted', redact: omitFields('secret') } },

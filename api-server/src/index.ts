@@ -3,12 +3,18 @@ import 'dotenv/config';
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { dualAuthCors, publicCors, strictCors } from './auth/corsProfiles.js';
-import { assertBriefFakeModelNotInProduction, assertSessionSecretConfiguredInProduction, shouldStartWebhookRenewalTimer } from './config.js';
+import {
+    assertBriefFakeModelNotInProduction,
+    assertClaudeRoutineFakeNotInProduction,
+    assertSessionSecretConfiguredInProduction,
+    shouldStartWebhookRenewalTimer,
+} from './config.js';
 import { noStoreCache } from './lib/noStoreCache.js';
 import { v1RequestLogger } from './lib/v1Logger.js';
 import { auth, loadDataAccess } from './loaders/mainLoader.js';
 import { accountRoutes, exportRoutes } from './routes/account.js';
 import { calendarRoutes } from './routes/calendar.js';
+import { claudeRoutineRoutes } from './routes/claudeRoutine.js';
 import { deviceRoutes } from './routes/devices.js';
 import { createHealthRoutes } from './routes/health.js';
 import { maintenanceRoutes } from './routes/maintenance.js';
@@ -80,6 +86,10 @@ const app = new Hono()
     // Bearer-only token mint would be a chicken-and-egg.
     .use('/account/tokens/*', strictCors())
     .route('/account/tokens', tokensRoutes)
+    // Session-authed like /account/tokens: Settings stores the Claude routine token, and the item
+    // editor starts it. Bearer callers never reach these.
+    .use('/account/claude-routine/*', strictCors())
+    .route('/account/claude-routine', claudeRoutineRoutes)
     // Remote MCP server (OAuth 2.1 + Streamable HTTP). Mounted top-level, OUTSIDE /v1, so the Claude
     // client's well-known discovery paths resolve at the API origin and the bearer model is distinct
     // from the public REST surface. See routes/mcpOAuth.ts + routes/mcp.ts.
@@ -105,6 +115,7 @@ export type AppType = typeof app;
 
 async function start() {
     assertBriefFakeModelNotInProduction(process.env);
+    assertClaudeRoutineFakeNotInProduction(process.env);
     assertSessionSecretConfiguredInProduction(process.env);
     await loadDataAccess();
 

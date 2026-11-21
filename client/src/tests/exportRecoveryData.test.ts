@@ -92,6 +92,7 @@ describe('buildLocalSnapshotExportFile', () => {
         expect(summary).toContain('routines: 0');
         expect(summary).toContain('workContexts: 0');
         expect(summary).toContain('itemBriefs: 0');
+        expect(summary).toContain('claudeAsks: 0');
 
         const snapshot = payload as { items: StoredItem[]; routines: unknown[]; people: unknown[]; workContexts: unknown[] };
         expect(snapshot.items.map((item) => item._id)).toEqual(['item-a1']);

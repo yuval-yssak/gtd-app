@@ -1,11 +1,12 @@
 import type { IDBPDatabase } from 'idb';
+import { getClaudeAsksAcrossUsers } from '../db/claudeAskHelpers';
 import { getItemBriefsAcrossUsers } from '../db/itemBriefHelpers';
 import { getItemsAcrossUsers } from '../db/itemHelpers';
 import { getPeopleAcrossUsers } from '../db/personHelpers';
 import { getReviewInboxesAcrossUsers } from '../db/reviewInboxHelpers';
 import { getRoutinesAcrossUsers } from '../db/routineHelpers';
 import { getWorkContextsAcrossUsers } from '../db/workContextHelpers';
-import type { MyDB, StoredItem, StoredItemBrief, StoredPerson, StoredReviewInbox, StoredRoutine, StoredWorkContext } from '../types/MyDB';
+import type { MyDB, StoredClaudeAsk, StoredItem, StoredItemBrief, StoredPerson, StoredReviewInbox, StoredRoutine, StoredWorkContext } from '../types/MyDB';
 
 /**
  * Per-user-set bundle of promises that components `use()`. The fields are kept independent so
@@ -18,9 +19,10 @@ export interface AppResourceSnapshot {
     workContexts: Promise<StoredWorkContext[]>;
     reviewInboxes: Promise<StoredReviewInbox[]>;
     itemBriefs: Promise<StoredItemBrief[]>;
+    claudeAsks: Promise<StoredClaudeAsk[]>;
 }
 
-export type ResourceScope = 'items' | 'routines' | 'people' | 'workContexts' | 'reviewInboxes' | 'itemBriefs' | 'all';
+export type ResourceScope = 'items' | 'routines' | 'people' | 'workContexts' | 'reviewInboxes' | 'itemBriefs' | 'claudeAsks' | 'all';
 
 interface CacheEntry {
     db: IDBPDatabase<MyDB>;
@@ -77,6 +79,7 @@ function buildSnapshot(db: IDBPDatabase<MyDB>, userIds: readonly string[]): AppR
         workContexts: getWorkContextsAcrossUsers(db, ids),
         reviewInboxes: getReviewInboxesAcrossUsers(db, ids),
         itemBriefs: getItemBriefsAcrossUsers(db, ids),
+        claudeAsks: getClaudeAsksAcrossUsers(db, ids),
     };
 }
 
@@ -128,6 +131,8 @@ function replaceField(prev: AppResourceSnapshot, db: IDBPDatabase<MyDB>, userIds
             return { ...prev, reviewInboxes: getReviewInboxesAcrossUsers(db, userIds) };
         case 'itemBriefs':
             return { ...prev, itemBriefs: getItemBriefsAcrossUsers(db, userIds) };
+        case 'claudeAsks':
+            return { ...prev, claudeAsks: getClaudeAsksAcrossUsers(db, userIds) };
     }
 }
 

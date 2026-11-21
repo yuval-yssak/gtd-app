@@ -34,6 +34,8 @@ declare namespace NodeJS {
         ANTHROPIC_API_KEY?: string;
         /** TEST-ONLY: `'1'` makes brief generation return a deterministic fake (e2e). Production refuses to boot with it. */
         BRIEF_FAKE_MODEL?: string;
+        /** Test-only: `1` makes starting a Claude routine return a fake session instead of calling Anthropic. */
+        CLAUDE_ROUTINE_FAKE?: string;
         /** Operator switch: `'1'` regenerates an item's brief ~30 s after each edit (write-path escape hatch). Off by default. */
         BRIEF_INLINE_ON_WRITE?: string;
         /** Per-user on-demand brief generations per 10 minutes. Defaults to 30. */

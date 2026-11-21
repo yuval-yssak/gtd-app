@@ -2,7 +2,7 @@ import type { DBSchema } from 'idb';
 
 export type OAuthProvider = 'google' | 'github';
 export type EnergyLevel = 'low' | 'medium' | 'high';
-export type EntityType = 'item' | 'routine' | 'person' | 'workContext' | 'reviewInbox' | 'itemBrief';
+export type EntityType = 'item' | 'routine' | 'person' | 'workContext' | 'reviewInbox' | 'itemBrief' | 'claudeAsk';
 export type OpType = 'create' | 'update' | 'delete' | 'rsvp';
 
 /** Mirrored from api-server/src/types/entities.ts. Keep in sync. */
@@ -276,6 +276,34 @@ export interface StoredItemBrief {
     updatedTs: string; // LWW anchor for THIS entity only
 }
 
+/** How a Claude routine session ended, as reported back by Claude (`done_report_claude_ask`). */
+export type ClaudeAskOutcome = 'completed' | 'needsInput';
+
+export interface StoredClaudeAskResult {
+    summary: string;
+    outcome: ClaudeAskOutcome;
+    reportedTs: string;
+}
+
+/**
+ * One "Ask Claude" request on an item: the prompt, the Claude Code session it started through the
+ * user's Claude routine (a Claude Code cloud routine — not a Done routine), and Claude's report.
+ * Server-written only: devices apply it from bootstrap/pull and never queue an op for it. Mirrors
+ * ClaudeAskInterface on the server (`user` remapped to `userId`). Many per item.
+ */
+export interface StoredClaudeAsk {
+    _id: string;
+    userId: string;
+    itemId: string;
+    prompt: string;
+    sessionId: string;
+    sessionUrl: string;
+    /** Absent until Claude reports back. */
+    result?: StoredClaudeAskResult;
+    createdTs: string;
+    updatedTs: string;
+}
+
 /** Per-calendar sync configuration — one OAuth integration can sync multiple Google Calendars. */
 export interface StoredCalendarSyncConfig {
     _id: string;
@@ -294,7 +322,7 @@ export interface StoredCalendarSyncConfig {
     updatedTs: string;
 }
 
-export type StoredEntity = StoredItem | StoredRoutine | StoredPerson | StoredWorkContext | StoredReviewInbox | StoredItemBrief;
+export type StoredEntity = StoredItem | StoredRoutine | StoredPerson | StoredWorkContext | StoredReviewInbox | StoredItemBrief | StoredClaudeAsk;
 
 /**
  * Device-local unsaved-input draft. Never synced to the server — drafts exist so text typed into a
@@ -482,6 +510,12 @@ export interface MyDB extends DBSchema {
         key: string; // StoredItemBrief._id === StoredItem._id
         value: StoredItemBrief;
         indexes: { userId: string };
+    };
+    // "Ask Claude" history rows — many per item, server-written (sidecar of `items`)
+    claudeAsks: {
+        key: string; // StoredClaudeAsk._id
+        value: StoredClaudeAsk;
+        indexes: { userId: string; itemId: string };
     };
     // Pending mutations to replay against the server when connectivity is restored
     syncOperations: {

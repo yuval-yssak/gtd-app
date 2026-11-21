@@ -446,6 +446,9 @@ VAPID_SUBJECT=mailto:admin@example.com
 
 # Item briefs
 ANTHROPIC_API_KEY=sk-ant-api03-...            # Anthropic API key (see "Anthropic API key setup" below)
+
+# Ask Claude — test-only; never set in a deployed environment
+# CLAUDE_ROUTINE_FAKE=1                       # fake Claude routine sessions instead of calling Anthropic (e2e); production refuses to boot with it
 ```
 
 **Dev defaults** (applied when `NODE_ENV !== 'production'`):
@@ -455,6 +458,7 @@ ANTHROPIC_API_KEY=sk-ant-api03-...            # Anthropic API key (see "Anthropi
 - `CALENDAR_ENCRYPTION_KEY` — zeros (insecure, dev only)
 - Web Push keys — optional; warnings if missing
 - `ANTHROPIC_API_KEY` — none; brief generation answers `503 agent_unavailable` until it is set (the rest of the server runs fine without it)
+- "Ask Claude" needs no server key: each user stores their own Claude routine id + token in Settings (encrypted with `CALENDAR_ENCRYPTION_KEY`), and runs bill to that user's Claude subscription
 
 ## Anthropic API key setup
 

@@ -4,10 +4,12 @@
  * the 401 discovery path. The tools call back into `/v1/*` over loopback HTTP; the test routes that
  * loopback into the in-process app via a `fetch` stub so no real listener is needed.
  */
+import dayjs from 'dayjs';
 import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { issueOAuthAccessToken } from '../auth/apiTokens.js';
 import { __resetDefaultStoreForTests } from '../auth/rateLimitMiddleware.js';
+import { recordClaudeAsk } from '../lib/claudeAsks.js';
 import { MCP_SUPPORTED_SCOPES } from '../lib/mcpOAuth.js';
 import { closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { mcpRoutes } from '../routes/mcp.js';
@@ -45,6 +47,7 @@ beforeEach(async () => {
         db.collection('people').deleteMany({}),
         db.collection('routines').deleteMany({}),
         db.collection('itemBriefs').deleteMany({}),
+        db.collection('claudeAsks').deleteMany({}),
     ]);
     __resetDefaultStoreForTests();
     vi.restoreAllMocks();
@@ -128,6 +131,7 @@ describe('/mcp protocol', () => {
         expect(toolNames).toContain('done_capture');
         expect(toolNames).toContain('done_set_brief');
         expect(toolNames).toContain('done_generate_brief');
+        expect(toolNames).toContain('done_report_claude_ask');
 
         const call = await callMcp(token, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'done_me', arguments: {} } });
         expect(call.status).toBe(200);
@@ -305,6 +309,10 @@ describe('/mcp protocol', () => {
         // No notes to condense, so the server records a skip without calling the model.
         await call('done_generate_brief', { itemId });
         await call('done_set_brief', { itemId, brief: 'Passport expires in March.' });
+        // An "Ask Claude" session reports back on the ask Done recorded when it started the Claude routine.
+        const now = dayjs().toISOString();
+        await recordClaudeAsk({ askId: 'ask-walk', userId, itemId, prompt: 'Book it', sessionId: 's', sessionUrl: 'https://claude.ai/code/s', now });
+        await call('done_report_claude_ask', { askId: 'ask-walk', summary: 'Booked the appointment.' });
         await call('done_complete_item', { id: itemId });
         await call('done_trash_item', { id: itemId });
 

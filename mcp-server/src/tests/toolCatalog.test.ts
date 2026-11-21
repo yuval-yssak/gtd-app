@@ -81,6 +81,7 @@ const IDEMPOTENT_WRITES = [
     'done_delete_work_context',
     'done_move_item',
     'done_pause_routine',
+    'done_report_claude_ask',
     'done_set_brief',
     'done_trash_item',
     'done_update_item',

@@ -200,6 +200,28 @@ describe('Push fan-out via deviceUsers join', () => {
         expect(payload.ops).toEqual([{ entityType: 'item', opType: 'create', name: 'Test' }]);
     });
 
+    it('never pushes for claudeAsk ops (side records of an item)', async () => {
+        await seedSubscribedDevice('device-ask');
+        mockSendNotification.mockResolvedValue({ statusCode: 201, body: '', headers: {} });
+        const askOp = makeOp({
+            entityType: 'claudeAsk',
+            opType: 'update',
+            snapshot: {
+                _id: 'a',
+                user: TEST_USER,
+                itemId: 'x',
+                prompt: 'Rename it',
+                sessionId: 's',
+                sessionUrl: 'https://claude.ai/code/s',
+                createdTs: '',
+                updatedTs: '',
+            },
+        });
+
+        await notifyViaWebPush(TEST_USER, null, [askOp], dayjs().toISOString());
+        expect(mockSendNotification).not.toHaveBeenCalled();
+    });
+
     it('sends no push when called with zero ops, even with subscribed devices', async () => {
         // A 0-op webhook sync (GCal fired but nothing changed locally) must not buzz any device.
         // This is the chokepoint guard for the staging notification storm — see notifyViaWebPush.

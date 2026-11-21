@@ -1,6 +1,7 @@
 import dayjs from 'dayjs';
 import type AbstractDAO from '../dataAccess/abstractDAO.js';
 import calendarIntegrationsDAO from '../dataAccess/calendarIntegrationsDAO.js';
+import claudeAsksDAO from '../dataAccess/claudeAsksDAO.js';
 import deviceSyncStateDAO from '../dataAccess/deviceSyncStateDAO.js';
 import itemBriefsDAO from '../dataAccess/itemBriefsDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
@@ -108,18 +109,20 @@ interface UserSyncState {
     workContexts: EntitySnapshot[];
     reviewInboxes: EntitySnapshot[];
     itemBriefs: EntitySnapshot[];
+    claudeAsks: EntitySnapshot[];
     deviceCursors: Array<{ deviceId: string; lastSyncedTs: string }>;
     integrationIds: Set<string>;
 }
 
 async function loadUserSyncState(userId: string): Promise<UserSyncState> {
-    const [items, routines, people, workContexts, reviewInboxes, itemBriefs, deviceStates, integrations] = await Promise.all([
+    const [items, routines, people, workContexts, reviewInboxes, itemBriefs, claudeAsks, deviceStates, integrations] = await Promise.all([
         itemsDAO.findArray({ user: userId }),
         routinesDAO.findArray({ user: userId }),
         peopleDAO.findArray({ user: userId }),
         workContextsDAO.findArray({ user: userId }),
         reviewInboxesDAO.findArray({ user: userId }),
         itemBriefsDAO.findArray({ user: userId }),
+        claudeAsksDAO.findArray({ user: userId }),
         deviceSyncStateDAO.findArray({ user: userId }),
         calendarIntegrationsDAO.findArray({ user: userId }),
     ]);
@@ -130,6 +133,7 @@ async function loadUserSyncState(userId: string): Promise<UserSyncState> {
         workContexts,
         reviewInboxes,
         itemBriefs,
+        claudeAsks,
         deviceCursors: deviceStates.map((row) => ({ deviceId: row.deviceId, lastSyncedTs: row.lastSyncedTs })),
         integrationIds: new Set(integrations.map((integration) => integration._id)),
     };
@@ -222,6 +226,7 @@ function findPoisonedWatermarks(state: UserSyncState, now: string): PoisonedWate
         ['workContext', state.workContexts],
         ['reviewInbox', state.reviewInboxes],
         ['itemBrief', state.itemBriefs],
+        ['claudeAsk', state.claudeAsks],
     ];
     return byType.flatMap(([entityType, rows]) =>
         rows.filter((row) => row.updatedTs > horizon).map((row) => ({ entityType, entityId: row._id ?? '', updatedTs: row.updatedTs })),
@@ -271,6 +276,8 @@ export function healPoisonedWatermark(userId: string, finding: PoisonedWatermark
             return restampEntity(reviewInboxesDAO, userId, finding, now);
         case 'itemBrief':
             return restampEntity(itemBriefsDAO, userId, finding, now);
+        case 'claudeAsk':
+            return restampEntity(claudeAsksDAO, userId, finding, now);
     }
 }
 

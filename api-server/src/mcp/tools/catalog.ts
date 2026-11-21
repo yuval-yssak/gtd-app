@@ -2,6 +2,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ApiClient } from '../apiClient.js';
 import { registerBatchTools } from './batch.js';
+import { registerClaudeAskTools } from './claudeAsks.js';
 import { registerItemTools } from './items.js';
 import { registerMeTools } from './me.js';
 import { registerPeopleTools } from './people.js';
@@ -18,4 +19,5 @@ export function registerAllTools(server: McpServer, api: ApiClient): void {
     registerReassignTools(server, api);
     registerBatchTools(server, api);
     registerMeTools(server, api);
+    registerClaudeAskTools(server, api);
 }

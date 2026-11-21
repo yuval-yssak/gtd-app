@@ -216,6 +216,7 @@ Every tool carries a `title` and all four MCP safety annotations, which a client
 | `done_move_item` | `POST /v1/items/:id/move` | `items.write` | `position?` (`top`/`bottom`) \| `before?` \| `after?` (exactly one), `account?` |
 | `done_set_brief` | `PUT /v1/items/:id/brief` | `items.write` | `account?` |
 | `done_generate_brief` | `POST /v1/items/:id/brief/generate` | `items.write` | `account?` |
+| `done_report_claude_ask` | `PUT /v1/claude-asks/:id/result` | `items.write` | `outcome?`, `account?` |
 | `done_list_routines` / `done_get_routine` | `GET /v1/routines[/:id]` | `routines.read` | `account?` |
 | `done_create_routine` / `done_update_routine` / `done_delete_routine` | routines CRUD | `routines.write` | `account?` |
 | `done_pause_routine` / `done_resume_routine` / `done_split_routine` | composite gestures | `routines.write` | `account?` |
