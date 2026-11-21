@@ -211,3 +211,11 @@
 .keyScope:focus {
     outline: none;
 }
+
+/* Pinned / Stale chips between the brief text and its buttons, padded to sit level with a one-line brief. */
+.briefLabels {
+    display: flex;
+    flex-shrink: 0;
+    gap: var(--space-1);
+    padding-block: 0.25rem;
+}

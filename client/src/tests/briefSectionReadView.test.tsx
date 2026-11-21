@@ -9,7 +9,10 @@ import {
     BRIEF_EMPTY_CLOSED_HINT,
     BRIEF_EMPTY_HINT,
     BRIEF_LABEL,
+    BRIEF_PINNED_LABEL,
     BRIEF_PINNED_NOTICE,
+    BRIEF_STALE_LABEL,
+    type BriefLabelView,
     describeEmptyBrief,
     isBriefableItemStatus,
 } from '../components/itemEditor/briefSectionLogic';
@@ -28,12 +31,22 @@ const idleGeneration: BriefGeneration = {
     keepBrief: noop,
 };
 
-function renderBrief(value: string, state: BriefState, variant: 'field' | 'line' = 'field', isBriefable = true) {
+const pinnedLabel: BriefLabelView = { kind: 'pinned', text: BRIEF_PINNED_LABEL, tooltip: 'You wrote this brief.' };
+const staleLabel: BriefLabelView = { kind: 'stale', text: BRIEF_STALE_LABEL, tooltip: 'Notes changed.' };
+
+interface RenderOptions {
+    variant?: 'field' | 'line';
+    isBriefable?: boolean;
+    labels?: readonly BriefLabelView[];
+}
+
+function renderBrief(value: string, state: BriefState, { variant = 'field', isBriefable = true, labels = [] }: RenderOptions = {}) {
     return renderToStaticMarkup(
         <BriefSection
             value={value}
             state={state}
             origin="model"
+            labels={labels}
             onChange={noop}
             onCommit={noop}
             generation={idleGeneration}
@@ -79,14 +92,28 @@ describe('BriefSection read view', () => {
     });
 
     it('never promises an automatic brief on a closed item', () => {
-        const html = renderBrief('', 'none', 'field', false);
+        const html = renderBrief('', 'none', { isBriefable: false });
         expect(html).not.toContain(BRIEF_EMPTY_HINT);
         expect(html).toContain(BRIEF_EMPTY_CLOSED_HINT);
     });
 
     it('labels the editor variant and leaves the review line unlabelled', () => {
-        expect(renderBrief('Line', 'fresh', 'field')).toContain(`>${BRIEF_LABEL}<`);
-        expect(renderBrief('Line', 'fresh', 'line')).not.toContain(`>${BRIEF_LABEL}<`);
+        expect(renderBrief('Line', 'fresh', { variant: 'field' })).toContain(`>${BRIEF_LABEL}<`);
+        expect(renderBrief('Line', 'fresh', { variant: 'line' })).not.toContain(`>${BRIEF_LABEL}<`);
+    });
+
+    it('shows each state label as text in the brief row, before the pencil', () => {
+        const html = renderBrief('A pinned line', 'pinnedStale', { variant: 'line', labels: [pinnedLabel, staleLabel] });
+        expect(html).toMatch(new RegExp(`data-testid="briefPinnedLabel"[^>]*>.*${BRIEF_PINNED_LABEL}<`));
+        expect(html).toMatch(new RegExp(`data-testid="briefStaleLabel"[^>]*>.*${BRIEF_STALE_LABEL}<`));
+        expect(html.indexOf('data-testid="briefLine"')).toBeLessThan(html.indexOf('data-testid="briefPinnedLabel"'));
+        expect(html.indexOf('data-testid="briefStaleLabel"')).toBeLessThan(html.indexOf('aria-label="Edit brief"'));
+    });
+
+    it('shows no label when there are none', () => {
+        const html = renderBrief('A pinned line', 'pinnedStale');
+        expect(html).not.toContain('briefPinnedLabel');
+        expect(html).not.toContain('briefStaleLabel');
     });
 
     it('keeps the generate button available in the read view', () => {

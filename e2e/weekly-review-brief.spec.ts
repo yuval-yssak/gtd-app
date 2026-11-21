@@ -6,8 +6,8 @@ import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Weekly-review presentation of item briefs: a review card with a brief on show leads with the
 // brief line and folds the notes behind "Show notes"; the header's "Show briefs" switch restores
-// the plain notes preview; editing the notes keeps a user-authored (pinned) brief with a stale
-// marker. The `declined` state (a text-less row) is covered both ways: a `skipped` row arises
+// the plain notes preview; editing the notes keeps a user-authored (Pinned) brief on show, now
+// labelled Stale too. The `declined` state (a text-less row) is covered both ways: a `skipped` row arises
 // naturally from the review-start sweep on short notes, and a `model` row is seeded through
 // `gtd.seedDeclinedBrief` and asserted on the item page. A model brief's flip to `none` on a
 // notes edit is still covered server-side only.
@@ -20,7 +20,7 @@ const LONG_NOTES = [
 ].join(' ');
 
 test.describe('weekly review — briefs', () => {
-    test('brief-first card, Show notes disclosure, header toggle, and the stale marker after a notes edit', async ({ browser }) => {
+    test('brief-first card, Show notes disclosure, header toggle, and the Stale label after a notes edit', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `wr-brief-${uniqueStamp()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'Renew passport');
             const item = await gtd.clarifyToNextAction(page, { ...inbox, notes: LONG_NOTES }, {});
@@ -38,7 +38,9 @@ test.describe('weekly review — briefs', () => {
             // folded behind a disclosure instead of rendering its (capped) Markdown preview.
             const briefLine = card.getByTestId('briefLine');
             await expect(briefLine).toHaveText('Passport before the June trip — photos are the blocker');
-            await expect(card.getByTestId('briefStaleMarker')).toHaveCount(0);
+            // A user-authored brief is labelled Pinned; it still matches the notes, so not Stale.
+            await expect(card.getByTestId('briefPinnedLabel')).toHaveText('Pinned');
+            await expect(card.getByTestId('briefStaleLabel')).toHaveCount(0);
             await expect(card.getByTestId('pageNotesPreview')).toHaveCount(0);
             const showNotes = card.getByTestId('showNotesButton');
             await expect(showNotes).toBeVisible();
@@ -76,8 +78,8 @@ test.describe('weekly review — briefs', () => {
             await expect(card.getByTestId('pageNotesPreview')).toBeVisible();
             await expect(card.getByTestId('showNotesButton')).toHaveCount(0);
 
-            // Edit the notes: a user-origin brief is PINNED — it stays on show, now with the
-            // "notes changed" marker (a model brief would degrade to the notes preview instead).
+            // Edit the notes: a user-origin brief is PINNED — it stays on show, now labelled Stale
+            // as well (a model brief would degrade to the notes preview instead).
             await card.getByRole('button', { name: 'Edit notes' }).click();
             const notesEditor = card.getByRole('textbox', { name: 'Notes (Markdown)' });
             await expect(notesEditor).toBeFocused();
@@ -86,7 +88,10 @@ test.describe('weekly review — briefs', () => {
             await card.getByRole('textbox', { name: 'Title' }).click();
             await expect.poll(async () => (await gtd.listItems(page)).find((row) => row._id === item._id)?.notes).toContain('Photos done.');
             await expect(card.getByTestId('briefLine')).toHaveText('Passport before the June trip — photos are the blocker');
-            await expect(card.getByTestId('briefStaleMarker')).toHaveText('Notes changed since this brief was written');
+            await expect(card.getByTestId('briefStaleLabel')).toHaveText('Stale');
+            await expect(card.getByTestId('briefPinnedLabel')).toHaveText('Pinned');
+            await card.getByTestId('briefStaleLabel').hover();
+            await expect(page.getByRole('tooltip')).toHaveText('The title or notes changed since this brief was written. Edit it, or regenerate it to unpin.');
 
             // The brief line is read-only: clicking it opens nothing. The pencil opens the field in
             // place, and Escape steps out of the FIELD only — the review stays on this card.
@@ -153,7 +158,8 @@ test.describe('weekly review — briefs', () => {
             // The caption stands in for the empty field, and there is no brief LINE to lead with.
             await expect(page.getByTestId('briefDeclinedNote')).toHaveText('No brief — nothing in the notes to summarise');
             await expect(page.getByTestId('briefLine')).toHaveCount(0);
-            await expect(page.getByTestId('briefStaleMarker')).toHaveCount(0);
+            await expect(page.getByTestId('briefStaleLabel')).toHaveCount(0);
+            await expect(page.getByTestId('briefPinnedLabel')).toHaveCount(0);
             // The Generate button stays available so the user can retry after editing the notes.
             await expect(page.getByTestId('briefGenerateButton')).toBeEnabled();
 

@@ -1,9 +1,10 @@
 import type { Meta, StoryObj } from '@storybook/react';
 import { useState } from 'react';
 import { fn, userEvent, within } from 'storybook/test';
-import type { BriefState } from '../../lib/briefSource';
+import { type BriefState, briefSourceHash } from '../../lib/briefSource';
 import type { BriefOrigin } from '../../types/MyDB';
 import { BriefSection } from './BriefSection';
+import { type BriefLabelView, describeBriefLabels } from './briefSectionLogic';
 import type { BriefGeneration } from './useBriefGeneration';
 
 /** A generation state machine frozen in one state — the button/confirm/snackbar render from it alone. */
@@ -39,15 +40,24 @@ interface ControlledProps {
     origin?: BriefOrigin;
     variant?: 'field' | 'line';
     generation?: BriefGeneration;
+    labels?: readonly BriefLabelView[];
 }
 
-function ControlledBriefSection({ initial, state, origin, variant, generation = makeGeneration() }: ControlledProps) {
+// Built from the real helper so the stories' tooltip copy cannot drift from the app's.
+const STORY_ITEM = { title: 'Renew passport', notes: 'Photos are the blocker.', status: 'nextAction' as const };
+const CURRENT_HASH = briefSourceHash(STORY_ITEM.title, STORY_ITEM.notes);
+function labelsOf(origin: BriefOrigin, isStale: boolean) {
+    return describeBriefLabels(STORY_ITEM, { origin, text: PINNED_TEXT, sourceHash: isStale ? 'outdated' : CURRENT_HASH });
+}
+
+function ControlledBriefSection({ initial, state, origin, variant, generation = makeGeneration(), labels }: ControlledProps) {
     const [value, setValue] = useState(initial);
     return (
         <BriefSection
             value={value}
             state={state}
             origin={origin}
+            labels={labels}
             onChange={setValue}
             onCommit={fn()}
             generation={generation}
@@ -68,9 +78,24 @@ export const Fresh: Story = {
     render: () => <ControlledBriefSection initial={PINNED_TEXT} state="fresh" />,
 };
 
-/** A user-authored brief whose notes moved on since it was written — the muted marker shows. */
+/** A brief the user wrote, still matching the notes — the Pinned chip says the sweep leaves it alone. */
+export const Pinned: Story = {
+    render: () => <ControlledBriefSection initial={PINNED_TEXT} state="fresh" origin="user" labels={labelsOf('user', false)} />,
+};
+
+/** A brief an agent wrote through MCP — the Pinned tooltip names the agent. */
+export const AgentPinned: Story = {
+    render: () => <ControlledBriefSection initial={PINNED_TEXT} state="fresh" origin="agent" labels={labelsOf('agent', false)} />,
+};
+
+/** A model brief whose notes moved on (derived state `none`, text still shown) — the Stale chip shows. */
+export const ModelStale: Story = {
+    render: () => <ControlledBriefSection initial={PINNED_TEXT} state="none" labels={labelsOf('model', true)} />,
+};
+
+/** A user-authored brief whose notes moved on since it was written — both chips show. */
 export const PinnedStale: Story = {
-    render: () => <ControlledBriefSection initial={PINNED_TEXT} state="pinnedStale" />,
+    render: () => <ControlledBriefSection initial={PINNED_TEXT} state="pinnedStale" origin="user" labels={labelsOf('user', true)} />,
 };
 
 /** Generation in flight: the sparkle becomes a spinner and the button is disabled. */
@@ -147,9 +172,9 @@ export const ReviewLine: Story = {
     render: () => <ControlledBriefSection initial={PINNED_TEXT} state="fresh" variant="line" />,
 };
 
-/** Review presentation with the stale marker under the line. */
+/** Review presentation with both chips beside the line. */
 export const ReviewLinePinnedStale: Story = {
-    render: () => <ControlledBriefSection initial={PINNED_TEXT} state="pinnedStale" variant="line" />,
+    render: () => <ControlledBriefSection initial={PINNED_TEXT} state="pinnedStale" origin="user" variant="line" labels={labelsOf('user', true)} />,
 };
 
 /** Review presentation mid-confirm: the Replace / Keep row sits under the line. */

@@ -1,6 +1,6 @@
 import { Check, Pencil, Sparkles, X } from 'lucide-react';
 import { type KeyboardEvent, type Ref, useEffect, useId, useRef, useState } from 'react';
-import { Button, Callout, IconButton, Spinner, Text, TextField, Toast } from '../../designSystem';
+import { Button, Callout, Chip, IconButton, Spinner, Text, TextField, Toast, Tooltip } from '../../designSystem';
 import type { BriefState } from '../../lib/briefSource';
 import { collapseToSingleLine } from '../../lib/singleLineText';
 import type { BriefOrigin } from '../../types/MyDB';
@@ -10,7 +10,7 @@ import {
     BRIEF_LABEL,
     BRIEF_PINNED_NOTICE,
     BRIEF_PLACEHOLDER,
-    BRIEF_STALE_MARKER,
+    type BriefLabelView,
     describeDeclinedBrief,
     describeEmptyBrief,
     describeGenerateButton,
@@ -29,6 +29,8 @@ export interface BriefSectionProps {
      * too short to ask in the first place.
      */
     origin?: BriefOrigin | undefined;
+    /** Pinned / Stale chips beside the brief text (`describeBriefLabels`); hidden while the field is open. */
+    labels?: readonly BriefLabelView[] | undefined;
     onChange: (next: string) => void;
     /**
      * Persist `value` (blur / Enter / clear). The value travels with the call because a clear
@@ -58,7 +60,7 @@ export interface BriefSectionProps {
  * that should be a deliberate act, never a stray click. While editing, a visible notice says so.
  * Saves on blur/Enter/Escape/Done/Clear through the host's `onCommit`, then returns to the read view.
  */
-export function BriefSection({ value, state, origin, onChange, onCommit, generation, variant = 'field', isBriefable = true }: BriefSectionProps) {
+export function BriefSection({ value, state, origin, labels = [], onChange, onCommit, generation, variant = 'field', isBriefable = true }: BriefSectionProps) {
     const [isEditing, setIsEditing] = useState(false);
     const pencilFocus = useFocusOnViewReturn(isEditing);
     const noticeId = useId();
@@ -88,7 +90,10 @@ export function BriefSection({ value, state, origin, onChange, onCommit, generat
                 {isEditing ? (
                     <BriefEditor value={value} noticeId={noticeId} onChange={onChange} onLeave={commitOnLeave} onExit={commitAndExit} />
                 ) : (
-                    <BriefReadView value={value} state={state} origin={origin} isBriefable={isBriefable} isLine={variant === 'line'} />
+                    <>
+                        <BriefReadView value={value} state={state} origin={origin} isBriefable={isBriefable} isLine={variant === 'line'} />
+                        <BriefLabels labels={labels} />
+                    </>
                 )}
                 {isEditing ? null : <BriefEditButton ref={pencilFocus.ref} onEdit={() => setIsEditing(true)} />}
                 <GenerateBriefButton generation={generation} isRegenerate={isRegenerate} fieldValue={value} />
@@ -236,6 +241,31 @@ function BriefText({ text, emptyHint, isLine }: { text: string; emptyHint: strin
     );
 }
 
+const LABEL_TEST_IDS: Record<BriefLabelView['kind'], string> = { pinned: 'briefPinnedLabel', stale: 'briefStaleLabel' };
+
+function BriefLabels({ labels }: { labels: readonly BriefLabelView[] }) {
+    if (labels.length === 0) return null;
+    return (
+        <span className={styles.briefLabels}>
+            {labels.map((label) => (
+                // A plain <span> trigger: the Tooltip gives wrapper elements no aria-label, so the
+                // visible word stays the accessible text and the tooltip only adds the why.
+                <Tooltip key={label.kind} title={label.tooltip}>
+                    <span>
+                        <Chip
+                            size="sm"
+                            variant="outline"
+                            tone={label.kind === 'stale' ? 'warning' : 'neutral'}
+                            label={label.text}
+                            data-testid={LABEL_TEST_IDS[label.kind]}
+                        />
+                    </span>
+                </Tooltip>
+            ))}
+        </span>
+    );
+}
+
 function BriefEditButton({ ref, onEdit }: { ref: Ref<HTMLButtonElement>; onEdit: () => void }) {
     return (
         <IconButton ref={ref} size="sm" aria-label="Edit brief" onClick={onEdit} data-testid="briefEditButton">
@@ -342,23 +372,16 @@ interface BriefStateNoteProps {
 }
 
 /**
- * The at-most-one muted line under the brief that explains the row's state. `declined` is the
- * reason this exists: a text-less row would otherwise render as an ordinary empty field, leaving
- * the user unable to tell a deliberate "nothing to summarise" from a broken or pending feature.
- * Both states cost exactly one caption line, so a review card never grows taller than before.
+ * The declined caption while the field is open. `declined` is why this exists: a text-less row
+ * would otherwise render as an ordinary empty field, leaving the user unable to tell a deliberate
+ * "nothing to summarise" from a broken or pending feature. (Pinned / Stale are chips in the row,
+ * so a review card never grows a line for them.)
  *
  * At rest the declined caption lives in the row (`BriefReadView`); it moves here only while the
  * field is open. It tracks the LIVE field value (see `isDeclinedNoteVisible`), so it clears on
  * the first keystroke rather than lingering over text the user is already writing.
- *
- * Rendered by BOTH variants, but `declined` only ever reaches the field one: `isBriefFirst`
- * returns false for it, so the host never picks `variant="line"` for a declined row (a line
- * variant would show this caption under an empty brief line, which reads as a bug).
  */
 function BriefStateNote({ state, origin, fieldValue, isEditing }: BriefStateNoteProps) {
-    if (state === 'pinnedStale') {
-        return <BriefCaption text={BRIEF_STALE_MARKER} testId="briefStaleMarker" />;
-    }
     if (isEditing && isDeclinedNoteVisible({ state, fieldValue })) {
         return <BriefCaption text={describeDeclinedBrief(origin)} testId="briefDeclinedNote" />;
     }

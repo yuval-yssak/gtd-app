@@ -1,5 +1,5 @@
 import { BriefApiError, type GenerateBriefOutcome } from '../../api/briefApi';
-import { type BriefState, isPinnedOrigin } from '../../lib/briefSource';
+import { type BriefState, briefSourceHash, isPinnedOrigin } from '../../lib/briefSource';
 import type { BriefOrigin, StoredItem, StoredItemBrief } from '../../types/MyDB';
 
 export const BRIEF_LABEL = 'Brief';
@@ -38,8 +38,55 @@ export function describeEmptyBrief(state: BriefState, isBriefable: boolean): str
  */
 export const BRIEF_PINNED_NOTICE =
     'A brief you write is pinned: it stays exactly as written, even when the title or notes change. To unpin it, click Regenerate brief (✨) and choose Replace.';
-/** Shown under a pinned (user/agent) brief whose source title/notes moved on since it was written. */
-export const BRIEF_STALE_MARKER = 'Notes changed since this brief was written';
+
+// ── State labels (Pinned / Stale) ────────────────────────────────────────────
+
+export const BRIEF_PINNED_LABEL = 'Pinned';
+export const BRIEF_STALE_LABEL = 'Stale';
+
+export interface BriefLabelView {
+    kind: 'pinned' | 'stale';
+    text: string;
+    /** Mouse-only detail: tooltips never open on touch, so the label text must stand on its own. */
+    tooltip: string;
+}
+
+type BriefLabelSourceItem = Pick<StoredItem, 'title' | 'notes' | 'status'>;
+type BriefLabelRow = Pick<StoredItemBrief, 'origin' | 'sourceHash' | 'text'>;
+
+const STALE_SUMMARY = 'The title or notes changed since this brief was written.';
+
+/**
+ * The chips beside a brief's text, keyed on the STORED row rather than the derived `BriefState`:
+ * a stale `model` row derives to `none` yet its text still fills the field, and that is exactly
+ * the brief the user most needs told is out of date.
+ */
+export function describeBriefLabels(item: BriefLabelSourceItem, brief: BriefLabelRow | undefined): BriefLabelView[] {
+    if (!brief?.text) {
+        return [];
+    }
+    const isPinned = isPinnedOrigin(brief.origin);
+    const isStale = brief.sourceHash !== briefSourceHash(item.title, item.notes);
+    const staleNextStep = describeStaleNextStep(isPinned, isBriefableItemStatus(item.status));
+    return [...(isPinned ? [pinnedLabel(brief.origin)] : []), ...(isStale ? [staleLabel(staleNextStep)] : [])];
+}
+
+function pinnedLabel(origin: BriefOrigin): BriefLabelView {
+    const author = origin === 'agent' ? 'An agent wrote' : 'You wrote';
+    return { kind: 'pinned', text: BRIEF_PINNED_LABEL, tooltip: `${author} this brief, so it is never rewritten automatically.` };
+}
+
+/** What happens next to a stale brief. A done/trashed item is never briefed or regenerated (409), so it gets none. */
+function describeStaleNextStep(isPinned: boolean, isBriefable: boolean): string | null {
+    if (!isBriefable) {
+        return null;
+    }
+    return isPinned ? 'Edit it, or regenerate it to unpin.' : 'It is refreshed automatically.';
+}
+
+function staleLabel(nextStep: string | null): BriefLabelView {
+    return { kind: 'stale', text: BRIEF_STALE_LABEL, tooltip: nextStep ? `${STALE_SUMMARY} ${nextStep}` : STALE_SUMMARY };
+}
 
 /** `declined` + `model`: the model read the notes and judged there was nothing worth condensing. */
 export const BRIEF_DECLINED_MODEL_NOTE = 'No brief — nothing in the notes to summarise';

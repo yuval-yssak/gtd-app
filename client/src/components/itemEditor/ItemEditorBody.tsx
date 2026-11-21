@@ -73,7 +73,14 @@ import { RoutineScheduleFields } from '../routineEditor/RoutineScheduleFields';
 import type { FormState as RoutineFormState } from '../routineEditor/routineFormState';
 import { UnsavedChangesDialog } from '../UnsavedChangesDialog';
 import { BriefSection } from './BriefSection';
-import { decideBriefCommit, type EditorPresentation, isBriefableItemStatus, isBriefFirst, isNotesFoldedByDefault } from './briefSectionLogic';
+import {
+    decideBriefCommit,
+    describeBriefLabels,
+    type EditorPresentation,
+    isBriefableItemStatus,
+    isBriefFirst,
+    isNotesFoldedByDefault,
+} from './briefSectionLogic';
 import { CalendarEventLinks } from './CalendarEventLinks';
 import { CopyIdButton } from './CopyIdButton';
 import { DoneItemContextSection } from './DoneItemContextSection';
@@ -1203,6 +1210,7 @@ export function ItemEditorBody({
                 value={brief}
                 state={briefRowState}
                 origin={liveBrief?.origin}
+                labels={describeBriefLabels(liveItem, liveBrief)}
                 onChange={(next) => writeFormField('brief', next, setBrief)}
                 onCommit={(value) => void flushBrief(value)}
                 generation={briefGeneration}

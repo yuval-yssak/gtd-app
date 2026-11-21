@@ -4,6 +4,7 @@ declare const styles: {
     readonly briefCaption: string;
     readonly briefEditor: string;
     readonly briefField: string;
+    readonly briefLabels: string;
     readonly briefNotice: string;
     readonly briefRow: string;
     readonly briefText: string;

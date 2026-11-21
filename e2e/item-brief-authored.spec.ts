@@ -40,11 +40,12 @@ test.describe('item brief — authored in the editor', () => {
             expect(stored?._id).toBe(item._id);
             await gtd.flush(page);
 
-            // Reload: the read view re-seeds from the persisted row; a fresh (hash-matching) brief
-            // shows no stale marker.
+            // Reload: the read view re-seeds from the persisted row; a typed brief is Pinned, and a
+            // fresh (hash-matching) one is not Stale.
             await page.reload();
             await expect(briefTextOf(page)).toHaveText('Passport before the June trip — photos are the blocker');
-            await expect(page.getByTestId('briefStaleMarker')).toHaveCount(0);
+            await expect(page.getByTestId('briefPinnedLabel')).toHaveText('Pinned');
+            await expect(page.getByTestId('briefStaleLabel')).toHaveCount(0);
 
             // Second device for the same user: the brief arrives via bootstrap/sync.
             const ctx2 = await browser.newContext();
