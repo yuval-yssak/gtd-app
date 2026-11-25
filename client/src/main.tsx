@@ -10,6 +10,7 @@ import App from './App';
 import { AppErrorBoundary } from './components/AppErrorBoundary';
 import { RouteFallback } from './components/RouteFallback';
 import { openAppDB } from './db/indexedDB';
+import { selfHealingConnection } from './db/selfHealingDB';
 import { ensureToastRegion } from './designSystem';
 import { APP_NAME } from './lib/appName';
 import { startColorSchemeSync } from './lib/colorScheme';
@@ -40,7 +41,8 @@ function showUpgradeBlockedNotice() {
 }
 
 async function main() {
-    const db = await openAppDB({ onUpgradeBlocked: showUpgradeBlockedNotice });
+    const openWithUpgradeNotice = () => openAppDB({ onUpgradeBlocked: showUpgradeBlockedNotice });
+    const db = selfHealingConnection(await openWithUpgradeNotice(), openWithUpgradeNotice);
 
     if (import.meta.env.DEV || window.location.hostname === 'localhost') {
         const { mountDevTools } = await import('./db/devTools');

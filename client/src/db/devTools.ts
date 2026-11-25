@@ -44,6 +44,7 @@ import { getRoutinesByUser } from './routineHelpers';
 import { generateCalendarItemsToHorizon, materializePendingNextActionRoutines, reconcileFutureItemsWithSchedule } from './routineItemHelpers';
 import type { NewRoutineFields } from './routineMutations';
 import { createRoutine, pauseRoutine, removeRoutine, updateRoutine } from './routineMutations';
+import { simulateConnectionLoss } from './selfHealingDB';
 import { closeSseConnections, getConnectedSseUserIds, getOpenSseUserIds } from './sseClient';
 import {
     flushSyncQueue,
@@ -222,6 +223,8 @@ export function mountDevTools(db: IDBPDatabase<MyDB>): void {
         setPullPageSize: (size: number) => setPullPageSize(size),
         // Shrinks how long the app must be backgrounded before its data counts as unverified on return.
         setLongAwayMs: (ms: number) => setLongAwayMs(ms),
+        // Closes the IndexedDB connection behind the app's back, the way Safari drops it in the background.
+        simulateConnectionLoss: () => simulateConnectionLoss(db),
         // The production resolved-broadcast (same call auth.callback makes after an OAuth
         // re-login) — exposed so e2e can drive the real cross-tab clear path, not a hand-rolled
         // localStorage payload that could drift from the implementation.
