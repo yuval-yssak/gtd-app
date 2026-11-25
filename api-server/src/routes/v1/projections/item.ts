@@ -104,3 +104,46 @@ export function presentItem(item: ItemInterface, brief: ItemBriefInterface | nul
     out.brief = presentBrief(item, brief);
     return out as PublicItem;
 }
+
+/**
+ * The `view=compact` list row: what an agent needs to scan and pick items — no notes, no brief and
+ * no sync linkage, so a long list fits in a reader that truncates its tool output (voice mode).
+ */
+export type CompactItem = Pick<
+    PublicItem,
+    | '_id'
+    | 'status'
+    | 'title'
+    | 'workContextIds'
+    | 'peopleIds'
+    | 'waitingForPersonId'
+    | 'energy'
+    | 'time'
+    | 'urgent'
+    | 'expectedBy'
+    | 'ignoreBefore'
+    | 'timeStart'
+    | 'timeEnd'
+>;
+
+// Listed by hand in the done_list_items `view` description and docs/PUBLIC_API.md too — keep them in step.
+const COMPACT_FIELDS: ReadonlyArray<keyof CompactItem> = [
+    '_id',
+    'status',
+    'title',
+    'workContextIds',
+    'peopleIds',
+    'waitingForPersonId',
+    'energy',
+    'time',
+    'urgent',
+    'expectedBy',
+    'ignoreBefore',
+    'timeStart',
+    'timeEnd',
+];
+
+export function presentCompactItem(item: PublicItem): CompactItem {
+    // fromEntries widens to Record<string, unknown>; every key comes from COMPACT_FIELDS, so the cast is sound.
+    return Object.fromEntries(COMPACT_FIELDS.flatMap((key) => (item[key] !== undefined ? [[key, item[key]]] : []))) as CompactItem;
+}

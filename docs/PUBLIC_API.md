@@ -239,6 +239,8 @@ Returns items owned by the authenticated user.
 | `status` | `ItemStatus` or comma-separated list | all except `trash` | e.g. `status=inbox` or `status=nextAction,calendar`. |
 | `since` | ISO datetime | — | Only items with `updatedTs > since`. Useful for polling. |
 | `calendarEventId` | string | — | Exact match on the Google Calendar event id, against both linkage fields (`calendarEventId` for standalone events and series masters, `calendarInstanceEventId` for a recurring occurrence). Finds the item the calendar sync already linked to an event, so an integration annotates it instead of creating a second one. Completed items are included by default (only `trash` is excluded); a blank value is `400 invalid_calendar_event_id`. |
+| `workContextId` | comma-separated work-context ids | — | Keeps items whose `workContextIds` hold **any** of the ids (`workContextId=home,anywhere`). Naming no id (`workContextId=` or `workContextId=,`) is `400 invalid_work_context_id`. |
+| `view` | `full \| compact` | `full` | `compact` returns only `_id`, `status`, `title`, `workContextIds`, `peopleIds`, `waitingForPersonId`, `energy`, `time`, `urgent`, `expectedBy`, `ignoreBefore`, `timeStart`, `timeEnd` (each only when set) — no `notes`, no `brief`. For scanning long lists; fetch a row in full with `GET /v1/items/:id`. Anything else is `400 invalid_view`. |
 | `limit` | int | 50 | Max 200. |
 | `sort` | `updated \| priority` | `updated` | `updated`: `updatedTs DESC, _id DESC`. `priority`: the order the app shows — see [Sort orders](#sort-orders). Anything else is `400 invalid_sort`. |
 | `cursor` | string | — | Opaque cursor from a previous response's `nextCursor`, valid only with the `sort` that issued it (`400 invalid_cursor` otherwise). |
@@ -248,14 +250,19 @@ Returns items owned by the authenticated user.
 
 ```json
 {
+    "nextCursor": "eyJ1cGRhdGVkVHMiOiIyMDI2L…",
+    "total": 137,
     "items": [
         { "_id": "…", "status": "inbox", "title": "…", "createdTs": "…", "updatedTs": "…" }
-    ],
-    "nextCursor": "eyJ1cGRhdGVkVHMiOiIyMDI2L…"
+    ]
 }
 ```
 
-`nextCursor` is present when more results exist. Pass it back as `cursor=` (with the same `sort`) to fetch the next page. Cursors are opaque (do not parse them). Both are taken from the **unfiltered** page, so a `briefState` filter never skips rows.
+`nextCursor` is present when more results exist. Pass it back verbatim as `cursor=` (with the same `sort` and filters) to fetch the next page. Cursors are opaque: do not parse or build them. `nextCursor` is taken from the **unfiltered** page, so a `briefState` filter never skips rows.
+
+`total` is the number of items matching the filters across all pages (the same on every page). It is left out when `briefState` is set, because that filter drops rows only after a page is read.
+
+The paging fields come **before** `items` on purpose: a reader that truncates long output (a voice assistant's tool results, for one) loses the end of the body, and still has the cursor.
 
 Each item carries its `brief` (fetched in one query per page — see [Item briefs](#item-briefs)).
 

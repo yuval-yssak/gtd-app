@@ -208,7 +208,7 @@ Every tool carries a `title` and all four MCP safety annotations, which a client
 | Tool | Maps to | Scope | Account args |
 |---|---|---|---|
 | `done_capture` | `POST /v1/items` | `items.capture` | `account?` |
-| `done_list_items` | `GET /v1/items` | `items.read` | `sort?` — `priority` (default: the app's order) or `updated`; `account?` |
+| `done_list_items` | `GET /v1/items` | `items.read` | `sort?` — `priority` (default: the app's order) or `updated`; `view?` — `full` (default) or `compact` (no notes/brief); `workContextId?` (comma-separated, any-of); `account?`. The response leads with `nextCursor` and `total`, then `items` |
 | `done_get_item` | `GET /v1/items/:id` | `items.read` | `account?` |
 | `done_update_item` | `PATCH /v1/items/:id` | `items.write` | `account?` |
 | `done_complete_item` | `POST /v1/items/:id/complete` | `items.write` | `account?` |

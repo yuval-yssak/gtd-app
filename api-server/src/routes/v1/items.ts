@@ -24,7 +24,7 @@ import { hasAtLeastOne } from '../../lib/typeUtils.js';
 import { localDateInTimezone, resolveUserTimezone } from '../../lib/userTimezone.js';
 import { STATUS_FIELD_MATRIX, STATUS_SPECIFIC_FIELD_LIST } from '../../schemas/operations/item.js';
 import { type ItemBriefInterface, type ItemInterface, ItemStatus } from '../../types/entities.js';
-import { type PublicItem, presentItem } from './projections/item.js';
+import { type PublicItem, presentCompactItem, presentItem } from './projections/item.js';
 
 // 24h content-dedupe window: covers retries / double-taps without collapsing genuine recurring
 // captures. Callers wanting strict idempotency should provide externalId instead.
@@ -341,19 +341,33 @@ interface ListQuery {
      * or empty while `nextCursor` is still present — callers paginate through.
      */
     briefState?: BriefState;
+    /** Any-of match on `workContextIds` — "home or anywhere" in one read. */
+    workContextIds?: string[];
+    /** `full` (default): every public field + brief. `compact`: the scan fields only (`presentCompactItem`). */
+    view: ListView;
 }
 
+type ListView = 'full' | 'compact';
 type ListSort = 'updated' | 'priority';
 type UpdatedCursor = { kind: 'updated'; updatedTs: string; id: string };
 type PriorityCursor = { kind: 'priority'; offset: number };
 type ListCursor = UpdatedCursor | PriorityCursor;
 
 type ListQueryError = {
-    code: 'invalid_status' | 'invalid_limit' | 'invalid_cursor' | 'invalid_brief_state' | 'invalid_calendar_event_id' | 'invalid_sort';
+    code:
+        | 'invalid_status'
+        | 'invalid_limit'
+        | 'invalid_cursor'
+        | 'invalid_brief_state'
+        | 'invalid_calendar_event_id'
+        | 'invalid_sort'
+        | 'invalid_view'
+        | 'invalid_work_context_id';
     message: string;
 };
 
 const LIST_SORTS: ReadonlyArray<ListSort> = ['updated', 'priority'];
+const LIST_VIEWS: ReadonlyArray<ListView> = ['full', 'compact'];
 
 function isListSort(raw: string): raw is ListSort {
     return LIST_SORTS.some((sort) => sort === raw);
@@ -411,6 +425,26 @@ function parseBriefStateParam(raw: string | null): ListParamResult<BriefState | 
     return { ok: true, value: raw as BriefState };
 }
 
+function parseViewParam(raw: string | null): ListParamResult<ListView> {
+    const view = LIST_VIEWS.find((candidate) => candidate === (raw || 'full'));
+    return view ? { ok: true, value: view } : { ok: false, error: { code: 'invalid_view', message: 'view must be one of: full, compact' } };
+}
+
+/** `workContextId=a,b` → the ids (any-of); absent → no filter. Present but naming no id is refused, never read as "all". */
+function parseWorkContextIdsParam(raw: string | null): ListParamResult<string[] | undefined> {
+    if (raw === null) {
+        return { ok: true, value: undefined };
+    }
+    const ids = raw
+        .split(',')
+        .map((id) => id.trim())
+        .filter((id) => id !== '');
+    if (!hasAtLeastOne(ids)) {
+        return { ok: false, error: { code: 'invalid_work_context_id', message: 'workContextId must name at least one work context id' } };
+    }
+    return { ok: true, value: ids };
+}
+
 /** `calendarEventId=` must be non-blank when present; absent → no filter. */
 function parseCalendarEventIdParam(raw: string | null): ListParamResult<string | undefined> {
     if (raw === null) {
@@ -449,6 +483,14 @@ function parseListQuery(url: URL): ListParamResult<ListQuery> {
     if (!calendarEventId.ok) {
         return calendarEventId;
     }
+    const view = parseViewParam(url.searchParams.get('view'));
+    if (!view.ok) {
+        return view;
+    }
+    const workContextIds = parseWorkContextIdsParam(url.searchParams.get('workContextId'));
+    if (!workContextIds.ok) {
+        return workContextIds;
+    }
     const q = url.searchParams.get('q') ?? undefined;
     const since = url.searchParams.get('since') || undefined;
     return {
@@ -456,12 +498,14 @@ function parseListQuery(url: URL): ListParamResult<ListQuery> {
         value: {
             limit: limit.value,
             sort: sort.value,
+            view: view.value,
             ...(q !== undefined ? { q } : {}),
             ...(statuses.value ? { statuses: statuses.value } : {}),
             ...(since ? { since } : {}),
             ...(cursor.value ? { cursor: cursor.value } : {}),
             ...(briefState.value ? { briefState: briefState.value } : {}),
             ...(calendarEventId.value ? { calendarEventId: calendarEventId.value } : {}),
+            ...(workContextIds.value ? { workContextIds: workContextIds.value } : {}),
         },
     };
 }
@@ -526,17 +570,42 @@ function cursorClause(cursor: UpdatedCursor): Filter<ItemInterface> {
 interface ListPage {
     page: ItemInterface[];
     nextCursor?: string;
+    /** Every row the filters match across all pages — before any `briefState` post-filter. */
+    total: number;
+}
+
+interface PagingFacts {
+    nextCursor?: string;
+    total?: number;
+}
+
+/** `total` is left out under a `briefState` filter: it drops rows only after the page is read, so the count would overstate the result. */
+function pagingFacts({ nextCursor, total }: ListPage, query: ListQuery): PagingFacts {
+    return { ...(nextCursor ? { nextCursor } : {}), ...(query.briefState ? {} : { total }) };
+}
+
+/** The paging facts lead and the items trail: a reader that truncates long tool output (voice mode) loses the end of the body, never the cursor. */
+function listEnvelope<T>(items: T[], paging: PagingFacts) {
+    return { ...paging, items };
+}
+
+function withoutCursor({ cursor: _cursor, ...query }: ListQuery): ListQuery {
+    return query;
 }
 
 /** `sort=updated`: updatedTs DESC straight from Mongo, keyset-paged on (updatedTs, _id). */
 async function updatedPage(userId: string, query: ListQuery): Promise<ListPage> {
-    // Fetch limit+1 so we can tell whether another page exists without a separate count query.
-    const rows = await itemsDAO.findArray(buildListFilter(userId, query), { sort: { updatedTs: -1, _id: -1 }, limit: query.limit + 1 });
+    // Fetch limit+1 to detect another page from this read alone; the count beside it only reports `total`.
+    const [rows, total] = await Promise.all([
+        itemsDAO.findArray(buildListFilter(userId, query), { sort: { updatedTs: -1, _id: -1 }, limit: query.limit + 1 }),
+        // Counted without the cursor clause, so every page reports the same total.
+        itemsDAO.countDocuments(buildListFilter(userId, withoutCursor(query))),
+    ]);
     const hasMore = rows.length > query.limit;
     const page = hasMore ? rows.slice(0, query.limit) : rows;
     const last = page.at(-1);
     // The cursor is derived from the UNFILTERED page so a briefState post-filter never skips rows.
-    return hasMore && last ? { page, nextCursor: encodeCursor(last) } : { page };
+    return hasMore && last ? { page, total, nextCursor: encodeCursor(last) } : { page, total };
 }
 
 // Exactly the fields `priorityComparator` reads — the in-memory sort never loads notes or calendar anchors.
@@ -589,7 +658,8 @@ async function priorityPage(userId: string, query: ListQuery): Promise<ListPage>
         .slice(offset, end)
         .map((row) => row._id);
     const page = await fullRowsInOrder(userId, pageIds);
-    return end < keys.length ? { page, nextCursor: encodePriorityCursor(end) } : { page };
+    const total = keys.length;
+    return end < total ? { page, total, nextCursor: encodePriorityCursor(end) } : { page, total };
 }
 
 /**
@@ -607,6 +677,7 @@ function buildListFilter(userId: string, query: ListQuery): Filter<ItemInterface
     }
     const clauses = [
         ...(query.calendarEventId ? [calendarEventClause(query.calendarEventId)] : []),
+        ...(query.workContextIds ? [{ workContextIds: { $in: query.workContextIds } }] : []),
         ...(query.q ? [searchClause(query.q)] : []),
         ...(query.cursor?.kind === 'updated' ? [cursorClause(query.cursor)] : []),
     ];
@@ -1188,9 +1259,9 @@ export const v1ItemsRoutes = new Hono<{ Variables: BearerVariables }>()
             return c.json({ error: parsed.error.message, code: parsed.error.code }, 400);
         }
         const query = parsed.value;
-        const { page, nextCursor } = query.sort === 'priority' ? await priorityPage(userId, query) : await updatedPage(userId, query);
-        const items = await presentPageWithBriefs(userId, page, query.briefState);
-        return c.json({ items, ...(nextCursor ? { nextCursor } : {}) });
+        const listPage = query.sort === 'priority' ? await priorityPage(userId, query) : await updatedPage(userId, query);
+        const items = await presentPageWithBriefs(userId, listPage.page, query.briefState);
+        return c.json(listEnvelope(query.view === 'compact' ? items.map(presentCompactItem) : items, pagingFacts(listPage, query)));
     })
 
     // ── GET /v1/items/:id ───────────────────────────────────────────────────

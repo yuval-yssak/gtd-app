@@ -307,9 +307,10 @@ interface SeedItemOptions {
     status?: ItemInterface['status'];
     updatedTs?: string;
     createdTs?: string;
+    workContextIds?: string[];
 }
 
-async function seedItem({ userId, id, title = 't', notes, status = 'inbox', updatedTs, createdTs }: SeedItemOptions): Promise<ItemInterface> {
+async function seedItem({ userId, id, title = 't', notes, status = 'inbox', updatedTs, createdTs, workContextIds }: SeedItemOptions): Promise<ItemInterface> {
     const _id = id ?? crypto.randomUUID();
     const now = dayjs().toISOString();
     const item: ItemInterface = {
@@ -320,10 +321,145 @@ async function seedItem({ userId, id, title = 't', notes, status = 'inbox', upda
         createdTs: createdTs ?? now,
         updatedTs: updatedTs ?? now,
         ...(notes !== undefined ? { notes } : {}),
+        ...(workContextIds ? { workContextIds } : {}),
     };
     await db.collection('items').insertOne(item as never);
     return item;
 }
+
+// A voice client (or any reader whose tool output is cut off) loses whatever the response puts last.
+describe('GET /v1/items — paging that survives a truncated reader', () => {
+    const titlesOf = (body: { items: PublicItem[] }) => body.items.map((i) => i.title);
+
+    async function seedTimeline(userId: string, count: number, extra: Partial<SeedItemOptions> = {}): Promise<void> {
+        for (let i = 0; i < count; i++) {
+            await seedItem({ userId, title: `t${i}`, updatedTs: dayjs('2024-01-01T00:00:00.000Z').add(i, 'minute').toISOString(), ...extra });
+        }
+    }
+
+    it.each(['updated', 'priority'])('puts nextCursor and total ahead of items (sort=%s)', async (sort) => {
+        const { plaintext, userId } = await newUserWithToken();
+        await seedTimeline(userId, 3, { notes: 'long notes '.repeat(50) });
+
+        const res = await callApi({ method: 'GET', path: `/v1/items?limit=2&sort=${sort}`, token: plaintext });
+        const text = await res.text();
+
+        expect(Object.keys(JSON.parse(text))).toEqual(['nextCursor', 'total', 'items']);
+        expect(text.indexOf('"nextCursor"')).toBeLessThan(text.indexOf('"items"'));
+    });
+
+    it.each(['updated', 'priority'])('reports the same total on every page — every matching row, not the page size (sort=%s)', async (sort) => {
+        const { plaintext, userId } = await newUserWithToken();
+        await seedTimeline(userId, 3);
+        await seedItem({ userId, title: 'other status', status: 'nextAction' });
+
+        const first = (await (await callApi({ method: 'GET', path: `/v1/items?status=inbox&limit=2&sort=${sort}`, token: plaintext })).json()) as {
+            total: number;
+            nextCursor: string;
+        };
+        const cursor = encodeURIComponent(first.nextCursor);
+        const last = (await (
+            await callApi({ method: 'GET', path: `/v1/items?status=inbox&limit=2&sort=${sort}&cursor=${cursor}`, token: plaintext })
+        ).json()) as {
+            total: number;
+            nextCursor?: string;
+        };
+
+        expect(first.total).toBe(3);
+        expect(last.total).toBe(3);
+        expect(last.nextCursor).toBeUndefined();
+    });
+
+    it('leaves total out under a briefState filter, which is applied after the page is read', async () => {
+        const { plaintext, userId } = await newUserWithToken();
+        await seedTimeline(userId, 2);
+        const body = (await (await callApi({ method: 'GET', path: '/v1/items?briefState=none', token: plaintext })).json()) as Record<string, unknown>;
+        expect(body).not.toHaveProperty('total');
+    });
+
+    it('view=compact returns only the fields a scan needs — no notes, no brief', async () => {
+        const { plaintext, userId } = await newUserWithToken();
+        await seedItem({ userId, title: 'call mom', status: 'nextAction', notes: 'a very long prompt', workContextIds: ['phone'] });
+
+        const res = await callApi({ method: 'GET', path: '/v1/items?view=compact', token: plaintext });
+        expect(res.status).toBe(200);
+        const { items } = (await res.json()) as { items: Record<string, unknown>[] };
+
+        const [item] = items;
+        if (!item) throw new Error('expected one item');
+        expect(item).toEqual({ _id: expect.any(String), status: 'nextAction', title: 'call mom', workContextIds: ['phone'] });
+    });
+
+    it('view=compact still honours a briefState filter, and then reports no total', async () => {
+        const { plaintext, userId } = await newUserWithToken();
+        await seedTimeline(userId, 2, { notes: 'never briefed' });
+
+        const unbriefed = (await (await callApi({ method: 'GET', path: '/v1/items?view=compact&briefState=none', token: plaintext })).json()) as Record<
+            string,
+            unknown
+        >;
+        const fresh = (await (await callApi({ method: 'GET', path: '/v1/items?view=compact&briefState=fresh', token: plaintext })).json()) as {
+            items: unknown[];
+        };
+
+        expect(unbriefed).toEqual({ items: [expect.not.objectContaining({ notes: expect.anything() }), expect.anything()] });
+        expect(fresh.items).toEqual([]);
+    });
+
+    it('view=full is the default and keeps notes and brief', async () => {
+        const { plaintext, userId } = await newUserWithToken();
+        await seedItem({ userId, title: 'call mom', notes: 'details' });
+        const { items } = (await (await callApi({ method: 'GET', path: '/v1/items?view=full', token: plaintext })).json()) as { items: PublicItem[] };
+        expect(items[0]).toMatchObject({ notes: 'details', brief: null });
+    });
+
+    it('rejects an unknown view with invalid_view', async () => {
+        const { plaintext } = await newUserWithToken();
+        const res = await callApi({ method: 'GET', path: '/v1/items?view=tiny', token: plaintext });
+        expect(res.status).toBe(400);
+        expect(((await res.json()) as { code: string }).code).toBe('invalid_view');
+    });
+
+    it('workContextId keeps items in ANY of the listed contexts', async () => {
+        const { plaintext, userId } = await newUserWithToken();
+        await seedItem({ userId, title: 'home', workContextIds: ['home'] });
+        await seedItem({ userId, title: 'anywhere', workContextIds: ['anywhere', 'phone'] });
+        await seedItem({ userId, title: 'office', workContextIds: ['office'] });
+        await seedItem({ userId, title: 'no context' });
+
+        const res = await callApi({ method: 'GET', path: '/v1/items?workContextId=home,anywhere', token: plaintext });
+        const body = (await res.json()) as { items: PublicItem[]; total: number };
+
+        expect(titlesOf(body).sort()).toEqual(['anywhere', 'home']);
+        expect(body.total).toBe(2);
+    });
+
+    it('workContextId pages with a cursor like any other filter', async () => {
+        const { plaintext, userId } = await newUserWithToken();
+        await seedTimeline(userId, 3, { workContextIds: ['home'] });
+        await seedItem({ userId, title: 'office', workContextIds: ['office'] });
+
+        const first = (await (await callApi({ method: 'GET', path: '/v1/items?workContextId=home&limit=2', token: plaintext })).json()) as {
+            items: PublicItem[];
+            nextCursor: string;
+        };
+        const second = (await (
+            await callApi({ method: 'GET', path: `/v1/items?workContextId=home&limit=2&cursor=${encodeURIComponent(first.nextCursor)}`, token: plaintext })
+        ).json()) as { items: PublicItem[]; nextCursor?: string };
+
+        expect([...titlesOf(first), ...titlesOf(second)]).toEqual(['t2', 't1', 't0']);
+        expect(second.nextCursor).toBeUndefined();
+    });
+
+    it('rejects a blank workContextId with invalid_work_context_id', async () => {
+        const { plaintext } = await newUserWithToken();
+        for (const raw of ['', '%20', ',']) {
+            const res = await callApi({ method: 'GET', path: `/v1/items?workContextId=${raw}`, token: plaintext });
+            expect(res.status).toBe(400);
+            expect(((await res.json()) as { code: string }).code).toBe('invalid_work_context_id');
+        }
+    });
+});
 
 describe('GET /v1/items', () => {
     it('returns items for the authenticated user, sorted by updatedTs DESC', async () => {

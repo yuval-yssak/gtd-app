@@ -92,7 +92,16 @@ describe('item tools', () => {
         if (!call) throw new Error('expected one call');
         expect(call.method).toBe('GET');
         expect(call.path).toBe('/v1/items');
-        expect(call.query).toEqual({ q: 'mom', status: 'inbox', since: undefined, limit: 25, cursor: undefined, sort: 'priority' });
+        expect(call.query).toEqual({
+            q: 'mom',
+            status: 'inbox',
+            since: undefined,
+            limit: 25,
+            cursor: undefined,
+            sort: 'priority',
+            view: undefined,
+            workContextId: undefined,
+        });
     });
 
     it('done_list_items lists in priority order unless the caller asks for updated', async () => {
@@ -125,6 +134,18 @@ describe('item tools', () => {
         expect(call.method).toBe('GET');
         expect(call.path).toBe('/v1/items');
         expect(call.query).toMatchObject({ calendarEventId: 'm142anuelg45ob9nbucvt670qg', status: 'calendar,done' });
+    });
+
+    it('done_list_items forwards view and workContextId so a voice agent can scan one context in a short response', async () => {
+        const { api, calls } = makeFakeApi({ items: [] });
+        await t.listItems.handler({ view: 'compact', workContextId: 'home-id,anywhere-id' }, api);
+        const [call] = calls;
+        if (!call) throw new Error('expected one call');
+        expect(call.query).toMatchObject({ view: 'compact', workContextId: 'home-id,anywhere-id' });
+    });
+
+    it('done_list_items only accepts full or compact as a view', () => {
+        expect(t.listItems.inputSchema.view.safeParse('tiny').success).toBe(false);
     });
 
     it('done_list_items forwards briefState as a query param', async () => {

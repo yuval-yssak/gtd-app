@@ -41,6 +41,7 @@ async function newCaller(): Promise<Caller> {
 interface ListResponse {
     items: Array<{ title: string }>;
     nextCursor?: string;
+    total?: number;
 }
 
 async function list(caller: Caller, query: string): Promise<Response> {
@@ -130,7 +131,11 @@ describe('GET /v1/items?sort=priority', () => {
         await seedEveryList(caller.userId);
         const pastEnd = Buffer.from(JSON.stringify({ o: 50 })).toString('base64url');
         const body = (await (await list(caller, `sort=priority&cursor=${pastEnd}`)).json()) as ListResponse;
-        expect(body).toEqual({ items: [] });
+        const firstPage = (await (await list(caller, 'sort=priority')).json()) as ListResponse;
+        expect(body.items).toEqual([]);
+        expect(body.nextCursor).toBeUndefined();
+        expect(firstPage.total).toBeGreaterThan(0);
+        expect(body.total).toBe(firstPage.total);
     });
 
     it('pages a briefState-filtered priority list: short pages keep a cursor, the walk yields the filtered set in order', async () => {

@@ -285,6 +285,32 @@ describe('/mcp protocol', () => {
         expect(tools.find((tool) => tool.name === 'done_trash_item')?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true });
     });
 
+    // A voice client cuts long tool output off at the end, so the cursor must come before the items.
+    it('done_list_items in compact view leads with nextCursor and total, and its cursor reaches the next page', async () => {
+        const { token } = await seedUserAndToken();
+        stubLoopbackFetch();
+        await callMcp(token, INITIALIZE);
+        for (const [index, title] of ['First', 'Second', 'Third'].entries()) {
+            await captureViaMcp(token, 10 + index, title);
+        }
+
+        const listCompact = async (id: number, args: Record<string, unknown>) => {
+            const [block] = (await callToolViaMcp(token, id, 'done_list_items', { status: 'inbox', view: 'compact', limit: 2, ...args })).content;
+            if (!block) throw new Error('done_list_items returned no content');
+            return block.text;
+        };
+        const first = JSON.parse(await listCompact(20, {})) as { nextCursor: string; total: number; items: Record<string, unknown>[] };
+        const second = JSON.parse(await listCompact(21, { cursor: first.nextCursor })) as { nextCursor?: string; items: unknown[] };
+
+        expect(Object.keys(first)).toEqual(['nextCursor', 'total', 'items']);
+        expect(first.total).toBe(3);
+        expect(first.items[0]).not.toHaveProperty('notes');
+        expect(first.items[0]).not.toHaveProperty('brief');
+        expect(first.items[0]).toHaveProperty('url');
+        expect(second.items).toHaveLength(1);
+        expect(second.nextCursor).toBeUndefined();
+    });
+
     // A directory reviewer calls each tool with valid arguments and expects success, with the access a
     // real sign-in grants. The walk must cover the whole list, so a new tool cannot ship unexercised.
     it('every listed tool succeeds with valid arguments under the scopes an OAuth sign-in grants', async () => {
@@ -303,7 +329,7 @@ describe('/mcp protocol', () => {
 
         const itemId = idOf(await call('done_capture', { title: 'Renew passport' }));
         await call('done_get_item', { id: itemId });
-        await call('done_list_items', { status: 'inbox' });
+        await call('done_list_items', { status: 'inbox', view: 'compact', workContextId: 'any-context' });
         await call('done_update_item', { id: itemId, status: 'nextAction', energy: 'low', time: 15 });
         await call('done_move_item', { id: itemId, position: 'top' });
         // No notes to condense, so the server records a skip without calling the model.

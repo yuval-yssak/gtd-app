@@ -81,7 +81,11 @@ const listItems = defineTool({
         'first. An item listed above another in the same list and day has ' +
         'higher priority — use that order to pick `before` / `after` for done_move_item. Pass `sort: "updated"` for ' +
         'most-recently-changed first (pair it with `since` to fetch only what changed). ' +
-        `Use \`cursor\` from a previous response to paginate (a cursor only works with the sort that issued it). ${BRIEF_FIELD_DESCRIPTION} ` +
+        'Every response leads with `nextCursor` (present while more pages remain) and `total` (rows matching the filters ' +
+        'across all pages; absent under `briefState`), then `items`. To page, pass `nextCursor` back verbatim as `cursor` ' +
+        'with the same `sort` — it is opaque: never build or edit one. Full items carry their whole `notes`, so a list of ' +
+        'them is long; to scan, count or pick items pass `view: "compact"` (no notes or brief) and a small `limit`, then ' +
+        `done_get_item for the ones you need in full. Narrow to work contexts with \`workContextId\`. ${BRIEF_FIELD_DESCRIPTION} ` +
         'Filter by `briefState` to sweep items that still need a brief (`none` excludes items the server deliberately ' +
         'declined to brief because their notes were too short; ask for `declined` to list the ones it declined). ' +
         'The filter is applied per page, so a page can come back short or empty while `nextCursor` is still present; ' +
@@ -94,7 +98,7 @@ const listItems = defineTool({
             .describe('Comma-separated list of ItemStatus values, e.g. "inbox" or "nextAction,calendar". Defaults to all except trash.'),
         since: z.string().optional().describe('ISO datetime. Only items with updatedTs > since.'),
         limit: z.number().int().positive().max(200).optional().describe('Defaults to 50. Max 200.'),
-        cursor: z.string().optional().describe('Opaque cursor from a previous response (same `sort`).'),
+        cursor: z.string().optional().describe('The `nextCursor` of the previous page, passed back verbatim (same `sort` and filters). Opaque.'),
         sort: z.enum(['priority', 'updated']).optional().describe('"priority" (default): the app order, see description. "updated": updatedTs DESC.'),
         calendarEventId: z
             .string()
@@ -108,6 +112,18 @@ const listItems = defineTool({
             .enum(['none', 'declined', 'fresh', 'pinnedStale'])
             .optional()
             .describe('Keep only items whose brief is in this state. Applied per fetched page (see description).'),
+        view: z
+            .enum(['full', 'compact'])
+            .optional()
+            .describe(
+                '"full" (default): every field, notes and brief included. "compact": only _id, status, title, workContextIds, ' +
+                    'peopleIds, waitingForPersonId, energy, time, urgent, expectedBy, ignoreBefore, timeStart, timeEnd (+ url).',
+            ),
+        workContextId: z
+            .string()
+            .min(1)
+            .optional()
+            .describe('Comma-separated work-context ids (from done_list_work_contexts). Keeps items in ANY of them, e.g. home or anywhere.'),
         account: accountSchema,
     },
     handler: async (args, api) =>
@@ -123,6 +139,8 @@ const listItems = defineTool({
                 cursor: args.cursor,
                 briefState: args.briefState,
                 calendarEventId: args.calendarEventId,
+                view: args.view,
+                workContextId: args.workContextId,
                 // The /v1 default stays `updated` for existing integrations; the MCP defaults to the order the user sees.
                 sort: args.sort ?? 'priority',
             },
