@@ -15,6 +15,7 @@ import itemsDAO from '../dataAccess/itemsDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import * as buildCalendarProviderModule from '../lib/buildCalendarProvider.js';
+import { localDateInTimezone } from '../lib/userTimezone.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { v1RoutinesRoutes } from '../routes/v1/routines.js';
 import type { CalendarIntegrationInterface, CalendarSyncConfigInterface, ItemInterface, RoutineInterface } from '../types/entities.js';
@@ -143,7 +144,8 @@ describe('PATCH /v1/routines — nextAction open-item propagation', () => {
         if (!open?.expectedBy) throw new Error('expected a rescheduled open item');
         // First Wednesday on/after today, tickler in lockstep.
         expect(dayjs(open.expectedBy).day()).toBe(3);
-        expect(open.expectedBy >= dayjs().format('YYYY-MM-DD')).toBe(true);
+        // The server reads "today" in the user's timezone — UTC here, as no device reported one — not the test machine's.
+        expect(open.expectedBy >= localDateInTimezone('UTC')).toBe(true);
         expect(open.ignoreBefore).toBe(open.expectedBy);
     });
 
