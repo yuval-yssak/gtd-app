@@ -415,6 +415,16 @@ export interface StoredRsvpOpPayload {
     responseStatus: GCalResponseStatus;
 }
 
+/**
+ * How the server's pushback treats Google for one op — mirrors `GCalOpMeta` in
+ * api-server/src/types/entities.ts. `keepGoogleEvent` rides on a trash that disposes of an item in
+ * Done only (a missed past routine occurrence), so Google keeps the event as history.
+ */
+export interface GCalOpMeta {
+    sendUpdates: 'all' | 'none';
+    keepGoogleEvent?: boolean;
+}
+
 export interface SyncOperation {
     id?: number; // auto-increment — omitted before insertion
     /**
@@ -434,8 +444,8 @@ export interface SyncOperation {
      * Null for opType === 'rsvp' (use `rsvp` sidecar instead).
      */
     snapshot: StoredEntity | null;
-    /** Captured at edit time from SendUpdatesDialog; replays through pushback on flush. */
-    gcalMeta?: { sendUpdates: 'all' | 'none' };
+    /** Captured at edit time from SendUpdatesDialog (or a missed-occurrence trash); replays through pushback on flush. */
+    gcalMeta?: GCalOpMeta;
     /** Required when opType === 'rsvp'; absent otherwise. */
     rsvp?: StoredRsvpOpPayload;
 }

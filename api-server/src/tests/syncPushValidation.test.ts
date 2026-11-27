@@ -4,7 +4,7 @@ import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { syncRoutes } from '../routes/sync.js';
-import type { EntityType, ItemInterface, OpType } from '../types/entities.js';
+import type { EntityType, ItemInterface, OperationInterface, OpType } from '../types/entities.js';
 import { authenticatedRequest, oauthLogin, SESSION_COOKIE } from './helpers.js';
 
 // `/sync/push` flips to strict-mode validation in Phase 1 step 10. A bad op rejects the whole
@@ -566,6 +566,35 @@ describe('POST /sync/push — archived value validation', () => {
         expect(res.status).toBe(400);
         const stored = await db.collection('workContexts').findOne({ _id: contextId } as never);
         expect(stored).toBeNull();
+    });
+});
+
+// A missed routine occurrence is trashed in Done only: the client asks pushback to leave the
+// Google instance alone through the op's gcalMeta sidecar, which must reach the persisted op.
+describe('POST /sync/push — gcalMeta.keepGoogleEvent', () => {
+    it('carries keepGoogleEvent onto the persisted operation', async () => {
+        const { sessionCookie } = await oauthLogin(app, 'google');
+        const userId = await getUserId(sessionCookie!);
+        const entityId = crypto.randomUUID();
+        const snapshot = {
+            _id: entityId,
+            user: userId,
+            userId,
+            status: 'trash',
+            title: 'Standup',
+            timeStart: '2026-11-20T09:00:00',
+            timeEnd: '2026-11-20T09:15:00',
+            createdTs: '2026-11-19T10:00:00.000Z',
+            updatedTs: '2026-11-27T10:00:00.000Z',
+        };
+
+        const missedTrash = { ...makeClientOp('item', entityId, 'create', snapshot), gcalMeta: { sendUpdates: 'none', keepGoogleEvent: true } };
+
+        const res = await push(sessionCookie!, 'dev-1', [missedTrash]);
+
+        expect(res.status).toBe(200);
+        const op = await db.collection<OperationInterface>('operations').findOne({ entityId });
+        expect(op?.gcalMeta?.keepGoogleEvent).toBe(true);
     });
 });
 

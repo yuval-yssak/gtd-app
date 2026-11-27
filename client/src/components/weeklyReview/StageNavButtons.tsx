@@ -1,4 +1,5 @@
 import { ArrowLeft, ArrowRight } from 'lucide-react';
+import type { Ref } from 'react';
 import { IconButton } from '../../designSystem';
 import { DisabledCapableTooltip } from '../DisabledCapableTooltip';
 import styles from './stageLayout.module.css';
@@ -10,6 +11,8 @@ interface ForwardAction {
     label: string;
     /** Overrides the default `stageNavForward` — the reassign-blocked fallback keeps its own id. */
     testId?: string;
+    /** Lets a host hand focus to ▶ (the revisit card after Discard). */
+    ref?: Ref<HTMLButtonElement> | undefined;
 }
 
 interface StageNavButtonsProps {
@@ -41,6 +44,7 @@ export function StageNavButtons({ onBack, backDisabled, backLabel = 'Revisit pre
             {forward && (
                 <DisabledCapableTooltip title={forward.label}>
                     <IconButton
+                        ref={forward.ref}
                         size="sm"
                         onClick={forward.onForward}
                         disabled={forward.disabled}

@@ -4,7 +4,7 @@ import { compareByRank } from '../lib/compareNextActions';
 import { compareRank, evenlySpacedRanks, isRankTooLong, rankAt, rankBetween, ranksBetween } from '../lib/itemRank';
 import { recordGhostSnapshot } from '../lib/listGhosts';
 import { rankSectionKeyOf } from '../lib/rankSections';
-import type { EnergyLevel, MyDB, StoredItem, StoredRoutine } from '../types/MyDB';
+import type { EnergyLevel, GCalOpMeta, MyDB, StoredItem, StoredRoutine } from '../types/MyDB';
 import { ROUTINE_ITEMS_LOCK, withCrossContextLock } from './crossContextLock';
 import { deleteItemById, getItemsAcrossUsers, putItem, topRankForUser } from './itemHelpers';
 import { getRoutineById } from './routineHelpers';
@@ -241,6 +241,10 @@ export async function clarifyToSomedayMaybe(db: IDBPDatabase<MyDB>, item: Stored
     return updated;
 }
 
+interface DoneOptions {
+    onReadOnlyGCal?: () => void;
+}
+
 /**
  * `clarifyToDone` accepts an optional `onReadOnlyGCal` callback — fired AFTER the local write
  * persists, when the item's GCal event is one the API only lets us recolor (`eventType: 'fromGmail'`
@@ -250,8 +254,8 @@ export async function clarifyToSomedayMaybe(db: IDBPDatabase<MyDB>, item: Stored
  * Callers wire it to their Snackbar surface so the user learns why the event shows no ✓ title
  * marker the moment they click done. The mutation itself proceeds regardless.
  */
-export async function clarifyToDone(db: IDBPDatabase<MyDB>, item: StoredItem, opts?: { onReadOnlyGCal?: () => void }): Promise<StoredItem> {
-    const updated = await disposeItem(db, item, 'done');
+export async function clarifyToDone(db: IDBPDatabase<MyDB>, item: StoredItem, opts?: DoneOptions): Promise<StoredItem> {
+    const updated = await disposeItem(db, item, { kind: 'done' });
     if (item.eventType === 'fromGmail' && item.calendarEventId && opts?.onReadOnlyGCal) {
         opts.onReadOnlyGCal();
     }
@@ -259,20 +263,63 @@ export async function clarifyToDone(db: IDBPDatabase<MyDB>, item: StoredItem, op
 }
 
 export async function clarifyToTrash(db: IDBPDatabase<MyDB>, item: StoredItem): Promise<StoredItem> {
-    return disposeItem(db, item, 'trash');
+    return disposeItem(db, item, { kind: 'trash' });
+}
+
+// A missed occurrence is history, not a cancellation: the server leaves the Google event as it is.
+const KEEP_GOOGLE_EVENT: GCalOpMeta = { sendUpdates: 'none', keepGoogleEvent: true };
+
+/**
+ * Disposes of a past routine occurrence that never happened: trashed in Done, while Google Calendar
+ * keeps the instance as a record of what was scheduled. A plain trash would cancel it there.
+ */
+export async function markOccurrenceMissed(db: IDBPDatabase<MyDB>, item: StoredItem): Promise<StoredItem> {
+    return disposeItem(db, item, { kind: 'trash', gcalMeta: KEEP_GOOGLE_EVENT });
+}
+
+/** The occurrences one Weekly Review choice completes and the ones it marks missed. */
+export interface OccurrenceDisposalPlan {
+    done: ReadonlyArray<StoredItem>;
+    missed: ReadonlyArray<StoredItem>;
+}
+
+/**
+ * Carries out a plan one occurrence at a time: every disposal takes the routine-items lock and
+ * re-reads its routine, so running them in parallel would only queue on the lock anyway.
+ */
+export async function disposeOccurrences(db: IDBPDatabase<MyDB>, plan: OccurrenceDisposalPlan, opts?: DoneOptions): Promise<void> {
+    for (const occurrence of plan.done) {
+        await clarifyToDone(db, occurrence, opts);
+    }
+    for (const occurrence of plan.missed) {
+        await markOccurrenceMissed(db, occurrence);
+    }
+}
+
+/** A done/trash disposal and the Google instruction its op carries, when it needs one. */
+interface Disposal {
+    kind: 'done' | 'trash';
+    gcalMeta?: GCalOpMeta;
 }
 
 /**
  * Writes a done/trash disposal and, for a routine item, its successor — under the routine-items lock,
  * so a materializer pass can never observe the gap between the two and mint a second open occurrence.
  */
-async function disposeItem(db: IDBPDatabase<MyDB>, item: StoredItem, disposalKind: 'done' | 'trash'): Promise<StoredItem> {
-    const updated: StoredItem = { ...withCompletionRecord(item, disposalKind), status: disposalKind, updatedTs: nowIso() };
+async function disposeItem(db: IDBPDatabase<MyDB>, item: StoredItem, { kind, gcalMeta }: Disposal): Promise<StoredItem> {
+    const updated: StoredItem = { ...withCompletionRecord(item, kind), status: kind, updatedTs: nowIso() };
     recordGhostIfLeavingList(item, updated);
     const writeDisposal = async () => {
         await putItem(db, updated);
-        await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated, userId: updated.userId });
-        await maybeCreateNextRoutineItem(db, item, disposalKind);
+        await queueSyncOp(db, {
+            opType: 'update',
+            entityType: 'item',
+            entityId: updated._id,
+            snapshot: updated,
+            userId: updated.userId,
+            ...(gcalMeta ? { gcalMeta } : {}),
+        });
+        await maybeCreateNextRoutineItem(db, item, kind);
     };
     await (item.routineId ? withCrossContextLock(ROUTINE_ITEMS_LOCK, writeDisposal) : writeDisposal());
     return updated;
@@ -601,7 +648,7 @@ export async function releaseFromTickler(db: IDBPDatabase<MyDB>, item: StoredIte
  * the choice survives reconnect — `gcalMeta.sendUpdates` is read by the server-side pushback that
  * eventually calls the GCal `events.patch` API.
  */
-export async function updateItemWithGcalMeta(db: IDBPDatabase<MyDB>, item: StoredItem, gcalMeta: { sendUpdates: 'all' | 'none' }): Promise<StoredItem> {
+export async function updateItemWithGcalMeta(db: IDBPDatabase<MyDB>, item: StoredItem, gcalMeta: Pick<GCalOpMeta, 'sendUpdates'>): Promise<StoredItem> {
     const updated: StoredItem = { ...item, updatedTs: nowIso() };
     await putItem(db, updated);
     await queueSyncOp(db, {

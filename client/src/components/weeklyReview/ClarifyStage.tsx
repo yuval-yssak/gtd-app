@@ -1,11 +1,12 @@
 import type { IDBPDatabase } from 'idb';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { usePendingReassign } from '../../contexts/PendingReassignProvider';
 import { FROM_GMAIL_DONE_NOTICE } from '../../db/itemMutations';
 import { Button, Card } from '../../designSystem';
 import type { MyDB } from '../../types/MyDB';
 import { type ItemEditorActionsApi, ItemEditorBody } from '../itemEditor/ItemEditorBody';
+import { DiscardEditsButton } from './DiscardEditsButton';
 import { RevisitDecisionCard } from './RevisitDecisionCard';
 import { currentQueueItemId, type StageQueue, stageEndTitle, yieldSlotOnDownMove } from './reviewFlowState';
 import { StageActionBar, type StageTravel } from './StageActionBar';
@@ -43,6 +44,8 @@ export function ClarifyStage({ queue, db, onQueueChange, onStageFinished, travel
     // state change, not a router navigation, so the unsaved-changes guard would never prompt and
     // the edit would silently drop — same rule as the revisit card's item arrows.
     const [isEditorLocked, setIsEditorLocked] = useState(false);
+    // Discard hands focus here: the Discard button unmounts with the edits it dropped.
+    const saveNextButtonRef = useRef<HTMLButtonElement>(null);
     const lockedTravel = isEditorLocked ? { ...travel, prevDisabled: true, nextDisabled: true } : travel;
     const nav = useStageDecisionNavigation({ db, queue, onQueueChange, onUndoFailed: stageToast.showError, revisit });
 
@@ -94,8 +97,19 @@ export function ClarifyStage({ queue, db, onQueueChange, onStageFinished, travel
                         onPositionMoved={yieldSlotOnDownMove(onQueueChange)}
                         renderActions={(api: ItemEditorActionsApi) => (
                             <>
-                                <StageNavButtons {...nav.liveNavProps(api.isSaving)} />
+                                {/* ◀ ▶ would leave the card and silently drop an unsaved structural
+                                    edit (text autosaves): locked until Save & next or Discard. */}
+                                <StageNavButtons {...nav.liveNavProps(api.isSaving || api.isDirty)} />
+                                {api.isDirty && (
+                                    <DiscardEditsButton
+                                        onDiscard={api.discardEdits}
+                                        focusAfter={saveNextButtonRef}
+                                        disabled={api.isSaving}
+                                        testId="clarifyDiscard"
+                                    />
+                                )}
                                 <Button
+                                    ref={saveNextButtonRef}
                                     variant="solid"
                                     disabled={api.saveDisabled}
                                     onClick={() => nav.armExplicitSave(api.isRoutineDestination ? {} : captureUndo(), api.triggerSave)}

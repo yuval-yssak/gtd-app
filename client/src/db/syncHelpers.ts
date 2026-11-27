@@ -18,6 +18,7 @@ import { forgetNetworkVerificationFor, markVerifiedWithNetwork, notifySyncQueueC
 import { hasAtLeastOne } from '../lib/typeUtils';
 import type {
     EntityType,
+    GCalOpMeta,
     MyDB,
     OpType,
     StoredClaudeAsk,
@@ -61,7 +62,7 @@ interface EntityWriteOpParams extends BaseSyncOpParams {
      * is stored on the queued op and replayed through pushback when the queue flushes so the
      * organizer-notification decision survives offline → reconnect.
      */
-    gcalMeta?: { sendUpdates: 'all' | 'none' };
+    gcalMeta?: GCalOpMeta;
 }
 
 interface RsvpOpParams extends BaseSyncOpParams {

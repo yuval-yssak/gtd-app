@@ -11,6 +11,7 @@ import type { ApplyEntityOpOutcome } from '../../lib/applyEntityOp.js';
 import { moveItem } from '../../lib/applyItemMove.js';
 import { applyAndPublishOperation, applyAndPublishOperationWithOutcome, OperationValidationError } from '../../lib/applyOperation.js';
 import type { BriefState } from '../../lib/briefSource.js';
+import { predictTrashGoogleEffect } from '../../lib/calendarPushback.js';
 import { clearBrief, loadBrief, loadBriefsByItemId, matchesBriefStateFilter, parseBriefBody, writeAuthoredBrief } from '../../lib/itemBriefs.js';
 import { parseMoveBody } from '../../lib/itemMove.js';
 import { type PriorityItem, priorityComparator, type UserClock } from '../../lib/itemPriorityOrder.js';
@@ -20,6 +21,7 @@ import { advanceRoutineAfterDisposal } from '../../lib/routineItemGeneration.js'
 import { normalizeMasterEventId } from '../../lib/routineItemRegeneration.js';
 import { stampStatusBeforeDone, withoutStatusBeforeDone } from '../../lib/statusBeforeDone.js';
 import { lowestRankForUser, topRankForUser } from '../../lib/topRankForUser.js';
+import { TRASH_GOOGLE_NOTICES, type TrashGoogleEffect } from '../../lib/trashGoogleEffect.js';
 import { hasAtLeastOne } from '../../lib/typeUtils.js';
 import { localDateInTimezone, resolveUserTimezone } from '../../lib/userTimezone.js';
 import { STATUS_FIELD_MATRIX, STATUS_SPECIFIC_FIELD_LIST } from '../../schemas/operations/item.js';
@@ -748,7 +750,9 @@ interface TrashContext {
     itemId: string;
 }
 
-type TrashResult = { ok: true; item: ItemInterface; alreadyTrashed: boolean } | { ok: false; status: 404; code: 'not_found'; message: string };
+type TrashResult =
+    | { ok: true; item: ItemInterface; alreadyTrashed: boolean; googleEffect?: TrashGoogleEffect | undefined }
+    | { ok: false; status: 404; code: 'not_found'; message: string };
 
 /**
  * Soft-deletes an item by moving it to `status: 'trash'` — the RECOVERABLE disposal primitive for
@@ -774,9 +778,11 @@ async function trashItem({ userId, tokenId, itemId }: TrashContext): Promise<Tra
     }
     const now = dayjs().toISOString();
     const updated: ItemInterface = { ...existing, status: 'trash', updatedTs: now };
+    // Predicted from the PRE-trash state, before the write: advancing the routine can deactivate it.
+    const googleEffect = await predictTrashGoogleEffect(existing, userId);
     await applyAndPublishOperation(userId, { entityType: 'item', opType: 'update', entityId: itemId, snapshot: updated }, { deviceId: `api:${tokenId}`, now });
     await maybeAdvanceRoutineForItem(existing, { userId, tokenId });
-    return { ok: true, item: updated, alreadyTrashed: false };
+    return { ok: true, item: updated, alreadyTrashed: false, googleEffect };
 }
 
 // ── PATCH /v1/items/:id (full-surface update) ──────────────────────────────────────────────
@@ -1348,7 +1354,10 @@ export const v1ItemsRoutes = new Hono<{ Variables: BearerVariables }>()
         if (result.alreadyTrashed) {
             c.header('X-Idempotent-Replay', 'true');
         }
-        return c.json(await presentWithBrief(userId, result.item));
+        const presented = await presentWithBrief(userId, result.item);
+        // Tells the caller (an AI assistant, typically) that a synced event goes away too, so it can tell the user.
+        const googleCalendar = result.googleEffect ? { effect: result.googleEffect, notice: TRASH_GOOGLE_NOTICES[result.googleEffect] } : undefined;
+        return c.json(googleCalendar ? { ...presented, googleCalendar } : presented);
     })
 
     // ── POST /v1/items/:id/move ─────────────────────────────────────────────

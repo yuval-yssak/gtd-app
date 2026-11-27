@@ -185,6 +185,12 @@ export interface ItemEditorActionsApi {
      * restore cannot reverse, so hosts offering decision undo must not capture one for it.
      */
     isRoutineDestination: boolean;
+    /**
+     * Drops every unsaved edit and re-seeds the form from the stored item (the same reset as
+     * "Use their version"). Hosts offer it as Discard beside their save, so leaving an edited card
+     * is a choice the user makes, never a side effect of another action.
+     */
+    discardEdits: () => void;
     onClose: () => void;
 }
 
@@ -712,7 +718,7 @@ export function ItemEditorBody({
         // live row (or its brief row) changes.
     }, [liveItem, liveBrief, textAutosave]);
 
-    /** "Use their version": re-seed the whole form from the live item, dropping local edits. */
+    /** "Use their version" and the hosts' Discard: re-seed the whole form from the live item, dropping local edits. */
     function adoptTheirVersion() {
         const live = liveItemRef.current;
         const seeds = itemToFormSeeds(live, liveBriefRef.current);
@@ -1123,7 +1129,16 @@ export function ItemEditorBody({
     const ownerFacts = ownerAccountFacts(loggedInAccounts, liveItem.userId);
 
     const actionButtons = renderActions ? (
-        renderActions({ triggerSave: onSave, saveDisabled, isSaving, isDirty, hasTextEdits, isRoutineDestination: status === 'routine', onClose: closeEditor })
+        renderActions({
+            triggerSave: onSave,
+            saveDisabled,
+            isSaving,
+            isDirty,
+            hasTextEdits,
+            isRoutineDestination: status === 'routine',
+            discardEdits: adoptTheirVersion,
+            onClose: closeEditor,
+        })
     ) : (
         <>
             <Button onClick={closeEditor} data-testid="itemEditorCancelButton">

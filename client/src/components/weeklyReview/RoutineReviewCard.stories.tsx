@@ -25,6 +25,7 @@ const occurrence = (id: string, daysFromToday: number): StoredItem => ({
 
 const upcomingOccurrences = [occurrence('occ-1', 1), occurrence('occ-2', 2), occurrence('occ-3', 3)];
 const overdueOccurrences = [occurrence('occ-past', -2), ...upcomingOccurrences];
+const overdueBacklog = [occurrence('occ-past-3', -3), occurrence('occ-past-2', -2), occurrence('occ-past-1', -1), ...upcomingOccurrences];
 
 // Generated occurrences carry the routine template's notes — the card's editor shows the occurrence's.
 const agendaNotes = 'Agenda:\n\n1. **Blockers** first\n2. Yesterday / today\n3. Parking lot';
@@ -79,9 +80,29 @@ type Story = StoryObj<typeof meta>;
 /** A live series collapsed to one card — the review editor on its first open occurrence, with Pause / Edit series / Done / Looks good. */
 export const Upcoming: Story = {};
 
-/** The first open occurrence already passed — the editor opens on IT (not the next upcoming one), and Done completes it. */
+/** The first open occurrence already passed — the editor opens on IT (not the next upcoming one); Done completes it, Missed drops it in Done only. */
 export const Overdue: Story = {
     decorators: [withOccurrences(overdueOccurrences)],
+    play: async ({ canvasElement }) => {
+        await within(canvasElement).findByTestId('routineCardMissed');
+    },
+};
+
+/** Several occurrences overdue — the banner counts the backlog apart from the upcoming ones. */
+export const OverdueBacklog: Story = {
+    decorators: [withOccurrences(overdueBacklog)],
+    play: async ({ canvasElement }) => {
+        await expect(await within(canvasElement).findByText('2 more overdue · 3 upcoming', { exact: false })).toBeVisible();
+    },
+};
+
+/** Done on one of several overdue occurrences — the chooser asks whether the others were done too or missed. */
+export const OverdueChoice: Story = {
+    decorators: [withOccurrences(overdueBacklog)],
+    play: async ({ canvasElement }) => {
+        await userEvent.click(await within(canvasElement).findByTestId('routineCardDone'));
+        await within(document.body).findByTestId('overdueOccurrencesAllDone');
+    },
 };
 
 /** The occurrence carries Markdown notes — shown in the editor's notes preview, as on a one-off. */

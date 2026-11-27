@@ -32,6 +32,7 @@ import {
 } from './routineItemRegeneration.js';
 import { isRankOnlyRoutineChange } from './routineRankChange.js';
 import { isPastSeriesEnd } from './splitChainResolution.js';
+import type { TrashGoogleEffect } from './trashGoogleEffect.js';
 import { hasAtLeastOne } from './typeUtils.js';
 
 type ProviderFactory = (integration: CalendarIntegrationInterface, userId: string) => CalendarProvider;
@@ -127,6 +128,10 @@ export async function maybePushToGCal(op: OperationInterface, buildProvider: Pro
         await surfacePushFailure(op, outcome);
         return [];
     }
+    if (leavesGoogleUntouched(op)) {
+        console.log('[gcal-pushback] trash that keeps the Google event — nothing pushed', { entityId: op.entityId, opId: op._id });
+        return [];
+    }
     if (op.entityType === 'item' && op.snapshot) {
         const outcome = await handleItemPush(op.snapshot as ItemInterface, op.user, buildProvider, sendUpdates);
         await surfacePushFailure(op, outcome);
@@ -138,6 +143,22 @@ export async function maybePushToGCal(op: OperationInterface, buildProvider: Pro
         return recordedOpsOf(outcome);
     }
     return [];
+}
+
+/**
+ * A trash op that must not touch Google: an edit of an already-trashed row (only the move into
+ * trash removes anything), or a missed routine occurrence (`gcalMeta.keepGoogleEvent`), which
+ * Google keeps as history. The flag is honoured for routine occurrences only — a standalone
+ * event left live would revive its trashed row on the next inbound sync and free its event id
+ * for another row to claim.
+ */
+function leavesGoogleUntouched(op: OperationInterface) {
+    const snapshot = op.entityType === 'item' ? (op.snapshot as ItemInterface | null) : null;
+    if (snapshot?.status !== 'trash') {
+        return false;
+    }
+    const isRoutineOccurrence = snapshot.routineId !== undefined && snapshot.calendarEventId === undefined;
+    return op.rowAlreadyTrash === true || (op.gcalMeta?.keepGoogleEvent === true && isRoutineOccurrence);
 }
 
 /**
@@ -446,6 +467,47 @@ async function pushRoutineInstanceCancellation(
         await stampItemLastPushed(userId, snapshot._id);
     }
     return;
+}
+
+/**
+ * What trashing `item` (its pre-trash row) will do in Google Calendar — for the API caller to tell
+ * the user. Runs the trash path's own guards so the two cannot drift: a disconnect-kept row and
+ * a row pointing at a routine's master pushes nothing; an occurrence needs an active, linked
+ * routine that still produces its date, and no Gmail-created event; the integration must be
+ * active (otherwise `googleSyncPaused`, since the push is dropped). An integration row that is
+ * gone reads as no effect — the heal fallback may or may not find another one.
+ */
+export async function predictTrashGoogleEffect(item: ItemInterface, userId: string) {
+    if (item.lastKnownCalendarEventId) {
+        return undefined;
+    }
+    if (item.calendarEventId) {
+        const isMasterLinked = hasAtLeastOne(await findRoutinesOnMasterEvent(item.calendarEventId, userId));
+        return isMasterLinked ? undefined : effectUnlessPaused('eventDeleted', item.calendarIntegrationId, userId);
+    }
+    const routine = await cancellableOccurrenceRoutine(item, userId);
+    return routine ? effectUnlessPaused('occurrenceCancelled', routine.calendarIntegrationId, userId) : undefined;
+}
+
+/** The routine whose Google instance `pushRoutineInstanceCancellation` would cancel for this item, if any. */
+async function cancellableOccurrenceRoutine(item: ItemInterface, userId: string) {
+    if (!item.routineId || !item.timeStart || item.eventType === 'fromGmail') {
+        return null;
+    }
+    const routine = await routinesDAO.findByOwnerAndId(item.routineId, userId);
+    if (!routine?.calendarEventId || !routine.active || isDroppedFromSchedule(routine, resolveOriginalDate(routine, item))) {
+        return null;
+    }
+    return routine;
+}
+
+async function effectUnlessPaused(effect: TrashGoogleEffect, integrationId: string | undefined, userId: string) {
+    // Only the status is needed: a plain owner-scoped read keeps the OAuth credentials encrypted.
+    const integration = integrationId ? await calendarIntegrationsDAO.findOne({ _id: integrationId, user: userId }, { projection: { status: 1 } }) : null;
+    if (!integration) {
+        return undefined;
+    }
+    return integrationStatus(integration) === 'active' ? effect : 'googleSyncPaused';
 }
 
 /**

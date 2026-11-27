@@ -1236,7 +1236,9 @@ test.describe('weekly review', () => {
         });
     });
 
-    test('the routine card completes the occurrence it shows — the first undone one, overdue included', async ({ browser }) => {
+    test('the routine card completes the occurrence it shows — the first undone one, overdue included — then moves to the next overdue one', async ({
+        browser,
+    }) => {
         await withOneLoggedInDevice(browser, `wr-routine-done-${uniqueStamp()}@example.com`, async (page) => {
             const routine = await gtd.createRoutine(page, {
                 title: 'Update Microsoft Keys',
@@ -1281,13 +1283,22 @@ test.describe('weekly review', () => {
                 dayjs().subtract(seeded.length, 'day').format('YYYY-MM-DD'),
             );
 
-            // Same "Done" a one-off calendar card offers; it completes THAT occurrence, decides the
-            // entry, and writes no undo (it advances the series).
+            // Same "Done" a one-off calendar card offers — but other occurrences are overdue too, so it
+            // first asks about them. "Only this one" completes THAT occurrence and writes no undo (it
+            // advances the series).
             await expect(page.getByTestId('routineCardDone')).toHaveText('Done');
             await page.getByTestId('routineCardDone').click();
-            // Wait on the post-decision STATE, not the counter: the series is the stage's only
-            // entry, so deciding it ends the stage. Asserting the counter races the commit.
-            await expect(page.getByTestId('stageEmptyCard')).toContainText('Calendar — all reviewed!');
+            await page.getByTestId('overdueOccurrencesThisOne').click();
+            // The entry is not decided while overdue occurrences remain: the card moves on to the next
+            // one (its editor remounts on the read-only summary, so wait for the move, then reopen the form).
+            expect(seeded.length).toBeGreaterThan(2);
+            await expect(routineCard.getByTestId('reviewRoutineBanner')).toContainText(`${seeded.length - 2} more overdue`);
+            await openReviewDetailsForm(routineCard);
+            await expect(routineCard.getByRole('textbox', { name: 'Date', exact: true })).toHaveValue(
+                dayjs()
+                    .subtract(seeded.length - 1, 'day')
+                    .format('YYYY-MM-DD'),
+            );
             await gtd.flush(page);
             const after = await gtd.listItems(page);
             expect(after.find((item) => item._id === earliest._id)?.status).toBe('done');

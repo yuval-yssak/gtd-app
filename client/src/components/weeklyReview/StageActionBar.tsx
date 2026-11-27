@@ -1,7 +1,9 @@
 import { ChevronsLeft, ChevronsRight } from 'lucide-react';
+import { useCallback, useState } from 'react';
 import { Card, IconButton } from '../../designSystem';
 import { DisabledCapableTooltip } from '../DisabledCapableTooltip';
 import styles from './stageLayout.module.css';
+import { useScrollToInlineEnd } from './useScrollToInlineEnd';
 
 /**
  * Stage-level travel: the ⏪ ⏩ pair pinned to the bar's outer edges on EVERY stage view, one
@@ -36,6 +38,16 @@ interface StageActionBarProps {
  * the single-arrow item-level pair (StageNavButtons).
  */
 export function StageActionBar({ travel, onBarMounted, children }: StageActionBarProps) {
+    // State, not a ref: the scroll hook must re-subscribe when the slot element mounts.
+    const [contentEl, setContentEl] = useState<HTMLElement | null>(null);
+    useScrollToInlineEnd(contentEl);
+    const onContentMounted = useCallback(
+        (element: HTMLElement | null) => {
+            setContentEl(element);
+            onBarMounted?.(element);
+        },
+        [onBarMounted],
+    );
     return (
         <Card padding="none" className={styles.actionBar} data-testid="stageActionBar">
             <TravelArrow label="Previous stage" testId="stageTravelPrev" onNavigate={travel.onPrevStage} disabled={travel.prevDisabled}>
@@ -44,7 +56,7 @@ export function StageActionBar({ travel, onBarMounted, children }: StageActionBa
             {/* The portal target is this inner slot (not the bar): portaled editor actions append
                 to their container's end, and appending into the bar would land them AFTER the
                 next-stage arrow, breaking the bar's visual order. */}
-            <div className={styles.actionBarContent} ref={onBarMounted}>
+            <div className={styles.actionBarContent} ref={onContentMounted} data-testid="stageActionBarContent">
                 {children}
             </div>
             <TravelArrow label="Next stage" testId="stageTravelNext" onNavigate={travel.onNextStage} disabled={travel.nextDisabled}>

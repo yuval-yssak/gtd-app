@@ -110,3 +110,42 @@
     justify-content: flex-end;
     gap: var(--space-2);
 }
+
+/* Phones (the md breakpoint, mirrored from BELOW_MD_QUERY in hooks/useIsMobile.ts): one row that
+ * scrolls sideways instead of wrapping into a tall bar. `safe` falls back to start alignment on
+ * overflow, so the first buttons stay reachable; useScrollToInlineEnd opens the row on its
+ * primary end. The block padding keeps focus rings from being clipped by the scroll box. */
+@media (width < 900px) {
+    .actionBarContent {
+        /* Edge fades hint that buttons are scrolled out of view on that side; useScrollToInlineEnd
+         * sets the flags below. A zero-width fade leaves that edge opaque, so each edge fades on
+         * its own. A mask reads only alpha, so any opaque token serves as the visible stop. */
+        --fade-start: 0px;
+        --fade-end: 0px;
+
+        flex-wrap: nowrap;
+        justify-content: safe flex-end;
+        overflow-x: auto;
+        overscroll-behavior-x: contain;
+        padding-block: var(--space-1);
+        mask-image: linear-gradient(
+            to right,
+            transparent,
+            var(--color-text-primary) var(--fade-start),
+            var(--color-text-primary) calc(100% - var(--fade-end)),
+            transparent
+        );
+    }
+
+    .actionBarContent > * {
+        flex-shrink: 0;
+    }
+
+    .actionBarContent[data-hidden-start] {
+        --fade-start: var(--space-8);
+    }
+
+    .actionBarContent[data-hidden-end] {
+        --fade-end: var(--space-8);
+    }
+}

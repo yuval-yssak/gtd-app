@@ -1,5 +1,5 @@
 import type { IDBPDatabase } from 'idb';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { usePendingReassign } from '../../contexts/PendingReassignProvider';
 import { clarifyToDone, clarifyToTrash, FROM_GMAIL_DONE_NOTICE, releaseFromTickler } from '../../db/itemMutations';
@@ -7,6 +7,7 @@ import { Button, Card, Text } from '../../designSystem';
 import type { MyDB, StoredItem } from '../../types/MyDB';
 import { FutureDoneConfirmDialog, useFutureDoneConfirm } from '../FutureDoneConfirmDialog';
 import { type ItemEditorActionsApi, ItemEditorBody } from '../itemEditor/ItemEditorBody';
+import { DiscardEditsButton } from './DiscardEditsButton';
 import { RevisitDecisionCard } from './RevisitDecisionCard';
 import { RoutineReviewBanner } from './RoutineReviewBanner';
 import { RoutineReviewCard } from './RoutineReviewCard';
@@ -63,6 +64,8 @@ export function FocusStage({ stage, queue, db, onQueueChange, onStageFinished, t
     // the edit would silently drop — same rule as the revisit card's item arrows.
     const [isEditorLocked, setIsEditorLocked] = useState(false);
     const lockedTravel = isEditorLocked ? { ...travel, prevDisabled: true, nextDisabled: true } : travel;
+    // Discard hands focus here: the Discard button unmounts with the edits it dropped.
+    const primaryButtonRef = useRef<HTMLButtonElement>(null);
     const nav = useStageDecisionNavigation({ db, queue, onQueueChange, onUndoFailed: stageToast.showError, revisit });
     // The tickler walks by wake-up date, not rank — a Position row there would move the item in a
     // list the user is not looking at. One gate for the live card and the revisit card alike.
@@ -152,42 +155,53 @@ export function FocusStage({ stage, queue, db, onQueueChange, onStageFinished, t
     const onTrash = () => decideWith(() => clarifyToTrash(db, currentItem));
     const onRelease = () => decideWith(() => releaseFromTickler(db, currentItem));
 
-    const renderActions = (api: ItemEditorActionsApi) => (
-        <>
-            <StageNavButtons {...nav.liveNavProps(api.isSaving)} />
-            {stage.id === 'somedayMaybe' ? (
-                <Button tone="danger" disabled={api.isSaving} onClick={() => void onTrash()} data-testid="focusTrash">
-                    Trash
+    // Leaving the card with unsaved structural edits would silently drop them (text autosaves here),
+    // so every leaving action is locked until the user saves or discards — Discard is the way to not save.
+    const renderActions = (api: ItemEditorActionsApi) => {
+        const isLeavingLocked = api.isSaving || api.isDirty;
+        return (
+            <>
+                <StageNavButtons {...nav.liveNavProps(isLeavingLocked)} />
+                {stage.id === 'somedayMaybe' ? (
+                    <Button tone="danger" disabled={isLeavingLocked} onClick={() => void onTrash()} data-testid="focusTrash">
+                        Trash
+                    </Button>
+                ) : (
+                    <Button
+                        disabled={isLeavingLocked}
+                        onClick={() => futureDone.confirmDone(currentItem, (latest) => void onDone(latest))}
+                        data-testid="focusDone"
+                    >
+                        Done
+                    </Button>
+                )}
+                {stage.id === 'tickler' && (
+                    <Button disabled={isLeavingLocked} onClick={() => void onRelease()} data-testid="focusRelease">
+                        Release now
+                    </Button>
+                )}
+                {api.isDirty && <DiscardEditsButton onDiscard={api.discardEdits} focusAfter={primaryButtonRef} disabled={api.isSaving} testId="focusDiscard" />}
+                {/* Dirty-aware primary: untouched → advance without a write; edited → the body's save
+                    path commits, then its post-save onClose completes the item out of the queue. The
+                    label also acknowledges autosaved text edits (hasTextEdits), which need no explicit
+                    save — the debounced commit (or the unmount flush) lands them either way. A routine
+                    destination is a compound write no snapshot can reverse, so it arms no undo. */}
+                <Button
+                    ref={primaryButtonRef}
+                    variant="solid"
+                    disabled={api.isDirty ? api.saveDisabled : api.isSaving}
+                    onClick={
+                        api.isDirty
+                            ? () => nav.armExplicitSave(api.isRoutineDestination ? {} : captureUndo(), api.triggerSave)
+                            : () => nav.recordDecision({ itemId: currentEntryId, ...captureNoWriteUndo() })
+                    }
+                    data-testid="focusKeep"
+                >
+                    {api.isDirty || api.hasTextEdits ? 'Save & next' : 'Looks good'}
                 </Button>
-            ) : (
-                <Button disabled={api.isSaving} onClick={() => futureDone.confirmDone(currentItem, (latest) => void onDone(latest))} data-testid="focusDone">
-                    Done
-                </Button>
-            )}
-            {stage.id === 'tickler' && (
-                <Button disabled={api.isSaving} onClick={() => void onRelease()} data-testid="focusRelease">
-                    Release now
-                </Button>
-            )}
-            {/* Dirty-aware primary: untouched → advance without a write; edited → the body's save
-                path commits, then its post-save onClose completes the item out of the queue. The
-                label also acknowledges autosaved text edits (hasTextEdits), which need no explicit
-                save — the debounced commit (or the unmount flush) lands them either way. A routine
-                destination is a compound write no snapshot can reverse, so it arms no undo. */}
-            <Button
-                variant="solid"
-                disabled={api.isDirty ? api.saveDisabled : api.isSaving}
-                onClick={
-                    api.isDirty
-                        ? () => nav.armExplicitSave(api.isRoutineDestination ? {} : captureUndo(), api.triggerSave)
-                        : () => nav.recordDecision({ itemId: currentEntryId, ...captureNoWriteUndo() })
-                }
-                data-testid="focusKeep"
-            >
-                {api.isDirty || api.hasTextEdits ? 'Save & next' : 'Looks good'}
-            </Button>
-        </>
-    );
+            </>
+        );
+    };
 
     // Routine-generated items get a prominent strip above the editor ("review the pattern, not
     // the copy"); a calendar occurrence individually moved off the pattern is labeled an exception.

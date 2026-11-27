@@ -2,6 +2,10 @@
  * Pure helpers behind RoutineReviewCard. Render-free so they unit-test under vitest's
  * `environment: 'node'` (the project has no jsdom — see vitest.config.ts).
  */
+import dayjs, { type Dayjs } from 'dayjs';
+import type { OccurrenceDisposalPlan } from '../../db/itemMutations';
+import { formatDisplayDate } from '../../lib/displayDate';
+import { isOverdueCalendarItem } from '../../lib/routineNextItem';
 import type { StoredItem, StoredRoutine } from '../../types/MyDB';
 import { isModifiedExceptionItem } from './reviewFlowState';
 
@@ -44,12 +48,96 @@ export function revisitedOccurrence(routine: StoredRoutine, allItems: ReadonlyAr
     return recorded ?? reviewedOccurrence(routine, allItems, undefined);
 }
 
+/** The occurrences whose end has already passed — still open, so the user never closed them out. */
+export function overdueOccurrences(occurrences: ReadonlyArray<StoredItem>, now: Dayjs): StoredItem[] {
+    return occurrences.filter((occurrence) => isOverdueCalendarItem(occurrence, now));
+}
+
 /**
- * The series tail in the routine banner, e.g. "41 more after this one"; empty when the shown
- * occurrence is the last. Counted by id, not `length - 1`: an edit can turn the shown occurrence
- * into an exception, which drops it from `occurrences` while the card still shows it.
+ * The series tail in the routine banner: "41 more after this one", or — while other overdue
+ * occurrences are still open — "2 more overdue · 40 upcoming", so the backlog behind the shown one
+ * is never hidden in a single count. Empty when the shown occurrence is the last. Counted by id,
+ * not `length - 1`: an edit can turn the shown occurrence into an exception, which drops it from
+ * `occurrences` while the card still shows it.
  */
-export function remainingOccurrencesLabel(occurrences: ReadonlyArray<StoredItem>, shown: StoredItem | undefined): string {
-    const others = occurrences.filter((occurrence) => occurrence._id !== shown?._id).length;
-    return others > 0 ? `${others} more after this one` : '';
+export function remainingOccurrencesLabel(occurrences: ReadonlyArray<StoredItem>, shown: StoredItem | undefined, now: Dayjs): string {
+    const others = occurrences.filter((occurrence) => occurrence._id !== shown?._id);
+    const overdueCount = overdueOccurrences(others, now).length;
+    if (overdueCount === 0) {
+        return others.length > 0 ? `${others.length} more after this one` : '';
+    }
+    const upcomingCount = others.length - overdueCount;
+    return upcomingCount > 0 ? `${overdueCount} more overdue · ${upcomingCount} upcoming` : `${overdueCount} more overdue`;
+}
+
+/** Done on an overdue occurrence asks what happened to the others — whether they were done too, or missed. */
+export function needsOverdueChoice(occurrences: ReadonlyArray<StoredItem>, shown: StoredItem, now: Dayjs): boolean {
+    return isOverdueCalendarItem(shown, now) && overdueOccurrences(occurrences, now).some((occurrence) => occurrence._id !== shown._id);
+}
+
+/**
+ * The overdue occurrence the card moves on to after disposing of `disposedIds`. Read from the
+ * pre-disposal list (the app data refresh lands after the card decides), so the disposed rows
+ * are excluded by id. Undefined when the backlog is cleared — the entry is then decided.
+ */
+export function nextOverdueOccurrence(occurrences: ReadonlyArray<StoredItem>, disposedIds: ReadonlySet<string>, now: Dayjs): StoredItem | undefined {
+    return overdueOccurrences(occurrences, now).find((occurrence) => !disposedIds.has(occurrence._id));
+}
+
+/** The question the overdue chooser is asking, by id: the rows themselves are re-read when the user answers. */
+export interface OverdueQuestion {
+    shownId: string;
+    overdueIds: ReadonlyArray<string>;
+}
+
+/**
+ * The live rows an answer applies to. The chooser stays open across syncs, so writing the rows it
+ * opened on would overwrite a remote edit under last-write-wins, or revive one completed elsewhere.
+ * Rows that left the backlog meanwhile (completed, trashed, turned into an exception) drop out;
+ * undefined when the occurrence Done was pressed on is gone — nothing is written then.
+ */
+export function resolveOverdueChoice(
+    occurrences: ReadonlyArray<StoredItem>,
+    question: OverdueQuestion,
+    now: Dayjs,
+): { shown: StoredItem; overdue: StoredItem[] } | undefined {
+    const overdue = overdueOccurrences(occurrences, now).filter((occurrence) => question.overdueIds.includes(occurrence._id));
+    const shown = overdue.find((occurrence) => occurrence._id === question.shownId);
+    return shown ? { shown, overdue } : undefined;
+}
+
+/** What the user said about the overdue occurrences when completing one of them. */
+export type OverdueChoice = 'allDone' | 'thisOneDone' | 'thisDoneRestMissed';
+
+/** Turns the user's answer into the occurrences to complete and the ones to mark missed. `overdue` includes `shown`. */
+export function planOverdueDisposal(choice: OverdueChoice, shown: StoredItem, overdue: ReadonlyArray<StoredItem>): OccurrenceDisposalPlan {
+    const others = overdue.filter((occurrence) => occurrence._id !== shown._id);
+    switch (choice) {
+        case 'allDone':
+            return { done: overdue, missed: [] };
+        case 'thisOneDone':
+            return { done: [shown], missed: [] };
+        case 'thisDoneRestMissed':
+            return { done: [shown], missed: others };
+    }
+}
+
+// Past a handful of dates the list stops informing and starts crowding the dialog.
+const LISTED_OVERDUE_DATES = 3;
+
+/** "Tue, Aug 18 09:00 and Wed, Aug 19 09:00" — the overdue dates the chooser names, a long backlog capped with a count. */
+export function overdueDatesLabel(overdue: ReadonlyArray<StoredItem>, now: Dayjs): string {
+    const dates = overdue.map((occurrence) => occurrenceDateLabel(occurrence, now));
+    if (dates.length > LISTED_OVERDUE_DATES + 1) {
+        return `${dates.slice(0, LISTED_OVERDUE_DATES).join(', ')} and ${dates.length - LISTED_OVERDUE_DATES} more`;
+    }
+    const leading = dates.slice(0, -1);
+    const last = dates.at(-1) ?? '';
+    return leading.length > 0 ? `${leading.join(', ')} and ${last}` : last;
+}
+
+function occurrenceDateLabel(occurrence: StoredItem, now: Dayjs): string {
+    const start = dayjs(occurrence.timeStart);
+    const day = formatDisplayDate(start, 'ddd, MMM D', now);
+    return occurrence.allDay ? day : `${day} ${start.format('HH:mm')}`;
 }

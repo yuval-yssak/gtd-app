@@ -682,7 +682,19 @@ Requires the `items.write` scope.
 
 **Request body**: empty (or `{}`).
 
-**Response** — `200 OK` with the updated (trashed) item.
+**Response** — `200 OK` with the updated (trashed) item. When the trash also removes the item from Google Calendar, the body carries one more field next to the item's own:
+
+```json
+"googleCalendar": { "effect": "eventDeleted", "notice": "This item was synced with Google Calendar, so its Google Calendar event is being deleted too." }
+```
+
+`effect` is one of:
+
+- `eventDeleted` — a linked event is being deleted.
+- `occurrenceCancelled` — one occurrence of a Google-linked, active routine is being cancelled; the rest of the series stays.
+- `googleSyncPaused` — the item is synced, but its Google Calendar connection is suspended or revoked, so the event stays in Google; the notice tells the user to reconnect or delete it there.
+
+The prediction runs the same guards as the calendar push: absent when nothing in Google changes (an unlinked item, an item pointing at a routine's master event, an occurrence the routine no longer produces, a paused routine, a Gmail-created event) and on an idempotent replay. The push itself runs after the response, so a Google failure still surfaces in the app's sync issues. `notice` is a ready-to-relay sentence for the user — the MCP tool tells assistants to pass it on.
 
 **Errors**
 
@@ -692,6 +704,7 @@ Requires the `items.write` scope.
 
 **Side effects**
 
+- Trashing a Google-synced calendar item deletes its Google event, or cancels that occurrence of a synced routine (see `googleCalendar` above).
 - Trashing a `routine`-generated item advances the series (next instance is generated), mirroring the in-app `clarifyToTrash` flow.
 - An `OperationInterface` (`opType: 'update'`, not `delete`) is logged with `deviceId = "api:<tokenId>"` so all the user's devices pull the trashed state on their next sync.
 

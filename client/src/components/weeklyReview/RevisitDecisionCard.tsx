@@ -1,5 +1,5 @@
 import type { IDBPDatabase } from 'idb';
-import { useState } from 'react';
+import { type Ref, useRef, useState } from 'react';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { usePendingReassign } from '../../contexts/PendingReassignProvider';
 import { Button, Card, Text } from '../../designSystem';
@@ -7,6 +7,7 @@ import { formatRoutineSchedule } from '../../lib/rruleUtils';
 import type { MyDB, StoredItem, StoredRoutine } from '../../types/MyDB';
 import { DisabledCapableTooltip } from '../DisabledCapableTooltip';
 import { ItemEditorBody } from '../itemEditor/ItemEditorBody';
+import { DiscardEditsButton } from './DiscardEditsButton';
 import { RoutineReviewBanner } from './RoutineReviewBanner';
 import { routineIdOfEntry, type StageDecision, undoUnavailableReason } from './reviewFlowState';
 import { revisitedOccurrence } from './routineReviewCardLogic';
@@ -77,12 +78,12 @@ export function RevisitDecisionCard(props: RevisitDecisionCardProps) {
     );
 }
 
-/** The revisit card's ◀ / ▶ — locked while the editor holds an unsaved edit or a save. */
-function revisitNavProps({ canGoBack, onGoBack, onGoForward }: RevisitDecisionCardProps, isLocked: boolean) {
+/** The revisit card's ◀ / ▶ — locked while the editor holds an unsaved edit or a save. `forwardRef` takes focus after Discard. */
+function revisitNavProps({ canGoBack, onGoBack, onGoForward }: RevisitDecisionCardProps, isLocked: boolean, forwardRef?: Ref<HTMLButtonElement>) {
     return {
         onBack: onGoBack,
         backDisabled: !canGoBack || isLocked,
-        forward: { onForward: onGoForward, disabled: isLocked, label: 'Forward' },
+        forward: { onForward: onGoForward, disabled: isLocked, label: 'Forward', ref: forwardRef },
     };
 }
 
@@ -104,6 +105,8 @@ function RevisitEditorCard(props: RevisitEditorCardProps) {
     // router-based unsaved-changes guard can never see.
     const [isEditorLocked, setIsEditorLocked] = useState(false);
     const lockedTravel = isEditorLocked ? { ...travel, prevDisabled: true, nextDisabled: true } : travel;
+    // Discard hands focus to ▶: Save is disabled once nothing is edited, and Undo may be too.
+    const forwardButtonRef = useRef<HTMLButtonElement>(null);
 
     // An occurrence edit records a `modified` exception on the routine row, so both refresh.
     async function onOccurrenceSaved() {
@@ -143,8 +146,16 @@ function RevisitEditorCard(props: RevisitEditorCardProps) {
                                 {/* Arrows lock while a structural edit is pending — navigating away here
                                 is a state change, not a router navigation, so the unsaved-changes
                                 guard would never prompt and the edit would silently drop. */}
-                                <StageNavButtons {...revisitNavProps(props, api.isDirty || api.isSaving)} />
+                                <StageNavButtons {...revisitNavProps(props, api.isDirty || api.isSaving, forwardButtonRef)} />
                                 <UndoDecisionButton decision={decision} onUndoDecision={onUndoDecision} disabled={isUndoing || api.isSaving} />
+                                {api.isDirty && (
+                                    <DiscardEditsButton
+                                        onDiscard={api.discardEdits}
+                                        focusAfter={forwardButtonRef}
+                                        disabled={api.isSaving}
+                                        testId="revisitDiscard"
+                                    />
+                                )}
                                 {/* Manual-fix path: structural edits (e.g. flipping a wrong Done's status
                                 chip) commit here; text edits autosave and need no explicit save —
                                 except on a recurring event's occurrence, where text waits for Save too.

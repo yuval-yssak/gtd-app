@@ -28,6 +28,9 @@ export const SERVER_INSTRUCTIONS = [
     "`done_generate_brief` asks the server's model for a brief immediately — use it only when the user wants one now.",
     'Briefs are only generated for OPEN items; a done or trashed item is never briefed (409 `brief_not_applicable`),',
     'though a brief written before it was closed is kept.',
+    'Trashing an item synced with Google Calendar also removes it there: `done_trash_item` then returns a `googleCalendar`',
+    'block whose `notice` says the Google event is being deleted, the routine occurrence cancelled, or that sync is paused',
+    'so the event stays in Google — always tell the user that notice.',
     'A request that comes from the Done app ("Ask Claude") names an `askId`: when you finish it, call',
     '`done_report_claude_ask` with that id and a one-line summary (outcome `needsInput` if the user must answer first).',
 ].join(' ');

@@ -228,7 +228,7 @@ Every tool carries a `title` and all four MCP safety annotations, which a client
 
 ### Why no `done_delete_item`?
 
-Items are never hard-deleted through the public surface. Use `done_trash_item`, a recoverable soft-delete: the item stays in the in-app Trash and can be restored. `done_update_item` rejects `status: "trash"`, and `done_batch` rejects `{entityType:'item', opType:'delete'}` with 400. Batch `delete` stays valid for routines, people and work contexts.
+Items are never hard-deleted through the public surface. Use `done_trash_item`, a recoverable soft-delete: the item stays in the in-app Trash and can be restored. `done_update_item` rejects `status: "trash"`, and `done_batch` rejects `{entityType:'item', opType:'delete'}` with 400. Batch `delete` stays valid for routines, people and work contexts. Trashing an item synced with Google Calendar removes it there too (event deleted, or that routine occurrence cancelled) unless sync is paused for that account; the response then carries `googleCalendar: { effect, notice }`, and the server instructions tell the assistant to relay the `notice` to the user.
 
 ## Status×field matrix
 

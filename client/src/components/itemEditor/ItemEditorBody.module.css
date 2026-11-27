@@ -130,6 +130,16 @@
     min-inline-size: 0;
 }
 
+/* Phones: the review's stage bar (every portal host) scrolls sideways instead of wrapping —
+ * stageLayout.module.css § actionBarContent. The row keeps its content width so it overflows the
+ * scroll slot rather than shrinking and wrapping inside it. Same md breakpoint as that rule. */
+@media (width < 900px) {
+    .inlineActions[data-stretched] {
+        flex: 1 0 auto;
+        flex-wrap: nowrap;
+    }
+}
+
 /* Bottom meta row: created timestamp at the start, the copiable item id pushed to the end. */
 .metaRow {
     display: flex;

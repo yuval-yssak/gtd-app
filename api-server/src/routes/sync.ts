@@ -23,7 +23,15 @@ import { vapidPublicKey } from '../lib/webPush.js';
 import { auth } from '../loaders/mainLoader.js';
 import { stripDisallowedStatusFields } from '../schemas/operations/index.js';
 import type { AuthVariables } from '../types/authTypes.js';
-import { type DeviceSyncStateInterface, deviceSyncStateId, type EntitySnapshot, type EntityType, type OpType, type RsvpOpPayload } from '../types/entities.js';
+import {
+    type DeviceSyncStateInterface,
+    deviceSyncStateId,
+    type EntitySnapshot,
+    type EntityType,
+    type GCalOpMeta,
+    type OpType,
+    type RsvpOpPayload,
+} from '../types/entities.js';
 import { syncIssuesRoutes } from './syncIssues.js';
 
 // Cap on a single SSE stream's lifetime. Chosen well under Cloud Run's 300s request timeout so
@@ -59,7 +67,7 @@ interface ClientOp {
      * Sidecar populated by the client's SendUpdatesDialog choice on calendar-item edits. Carried
      * verbatim onto the persisted operation so GCal pushback can forward it to provider calls.
      */
-    gcalMeta?: { sendUpdates: 'all' | 'none' };
+    gcalMeta?: GCalOpMeta;
     /**
      * Required when `opType === 'rsvp'`. The replay path (lib/rsvpReplay.ts) reads this off the
      * persisted op to drive `events.patch` after a long offline period.

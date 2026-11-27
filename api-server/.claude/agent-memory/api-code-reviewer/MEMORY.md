@@ -141,3 +141,4 @@
 - [Trash status is overloaded](project_trash_status_overloaded.md) — user skip vs system trash (pause, type switch, regen); rules reading trash as user intent miscount (COUNT fix 2026-11-11)
 - [GCal terminal bucket too wide for silent give-ups](project_gcal_terminal_bucket_too_wide_for_stamping.md) — 'terminal' includes quota/scope 403s; fine for panel Dismiss, wrong for invisible stamp/skip
 - [Item sidecar cascade sites](project_item_sidecar_cascade_sites.md) — new per-item sidecar cascades miss scripts/deleteCloneRoutines + deleteCalendarItems; grep cascadeItemBriefRemoval
+- [Pushback is not transition-aware](project_pushback_not_transition_aware.md) — trash→trash edit re-runs Google delete/cancel; per-op gcalMeta policies undone by next op; batch hydrators read PRE-BATCH rows

@@ -298,7 +298,9 @@ const trashItem = defineTool({
         'Trash (soft-delete) a single item — moves it to `status: "trash"`. This is the correct way to dispose of an item: ' +
         "it is RECOVERABLE (the item stays in the user's in-app Trash view and can be restored), unlike a hard delete which is " +
         'permanent. Idempotent — trashing an already-trashed item returns it unchanged. If the item belongs to an active ' +
-        'nextAction routine, the next occurrence is generated automatically.',
+        'nextAction routine, the next occurrence is generated automatically. A calendar item synced with Google Calendar ' +
+        'is removed there too (its event deleted, or that routine occurrence cancelled) unless sync is paused for that account. ' +
+        'Whenever the response carries `googleCalendar: { effect, notice }`, tell the user the `notice` in your reply.',
     inputSchema: {
         id: idSchema,
         account: accountSchema,

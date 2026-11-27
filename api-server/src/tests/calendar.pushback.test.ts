@@ -711,6 +711,76 @@ describe('calendar push-back — routine instance overrides', () => {
     });
 });
 
+// A missed past routine occurrence leaves Done while Google keeps it as history.
+const KEEP_GOOGLE_EVENT = { sendUpdates: 'none', keepGoogleEvent: true } as const;
+
+function missedTrashOp(userId: string, item: ItemInterface) {
+    return makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item, gcalMeta: KEEP_GOOGLE_EVENT });
+}
+
+describe('calendar push-back — keep the Google event on trash', () => {
+    async function aliceWithIntegration() {
+        const userId = await getUserId(await loginAsAlice());
+        await insertIntegrationWithConfig(userId);
+        return userId;
+    }
+
+    it('leaves the GCal instance in place when a routine occurrence is trashed with keepGoogleEvent (a missed occurrence)', async () => {
+        const userId = await aliceWithIntegration();
+        await routinesDAO.insertOne(
+            makeRoutine(userId, { calendarEventId: 'recurring-master-1', calendarIntegrationId: 'int-1', calendarSyncConfigId: 'sync-config-1' }),
+        );
+        const item = makeItem(userId, {
+            _id: 'item-missed-1',
+            routineId: 'routine-1',
+            status: 'trash',
+            timeStart: '2026-04-20T09:00:00.000Z',
+            timeEnd: '2026-04-20T10:00:00.000Z',
+            calendarInstanceEventId: 'recurring-master-1_20260420T090000Z',
+        });
+        await itemsDAO.insertOne(item);
+        const cancelSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'cancelRecurringInstance').mockResolvedValue(undefined);
+        const updateSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateRecurringInstance').mockResolvedValue(undefined);
+
+        await maybePushToGCal(missedTrashOp(userId, item), mockBuildProvider());
+
+        expect(cancelSpy).not.toHaveBeenCalled();
+        expect(updateSpy).not.toHaveBeenCalled();
+    });
+
+    it('still deletes a standalone GCal event — the flag only keeps routine occurrences (a live standalone event would revive the trashed row)', async () => {
+        const userId = await aliceWithIntegration();
+        const item = makeItem(userId, {
+            calendarEventId: 'gcal-ev-kept',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            status: 'trash',
+        });
+        await itemsDAO.insertOne(item);
+        const deleteSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'deleteEvent').mockResolvedValue(undefined);
+
+        await maybePushToGCal(missedTrashOp(userId, item), mockBuildProvider());
+
+        expect(deleteSpy).toHaveBeenCalledWith('primary', 'gcal-ev-kept');
+    });
+
+    it('still marks a done item in Google when the op carries keepGoogleEvent (the flag only governs trash)', async () => {
+        const userId = await aliceWithIntegration();
+        const item = makeItem(userId, {
+            calendarEventId: 'gcal-ev-done-kept',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            status: 'done',
+        });
+        await itemsDAO.insertOne(item);
+        const updateSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateEvent').mockResolvedValue(undefined);
+
+        await maybePushToGCal(missedTrashOp(userId, item), mockBuildProvider());
+
+        expect(updateSpy).toHaveBeenCalledOnce();
+    });
+});
+
 describe('calendar push-back — failure surfacing (ops marked syncFailed)', () => {
     // Regression suite for the 2026-08-19 incident: a 9-item burst-trash hit Google's short-window
     // rate limit on 2 of the 9 instance-cancellation PATCHes, and the failures vanished into the

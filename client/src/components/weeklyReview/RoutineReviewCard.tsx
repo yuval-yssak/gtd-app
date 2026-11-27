@@ -1,19 +1,34 @@
+import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
-import { useRef, useState } from 'react';
+import { type RefObject, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { usePendingReassign } from '../../contexts/PendingReassignProvider';
-import { clarifyToDone, FROM_GMAIL_DONE_NOTICE } from '../../db/itemMutations';
+import { disposeOccurrences, FROM_GMAIL_DONE_NOTICE, type OccurrenceDisposalPlan } from '../../db/itemMutations';
 import { pauseRoutine } from '../../db/routineMutations';
 import { Button, Card, Text } from '../../designSystem';
+import { isOverdueCalendarItem } from '../../lib/routineNextItem';
 import type { MyDB, StoredItem, StoredRoutine } from '../../types/MyDB';
 import { FutureDoneConfirmDialog, useFutureDoneConfirm } from '../FutureDoneConfirmDialog';
 import { type ItemEditorActionsApi, ItemEditorBody } from '../itemEditor/ItemEditorBody';
 import { RoutineEditorBody } from '../routineEditor/RoutineEditorBody';
 import { PauseRoutineConfirmDialog } from '../routines/PauseRoutineConfirmDialog';
+import { DiscardEditsButton } from './DiscardEditsButton';
+import { OverdueOccurrencesDialog } from './OverdueOccurrencesDialog';
 import { RoutineReviewBanner } from './RoutineReviewBanner';
 import { routineEntryId, type StageDecisionUndo } from './reviewFlowState';
-import { collapsedOccurrences, remainingOccurrencesLabel, reviewedOccurrence } from './routineReviewCardLogic';
+import {
+    collapsedOccurrences,
+    needsOverdueChoice,
+    nextOverdueOccurrence,
+    type OverdueChoice,
+    type OverdueQuestion,
+    overdueOccurrences,
+    planOverdueDisposal,
+    remainingOccurrencesLabel,
+    resolveOverdueChoice,
+    reviewedOccurrence,
+} from './routineReviewCardLogic';
 import { StageActionBar, type StageTravel } from './StageActionBar';
 import { StageCardScroller } from './StageCardScroller';
 import { StageNavButtons } from './StageNavButtons';
@@ -43,6 +58,10 @@ interface RoutineReviewCardProps {
  * routine distinction is the banner (schedule + series tail) and the series-level actions in the
  * bar: Pause, and Edit series, which swaps the card body for the routine editor.
  *
+ * Overdue occurrences are a backlog the card works through before it decides: disposing of one
+ * (Done, or Missed — trashed in Done while Google keeps it) moves the card to the next overdue
+ * one, and Done on one of several asks whether the others were done too or missed.
+ *
  * Hosts MUST key this by routine id: the shown occurrence is pinned in state at mount.
  */
 export function RoutineReviewCard({ routine, db, nav, travel, onOccurrenceReviewed }: RoutineReviewCardProps) {
@@ -56,13 +75,22 @@ export function RoutineReviewCard({ routine, db, nav, travel, onOccurrenceReview
     const [isPausing, setIsPausing] = useState(false);
     // Same richer-than-a-boolean reason as the pause flow: completing surfaces its own error text.
     const [isCompleting, setIsCompleting] = useState(false);
+    // The chooser's open question, by id (null while closed), and the rows it names — display only,
+    // kept after close so the dialog's text holds through its exit animation.
+    const [overdueQuestion, setOverdueQuestion] = useState<OverdueQuestion | null>(null);
+    const [askedOverdue, setAskedOverdue] = useState<StoredItem[]>([]);
+    // Focus targets after the card moves on: the occurrence editor remounts with fresh action buttons.
+    const doneButtonRef = useRef<HTMLButtonElement>(null);
+    const missedButtonRef = useRef<HTMLButtonElement>(null);
+    const primaryButtonRef = useRef<HTMLButtonElement>(null);
     // Portal target for the editor's action row — state (not a ref) so ItemEditorBody re-renders
     // and portals the buttons in once the pinned bar element mounts.
     const [actionsBarEl, setActionsBarEl] = useState<HTMLElement | null>(null);
     const [isOccurrenceEditorLocked, setIsOccurrenceEditorLocked] = useState(false);
     // Pinned at mount: a time or text edit turns the shown occurrence into a modified exception,
     // which drops it from the collapse — without the pin the editor would jump to the next one.
-    const [pinnedOccurrenceId] = useState(() => reviewedOccurrence(routine, allItems, undefined)?._id);
+    // Re-pinned when the card moves on to the next overdue occurrence.
+    const [pinnedOccurrenceId, setPinnedOccurrenceId] = useState(() => reviewedOccurrence(routine, allItems, undefined)?._id);
     const stageToast = useStageToast();
     const futureDone = useFutureDoneConfirm(allItems);
     // A mid-flight cross-account reassign would misroute the pause's item-trashing writes — same
@@ -79,7 +107,10 @@ export function RoutineReviewCard({ routine, db, nav, travel, onOccurrenceReview
     // then would decide the NEXT card unseen.
     const entryId = routineEntryId(routine._id);
     const occurrence = reviewedOccurrence(routine, allItems, pinnedOccurrenceId);
-    const seriesTail = remainingOccurrencesLabel(collapsedOccurrences(routine, allItems), occurrence);
+    const occurrences = collapsedOccurrences(routine, allItems);
+    const now = dayjs();
+    const seriesTail = remainingOccurrencesLabel(occurrences, occurrence, now);
+    const isShownOverdue = occurrence !== undefined && isOverdueCalendarItem(occurrence, now);
     // The embedded editor carries the AccountPicker: while the occurrence's own reassign is in
     // flight it renders its inline notice and portals no actions — the bar keeps the escape hatch.
     const occurrenceReassignInFlight = occurrence !== undefined && isPending('item', occurrence._id);
@@ -138,25 +169,70 @@ export function RoutineReviewCard({ routine, db, nav, travel, onOccurrenceReview
         void syncAndRefresh();
     }
 
+    /** Done on one of several overdue occurrences asks about the others; otherwise it completes the shown one. */
+    function onDoneRequested(shown: StoredItem) {
+        if (needsOverdueChoice(occurrences, shown, now)) {
+            const overdue = overdueOccurrences(occurrences, now);
+            setAskedOverdue(overdue);
+            setOverdueQuestion({ shownId: shown._id, overdueIds: overdue.map((occurrence) => occurrence._id) });
+            return;
+        }
+        futureDone.confirmDone(shown, (latest) => void disposeAndAdvance({ done: [latest], missed: [] }, doneButtonRef));
+    }
+
+    /** Applies the answer to the LIVE rows (see `resolveOverdueChoice`), never the ones the dialog opened on. */
+    function onOverdueChosen(choice: OverdueChoice) {
+        if (!overdueQuestion) {
+            return;
+        }
+        setOverdueQuestion(null);
+        const resolved = resolveOverdueChoice(occurrences, overdueQuestion, dayjs());
+        if (!resolved) {
+            stageToast.showNotice('That occurrence changed on another device — nothing was marked.');
+            return;
+        }
+        void disposeAndAdvance(planOverdueDisposal(choice, resolved.shown, resolved.overdue), doneButtonRef);
+    }
+
     /**
-     * Complete the shown occurrence. `clarifyToDone` advances the series
+     * Completes and/or marks missed the planned occurrences. Disposal advances the series
      * (`maybeCreateNextRoutineItem`), so like every routine-generated disposal in the review this
-     * arms NO undo — a snapshot restore would double-book the series.
+     * arms NO undo — a snapshot restore would double-book the series. `focusAfter` is the action the
+     * user pressed, refocused on the next occurrence so a keyboard walk of the backlog keeps its place.
      */
-    async function onMarkOccurrenceDone(target: StoredItem) {
+    async function disposeAndAdvance(plan: OccurrenceDisposalPlan, focusAfter: RefObject<HTMLButtonElement | null>) {
         setIsCompleting(true);
         try {
-            await clarifyToDone(db, target, { onReadOnlyGCal: () => stageToast.showNotice(FROM_GMAIL_DONE_NOTICE) });
+            await disposeOccurrences(db, plan, { onReadOnlyGCal: () => stageToast.showNotice(FROM_GMAIL_DONE_NOTICE) });
             await refreshItems();
         } catch (err) {
-            console.error('[weekly-review] mark routine occurrence done failed:', err);
-            stageToast.showError('Could not mark the occurrence done — nothing changed.');
+            console.error('[weekly-review] routine occurrence disposal failed:', err);
+            stageToast.showError('Could not update the occurrence — check it on the calendar page.');
+            // A bulk plan stops at the first failure with the earlier rows written: show what landed.
+            await refreshItems().catch((refreshErr: unknown) => console.error('[weekly-review] refresh after failed disposal failed:', refreshErr));
             return;
         } finally {
             setIsCompleting(false);
         }
-        decideEntry();
+        advanceOrDecide(plan, focusAfter);
         void syncAndRefresh();
+    }
+
+    /**
+     * Moves the card to the next overdue occurrence while any is left, else decides the entry.
+     * Reads the pre-disposal `occurrences` of this render, so the disposed rows are excluded by id.
+     * The re-pin commits synchronously so the remounted editor's buttons exist to take focus.
+     */
+    function advanceOrDecide(plan: OccurrenceDisposalPlan, focusAfter: RefObject<HTMLButtonElement | null>) {
+        const disposedIds = new Set([...plan.done, ...plan.missed].map((disposed) => disposed._id));
+        disposedIds.forEach(onOccurrenceReviewed);
+        const next = nextOverdueOccurrence(occurrences, disposedIds, dayjs());
+        if (next) {
+            flushSync(() => setPinnedOccurrenceId(next._id));
+            focusAfter.current?.focus();
+            return;
+        }
+        decideEntry();
     }
 
     // Edit series is disabled while its editor is open, so closing would drop focus on <body>.
@@ -171,13 +247,16 @@ export function RoutineReviewCard({ routine, db, nav, travel, onOccurrenceReview
         await refreshItems();
     };
 
-    // Pause / Edit series are disabled over unsaved occurrence edits: both replace or rewrite the
-    // occurrence under the editor, silently dropping what the user typed.
+    // Every action that leaves or rewrites the occurrence is locked over unsaved edits (title and
+    // notes included — this card does not autosave text): each would silently drop what the user
+    // typed. Save & next keeps the work; Discard is the deliberate way not to.
     const renderActions = (api: ItemEditorActionsApi) => {
-        const isSeriesActionBlocked = api.isSaving || api.isDirty || isWriting || reassignInFlight;
+        const hasUnsavedEdits = api.isDirty || api.hasTextEdits;
+        const isLeavingLocked = api.isSaving || isWriting || hasUnsavedEdits;
+        const isSeriesActionBlocked = isLeavingLocked || reassignInFlight;
         return (
             <>
-                <StageNavButtons {...nav.liveNavProps(api.isSaving || isWriting)} />
+                <StageNavButtons {...nav.liveNavProps(isLeavingLocked)} />
                 {routine.active && (
                     <Button disabled={isSeriesActionBlocked} onClick={() => setIsPauseConfirmOpen(true)} data-testid="routineCardPause">
                         Pause
@@ -186,20 +265,35 @@ export function RoutineReviewCard({ routine, db, nav, travel, onOccurrenceReview
                 <Button ref={editButtonRef} disabled={isSeriesActionBlocked} onClick={() => setIsSeriesEditorOpen(true)} data-testid="routineCardEdit">
                     Edit series
                 </Button>
-                {occurrence && (
+                {occurrence && isShownOverdue && (
                     <Button
-                        disabled={api.isSaving || isWriting || reassignInFlight}
-                        onClick={() => futureDone.confirmDone(occurrence, (latest) => void onMarkOccurrenceDone(latest))}
-                        data-testid="routineCardDone"
+                        ref={missedButtonRef}
+                        disabled={isSeriesActionBlocked}
+                        onClick={() => void disposeAndAdvance({ done: [], missed: [occurrence] }, missedButtonRef)}
+                        data-testid="routineCardMissed"
                     >
+                        Missed
+                    </Button>
+                )}
+                {occurrence && (
+                    <Button ref={doneButtonRef} disabled={isSeriesActionBlocked} onClick={() => onDoneRequested(occurrence)} data-testid="routineCardDone">
                         Done
                     </Button>
+                )}
+                {hasUnsavedEdits && (
+                    <DiscardEditsButton
+                        onDiscard={api.discardEdits}
+                        focusAfter={primaryButtonRef}
+                        disabled={api.isSaving || isWriting}
+                        testId="routineCardDiscard"
+                    />
                 )}
                 {/* Dirty-aware primary, as on a one-off card: untouched → decide without a write
                     (a bare-requeue undo); edited → the body's save path commits, then its
                     post-save onClose decides with no undo — an occurrence edit is a routine
                     exception no snapshot reverses. */}
                 <Button
+                    ref={primaryButtonRef}
                     variant="solid"
                     disabled={api.isDirty ? api.saveDisabled || isWriting : api.isSaving || isWriting}
                     onClick={api.isDirty ? () => saveAndDecide(api) : () => decideEntry({})}
@@ -275,6 +369,14 @@ export function RoutineReviewCard({ routine, db, nav, travel, onOccurrenceReview
                 onConfirm={() => void onPauseConfirmed()}
             />
             <FutureDoneConfirmDialog {...futureDone.dialogProps} />
+            <OverdueOccurrencesDialog
+                routine={routine}
+                open={overdueQuestion !== null}
+                // Live while open, so the count matches what an answer writes; the asked rows after close.
+                overdue={(overdueQuestion && resolveOverdueChoice(occurrences, overdueQuestion, now)?.overdue) || askedOverdue}
+                onChoose={onOverdueChosen}
+                onCancel={() => setOverdueQuestion(null)}
+            />
             <StageToast {...stageToast.toastProps} />
         </div>
     );

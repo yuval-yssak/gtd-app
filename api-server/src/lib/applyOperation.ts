@@ -1,7 +1,16 @@
 import dayjs from 'dayjs';
 import operationsDAO from '../dataAccess/operationsDAO.js';
 import { type ValidationFailure, validateOperation } from '../schemas/operations/index.js';
-import type { EntitySnapshot, EntityType, OperationInterface, OpFailureReason, OpType, RoutineInterface, RsvpOpPayload } from '../types/entities.js';
+import type {
+    EntitySnapshot,
+    EntityType,
+    GCalOpMeta,
+    OperationInterface,
+    OpFailureReason,
+    OpType,
+    RoutineInterface,
+    RsvpOpPayload,
+} from '../types/entities.js';
 import { type ApplyEntityOpOutcome, applyEntityOp, hydrateCalendarDetachSnapshots, hydrateDeleteSnapshots } from './applyEntityOp.js';
 import { maybeScheduleInlineBriefs } from './brief/briefInlineHook.js';
 import { buildCalendarProvider } from './buildCalendarProvider.js';
@@ -23,7 +32,7 @@ export interface RawOperation {
      * persisted op so `maybePushToGCal` can pass `sendUpdates` through to the provider call.
      * Absent → pushback defaults to `'none'`.
      */
-    gcalMeta?: { sendUpdates: 'all' | 'none' };
+    gcalMeta?: GCalOpMeta;
     /**
      * RSVP payload. Required when `opType === 'rsvp'`, absent otherwise. The replay path in
      * `rsvpReplay.ts` reads this off the persisted op to drive the GCal `events.patch` call.

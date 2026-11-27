@@ -59,6 +59,34 @@ test.describe('Weekly review — read-only details summary', () => {
         });
     });
 
+    test('unsaved edits lock every action that would drop them; Discard reverts the card and frees them', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `wr-summary-discard-${uniqueStamp()}@example.com`, async (page) => {
+            const action = await gtd.clarifyToNextAction(page, await gtd.collect(page, 'Call the plumber'), { energy: 'low', time: 15 });
+            await gtd.flush(page);
+
+            const card = await startNextActionsReview(page);
+            await card.getByTestId('editDetailsButton').click();
+            await card.getByRole('group', { name: 'Energy' }).getByRole('button', { name: 'High' }).click();
+
+            // Done and ◀ ▶ would leave the card and silently drop the edit: locked. Save & next or Discard decide.
+            for (const testId of ['focusDone', 'stageNavBack', 'stageNavForward']) {
+                await expect(page.getByTestId(testId)).toBeDisabled();
+            }
+            await expect(page.getByTestId('focusKeep')).toHaveText('Save & next');
+
+            await page.getByTestId('focusDiscard').click();
+
+            await expect(card.getByRole('group', { name: 'Energy' }).getByRole('button', { name: 'Low' })).toHaveAttribute('aria-pressed', 'true');
+            await expect(page.getByTestId('focusKeep')).toHaveText('Looks good');
+            // Discard unmounts with the edits it dropped: focus moves on to the primary, never <body>.
+            await expect(page.getByTestId('focusKeep')).toBeFocused();
+            await expect(page.getByTestId('focusDone')).toBeEnabled();
+            await expect(page.getByTestId('stageNavForward')).toBeEnabled();
+            await expect(page.getByTestId('focusDiscard')).toHaveCount(0);
+            expect((await gtd.getItem(page, action._id))?.energy).toBe('low');
+        });
+    });
+
     test('a next action with nothing set says so, and picking another status opens that status form directly', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `wr-summary-status-${uniqueStamp()}@example.com`, async (page) => {
             await gtd.clarifyToNextAction(page, await gtd.collect(page, 'Bare action'), {});

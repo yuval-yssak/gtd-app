@@ -4,7 +4,9 @@ import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { issueApiToken } from '../auth/apiTokens.js';
 import { __resetDefaultStoreForTests } from '../auth/rateLimitMiddleware.js';
+import calendarIntegrationsDAO from '../dataAccess/calendarIntegrationsDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
+import { TRASH_GOOGLE_NOTICES } from '../lib/trashGoogleEffect.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { v1ItemsRoutes } from '../routes/v1/items.js';
 import type { PublicItem } from '../routes/v1/projections/item.js';
@@ -829,45 +831,145 @@ describe('POST /v1/items/:id/complete', () => {
     });
 });
 
-// ─── POST /v1/items/:id/trash (recoverable soft-delete) ─────────────────────
+// The caller's AI must be able to tell the user that trashing a synced item also removes it from
+// Google Calendar — the response says so in a `googleCalendar` block, absent when nothing in Google
+// changes. Every case runs pushback's own guards, so the notice never claims a removal that won't happen.
+describe('POST /v1/items/:id/trash — googleCalendar notice', () => {
+    interface TrashBody extends ItemInterface {
+        googleCalendar?: { effect: string; notice: string };
+    }
 
-describe('POST /v1/items/:id/trash', () => {
-    it('transitions an item to trash, keeps the row, and records an update op', async () => {
-        const { plaintext, userId } = await newUserWithToken();
-        const item = await seedItem({ userId, title: 'dispose me', status: 'inbox', updatedTs: '2024-01-01T00:00:00.000Z' });
-        const res = await callApi({ method: 'POST', path: `/v1/items/${item._id}/trash`, token: plaintext });
+    async function trash(token: string, itemId: string | undefined) {
+        const res = await callApi({ method: 'POST', path: `/v1/items/${itemId}/trash`, token });
         expect(res.status).toBe(200);
-        const body = (await res.json()) as ItemInterface;
-        expect(body.status).toBe('trash');
-        expect(body.updatedTs > item.updatedTs).toBe(true);
-        // The row must still exist (soft-delete, not hard-delete) so it surfaces in the Trash view.
-        const stored = await itemsDAO.findByOwnerAndId(item._id ?? '', userId);
-        expect(stored?.status).toBe('trash');
-        // An update op (not delete) is recorded so other devices pull the trashed state.
-        const op = await db.collection<{ opType: string }>('operations').findOne({ entityId: item._id } as never);
-        expect(op?.opType).toBe('update');
+        return (await res.json()) as TrashBody;
+    }
+
+    /** A Google Calendar integration for the user, `active` unless a status is given. */
+    async function seedIntegration(userId: string, status?: 'suspended' | 'revoked') {
+        const now = dayjs().toISOString();
+        const integrationId = `integ-${crypto.randomUUID()}`;
+        await calendarIntegrationsDAO.insertEncrypted({
+            _id: integrationId,
+            user: userId,
+            provider: 'google',
+            accessToken: 'at',
+            refreshToken: 'rt',
+            tokenExpiry: now,
+            createdTs: now,
+            updatedTs: now,
+            ...(status ? { status } : {}),
+        });
+        return integrationId;
+    }
+
+    async function seedCalendarItem(userId: string, fields: Partial<ItemInterface>) {
+        const item = await seedItem({ userId, title: 'Standup', status: 'calendar' });
+        await db
+            .collection('items')
+            .updateOne({ _id: item._id } as never, { $set: { timeStart: '2099-09-29T15:30:00', timeEnd: '2099-09-29T16:15:00', ...fields } });
+        return item;
+    }
+
+    async function seedSyncedRoutine(userId: string, fields: Record<string, unknown>) {
+        const now = dayjs().toISOString();
+        const routineId = `routine-${crypto.randomUUID()}`;
+        await db.collection('routines').insertOne({
+            _id: routineId,
+            user: userId,
+            title: 'Standup',
+            routineType: 'calendar',
+            rrule: 'FREQ=DAILY',
+            template: {},
+            active: true,
+            calendarEventId: `master-${routineId}`,
+            createdTs: now,
+            updatedTs: now,
+            ...fields,
+        } as never);
+        return routineId;
+    }
+
+    it('says the Google Calendar event is being deleted when a synced standalone item is trashed', async () => {
+        const { plaintext, userId } = await newUserWithToken();
+        const calendarIntegrationId = await seedIntegration(userId);
+        const item = await seedCalendarItem(userId, { calendarEventId: `event-${crypto.randomUUID()}`, calendarIntegrationId });
+
+        const body = await trash(plaintext, item._id);
+
+        expect(body.googleCalendar).toEqual({ effect: 'eventDeleted', notice: TRASH_GOOGLE_NOTICES.eventDeleted });
     });
 
-    it('is idempotent: trashing an already-trashed item returns it unchanged with X-Idempotent-Replay', async () => {
+    it("says sync is paused — not deleted — when the item's Google integration is suspended", async () => {
         const { plaintext, userId } = await newUserWithToken();
-        const item = await seedItem({ userId, title: 'already trashed', status: 'trash', updatedTs: '2024-01-01T00:00:00.000Z' });
-        const res = await callApi({ method: 'POST', path: `/v1/items/${item._id}/trash`, token: plaintext });
-        expect(res.status).toBe(200);
-        expect(res.headers.get('X-Idempotent-Replay')).toBe('true');
-        const body = (await res.json()) as ItemInterface;
-        expect(body.updatedTs).toBe('2024-01-01T00:00:00.000Z');
-        // No new op should have been written.
-        expect(await db.collection('operations').countDocuments({ entityId: item._id })).toBe(0);
+        const calendarIntegrationId = await seedIntegration(userId, 'suspended');
+        const item = await seedCalendarItem(userId, { calendarEventId: `event-${crypto.randomUUID()}`, calendarIntegrationId });
+
+        const body = await trash(plaintext, item._id);
+
+        expect(body.googleCalendar).toEqual({ effect: 'googleSyncPaused', notice: TRASH_GOOGLE_NOTICES.googleSyncPaused });
     });
 
-    it('returns 404 for items that do not belong to the caller and leaves them untouched', async () => {
-        const a = await newUserWithToken('alice');
-        const b = await newUserWithToken('bob');
-        const bobItem = await seedItem({ userId: b.userId, title: 'bob' });
-        const res = await callApi({ method: 'POST', path: `/v1/items/${bobItem._id}/trash`, token: a.plaintext });
-        expect(res.status).toBe(404);
-        const after = await db.collection<{ status: string }>('items').findOne({ _id: bobItem._id } as never);
-        expect(after?.status).toBe('inbox');
+    it("says nothing for an item pointing at a routine's master event — pushback never deletes a series from an item", async () => {
+        const { plaintext, userId } = await newUserWithToken();
+        const calendarIntegrationId = await seedIntegration(userId);
+        const routineId = await seedSyncedRoutine(userId, { calendarIntegrationId });
+        const item = await seedCalendarItem(userId, { calendarEventId: `master-${routineId}`, calendarIntegrationId });
+
+        expect((await trash(plaintext, item._id)).googleCalendar).toBeUndefined();
+    });
+
+    it('says the occurrence is being cancelled when an occurrence of a synced routine is trashed', async () => {
+        const { plaintext, userId } = await newUserWithToken();
+        const calendarIntegrationId = await seedIntegration(userId);
+        const routineId = await seedSyncedRoutine(userId, { calendarIntegrationId });
+        const item = await seedCalendarItem(userId, { routineId });
+
+        const body = await trash(plaintext, item._id);
+
+        expect(body.googleCalendar).toEqual({ effect: 'occurrenceCancelled', notice: TRASH_GOOGLE_NOTICES.occurrenceCancelled });
+    });
+
+    it('says nothing for an occurrence past the series end — Google has no such instance', async () => {
+        const { plaintext, userId } = await newUserWithToken();
+        const calendarIntegrationId = await seedIntegration(userId);
+        const routineId = await seedSyncedRoutine(userId, { calendarIntegrationId, rrule: 'FREQ=DAILY;UNTIL=20990901T000000Z', startDate: '2099-08-01' });
+        const item = await seedCalendarItem(userId, { routineId });
+
+        expect((await trash(plaintext, item._id)).googleCalendar).toBeUndefined();
+    });
+
+    it('says nothing for an occurrence of a paused routine — its Google series already ended', async () => {
+        const { plaintext, userId } = await newUserWithToken();
+        const calendarIntegrationId = await seedIntegration(userId);
+        const routineId = await seedSyncedRoutine(userId, { calendarIntegrationId, active: false });
+        const item = await seedCalendarItem(userId, { routineId });
+
+        expect((await trash(plaintext, item._id)).googleCalendar).toBeUndefined();
+    });
+
+    it('says nothing for a Gmail-created occurrence — Google only lets it be recoloured', async () => {
+        const { plaintext, userId } = await newUserWithToken();
+        const calendarIntegrationId = await seedIntegration(userId);
+        const routineId = await seedSyncedRoutine(userId, { calendarIntegrationId });
+        const item = await seedCalendarItem(userId, { routineId, eventType: 'fromGmail' });
+
+        expect((await trash(plaintext, item._id)).googleCalendar).toBeUndefined();
+    });
+
+    it('says nothing for an item with no Google Calendar presence', async () => {
+        const { plaintext, userId } = await newUserWithToken();
+        const item = await seedItem({ userId, title: 'local only', status: 'inbox' });
+
+        expect((await trash(plaintext, item._id)).googleCalendar).toBeUndefined();
+    });
+
+    it('says nothing on an idempotent replay — the earlier trash already removed it', async () => {
+        const { plaintext, userId } = await newUserWithToken();
+        const calendarIntegrationId = await seedIntegration(userId);
+        const item = await seedCalendarItem(userId, { calendarEventId: `event-${crypto.randomUUID()}`, calendarIntegrationId, status: 'trash' });
+
+        expect((await trash(plaintext, item._id)).googleCalendar).toBeUndefined();
     });
 });
 

@@ -10,6 +10,8 @@ import {
     clarifyToTrash,
     clarifyToWaitingFor,
     collectItem,
+    disposeOccurrences,
+    markOccurrenceMissed,
     nonIncreasingRun,
     recordRoutineInstanceModification,
     removeItem,
@@ -981,6 +983,91 @@ describe('calendar routine — clarifyToTrash', () => {
 
         const updatedRoutine = await db.get('routines', routine._id);
         expect(updatedRoutine?.active).toBe(false);
+    });
+});
+
+describe('calendar routine — missed occurrences', () => {
+    async function seedPastOccurrences(daysAgo: number[]) {
+        const routine = await createRoutine(db, {
+            userId: USER_ID,
+            title: 'Daily standup',
+            routineType: 'calendar',
+            rrule: 'FREQ=DAILY',
+            template: {},
+            calendarItemTemplate: { timeOfDay: '09:00', duration: 15 },
+            active: true,
+        });
+        const occurrences = daysAgo.map((days): StoredItem => {
+            const day = dayjs().subtract(days, 'day').format('YYYY-MM-DD');
+            return {
+                _id: crypto.randomUUID(),
+                userId: USER_ID,
+                status: 'calendar',
+                title: 'Daily standup',
+                routineId: routine._id,
+                timeStart: `${day}T09:00:00`,
+                timeEnd: `${day}T09:15:00`,
+                createdTs: dayjs().toISOString(),
+                updatedTs: dayjs().toISOString(),
+            };
+        });
+        await Promise.all(occurrences.map((occurrence) => db.put('items', occurrence)));
+        await db.clear('syncOperations');
+        return { routine, occurrences };
+    }
+
+    it('trashes a missed occurrence and asks the server to leave its Google instance alone', async () => {
+        const { occurrences } = await seedPastOccurrences([3]);
+        const [missed] = occurrences;
+        if (!missed) {
+            throw new Error('expected one seeded occurrence');
+        }
+
+        await markOccurrenceMissed(db, missed);
+
+        expect((await db.get('items', missed._id))?.status).toBe('trash');
+        const ops = await db.getAll('syncOperations');
+        expect(ops.map((op) => op.gcalMeta)).toEqual([{ sendUpdates: 'none', keepGoogleEvent: true }]);
+    });
+
+    it('records no skipped exception for a missed occurrence — the date is in the past and Google keeps it', async () => {
+        const { routine, occurrences } = await seedPastOccurrences([2]);
+        const [missed] = occurrences;
+        if (!missed) {
+            throw new Error('expected one seeded occurrence');
+        }
+
+        await markOccurrenceMissed(db, missed);
+
+        expect((await db.get('routines', routine._id))?.routineExceptions ?? []).toEqual([]);
+    });
+
+    it('a plain trash carries no gcalMeta — Google still cancels the occurrence', async () => {
+        const { occurrences } = await seedPastOccurrences([2]);
+        const [trashed] = occurrences;
+        if (!trashed) {
+            throw new Error('expected one seeded occurrence');
+        }
+
+        await clarifyToTrash(db, trashed);
+
+        const ops = await db.getAll('syncOperations');
+        expect(ops.map((op) => op.gcalMeta)).toEqual([undefined]);
+    });
+
+    it('disposeOccurrences completes the done list and marks the missed list missed', async () => {
+        const { occurrences } = await seedPastOccurrences([3, 2, 1]);
+        const [first, second, third] = occurrences;
+        if (!first || !second || !third) {
+            throw new Error('expected three seeded occurrences');
+        }
+
+        await disposeOccurrences(db, { done: [first], missed: [second, third] });
+
+        const statuses = await Promise.all(occurrences.map(async (occurrence) => (await db.get('items', occurrence._id))?.status));
+        expect(statuses).toEqual(['done', 'trash', 'trash']);
+        const missedOps = (await db.getAll('syncOperations')).filter((op) => op.gcalMeta?.keepGoogleEvent);
+        expect(missedOps.map((op) => op.entityId).sort()).toEqual([second._id, third._id].sort());
     });
 });
 

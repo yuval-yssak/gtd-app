@@ -88,3 +88,4 @@
 - [Focusable wrapper :focus-within self-match](project_focusable_wrapper_focus_within_self_match.md) — tabIndex on a container makes its editing-state :focus-within ring show when parked; also satisfies [tabindex] canFocus.
 - [Brief copy vs closed items](project_brief_copy_auto_write_closed_items.md) — new brief strings promising auto-write/regenerate forget done/trash items are never briefed; check status input.
 - [IDB loss simulation vs WebKit mode](project_idb_loss_simulation_vs_webkit_mode.md) — close()-simulated loss throws sync; real WebKit loss rejects async inside an explicit tx, which never triggers reopen.
+- [Dialogs write click-time snapshots](project_dialog_snapshot_rows_vs_live_resolve.md) — row-acting dialogs store StoredItem[] and write them on confirm; demand ids + live resolve, and content that survives exit animation.

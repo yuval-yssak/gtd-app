@@ -646,6 +646,17 @@ export type OpFailureReason =
     | 'entity_missing'
     | 'entity_conflict';
 
+/**
+ * How pushback treats Google for one op. `keepGoogleEvent` rides on a trash op that disposes of
+ * an item in Done only — a missed past routine occurrence — so the Google event (or instance)
+ * stays as history instead of being deleted or cancelled. An op-level sidecar, never an item
+ * field: it describes this one write, and a field would linger on a row restored from the trash.
+ */
+export interface GCalOpMeta {
+    sendUpdates: 'all' | 'none';
+    keepGoogleEvent?: boolean;
+}
+
 export interface OperationInterface {
     _id: string; // server-generated UUID
     user: string;
@@ -667,7 +678,7 @@ export interface OperationInterface {
      * Sidecar for GCal-coupled writes. Populated when the user picked Send/Don't Send in the
      * SendUpdatesDialog so the choice survives offline queueing and replays through pushback.
      */
-    gcalMeta?: { sendUpdates: 'all' | 'none' };
+    gcalMeta?: GCalOpMeta;
     /**
      * Pre-update snapshot of a calendar item whose update transitions it to an active
      * non-calendar status (inbox/nextAction/waitingFor/somedayMaybe). Clients strip the GCal
@@ -680,6 +691,13 @@ export interface OperationInterface {
      * op self-describing for audits/replays. Clients ignore unknown op fields on pull.
      */
     detachedCalendar?: ItemInterface;
+    /**
+     * Server-set (`hydrateItemCarryForwards`) on an item trash update that lands on a row ALREADY in
+     * trash — an edit of a trashed item. Pushback removes nothing from Google for it: only the move
+     * into trash deletes the event or cancels the occurrence, so a later edit cannot cancel a missed
+     * occurrence that Google deliberately kept. Persisted so a Retry replays the same decision.
+     */
+    rowAlreadyTrash?: boolean;
     /**
      * RSVP payload for opType === 'rsvp'. Required when opType === 'rsvp'; absent otherwise.
      */
