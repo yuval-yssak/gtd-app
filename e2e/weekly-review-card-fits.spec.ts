@@ -235,4 +235,72 @@ test.describe('Weekly review card fits without scrolling', () => {
                 .toBeGreaterThan(0);
         });
     });
+
+    test('the stage scrollbar sits at the page edge and a wheel anywhere outside the stage scrolls it', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `review-stray-wheel-${uniqueStamp()}@example.com`, async (page) => {
+            await page.setViewportSize({ width: 1920, height: 929 });
+            const tallTitle = Array.from({ length: 30 }, (_, i) => `segment ${i + 1} of a deliberately long title`).join(' ');
+            const inbox = await gtd.collect(page, tallTitle);
+            await gtd.clarifyToNextAction(page, { ...inbox, notes: 'Short note' }, {});
+            await gtd.flush(page);
+
+            await page.goto('/weekly-review?stage=nextActions');
+            await page.getByTestId('startReviewButton').click();
+            const stage = page.getByTestId('focusStage');
+            await expect(stage.locator('[class*="editorCard"]')).toBeVisible();
+            const scroller = scrollerOf(stage);
+            await expect.poll(async () => scroller.evaluate((el) => el.scrollHeight - el.clientHeight)).toBeGreaterThan(0);
+
+            // The scrollport reaches the viewport's right edge, so its scrollbar is the page's.
+            const box = await scroller.boundingBox();
+            if (!box) throw new Error('expected the scroller to have a box');
+            expect(box.x + box.width).toBeCloseTo(1920, 0);
+            // ...while the card keeps its centered column.
+            const cardBox = await stage.locator('[class*="editorCard"]').boundingBox();
+            if (!cardBox) throw new Error('expected the card to have a box');
+            expect(Math.abs(cardBox.x - box.x - (box.x + box.width - (cardBox.x + cardBox.width)))).toBeLessThan(20);
+
+            const actionBar = await stage.locator('[class*="actionBar"]').first().boundingBox();
+            if (!actionBar) throw new Error('expected the action bar to have a box');
+            const outsideStagePoints = {
+                'page top, above the header': { x: 1200, y: 8 },
+                'beside the pinned action bar': { x: actionBar.x + actionBar.width + 60, y: actionBar.y + actionBar.height / 2 },
+                'the sidebar': { x: 40, y: 880 },
+            };
+            for (const [where, point] of Object.entries(outsideStagePoints)) {
+                await scroller.evaluate((el) => {
+                    el.scrollTop = 0;
+                });
+                await page.mouse.move(point.x, point.y);
+                // Re-sent per poll tick — see the side-margin test above.
+                await expect
+                    .poll(
+                        async () => {
+                            await page.mouse.wheel(0, 300);
+                            return scroller.evaluate((el) => el.scrollTop);
+                        },
+                        { message: where },
+                    )
+                    .toBeGreaterThan(0);
+            }
+        });
+    });
+
+    for (const width of [1920, 600]) {
+        test(`an empty stage's card lines up with the pinned bar and its area reaches the page edge (${width}px)`, async ({ browser }) => {
+            await withOneLoggedInDevice(browser, `review-empty-edge-${width}-${uniqueStamp()}@example.com`, async (page) => {
+                await page.setViewportSize({ width, height: 800 });
+                await page.goto('/weekly-review?stage=nextActions');
+                await page.getByTestId('startReviewButton').click();
+
+                const stage = page.getByTestId('stageEmptyCard');
+                const area = await stage.locator('[class*="centeredArea"]').boundingBox();
+                const card = await stage.locator('[class*="emptyCard"]').boundingBox();
+                const bar = await stage.locator('[class*="actionBar"]').first().boundingBox();
+                if (!area || !card || !bar) throw new Error('expected the area, card and bar to have boxes');
+                expect(area.x + area.width).toBeCloseTo(width, 0);
+                expect(Math.abs(card.x + card.width / 2 - (bar.x + bar.width / 2))).toBeLessThan(1);
+            });
+        });
+    }
 });

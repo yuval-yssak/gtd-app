@@ -40,6 +40,10 @@
     /* Mirrors this element's vertical padding so viewport-fitted pages (weekly review) can size
        themselves to exactly the visible content area: calc(100dvh - var(--gtd-main-vertical-inset)). */
     --gtd-main-vertical-inset: 9rem;
+
+    /* Its horizontal padding, so a page can reach the content area's edges (the weekly review's
+       scrollport puts its scrollbar at the page edge). */
+    --gtd-main-inline-inset: var(--space-4);
 }
 
 @media (width >= 900px) {
@@ -47,5 +51,6 @@
         padding: var(--space-6);
 
         --gtd-main-vertical-inset: 3rem;
+        --gtd-main-inline-inset: var(--space-6);
     }
 }

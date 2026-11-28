@@ -14,8 +14,8 @@
 
 /* The scrollport, and the reason it is a wrapper rather than the card itself: the card is capped
  * at 44rem and centered, so scrolling the card left the gutters beside it over a non-scrollable
- * ancestor — a wheel with the pointer in the margin did nothing. This spans the full column
- * width, so those gutters scroll the review content too. It must stay a SIBLING of the pinned
+ * ancestor — a wheel with the pointer in the margin did nothing. This spans the page (see the
+ * reach-out rule below), so those gutters scroll the review content too. It must stay a SIBLING of the pinned
  * action bar (not an ancestor), or the bar would scroll away with the content. */
 .cardScroller {
     /* Containing block for absolutely positioned descendants — the `.srOnly` spans in the card
@@ -25,7 +25,6 @@
     position: relative;
     flex: 1;
     min-block-size: 0;
-    inline-size: 100%;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
@@ -45,13 +44,12 @@
 }
 
 /* Fills the space above the bar so short content (empty state) centers instead of hugging the top.
- * Scrolls for the same reason as .cardScroller: it spans the full column width, so a wheel in the
- * gutters beside a centered card still scrolls. */
+ * Scrolls for the same reason as .cardScroller: it spans the page, so a wheel in the gutters
+ * beside a centered card still scrolls. */
 .centeredArea {
     position: relative; /* same containment as .cardScroller */
     flex: 1;
     min-block-size: 0;
-    inline-size: 100%;
     display: flex;
 
     /* `safe` centers only while the content fits; once it is taller than the area it degrades to
@@ -60,6 +58,18 @@
     align-items: safe center;
     justify-content: center;
     overflow-y: auto;
+}
+
+/* The scrollports reach through the main area's side padding to the page edge, so the scrollbar
+ * is the page's and every pixel beside the card scrolls it; the padding then puts the content
+ * back in the review's column (`--gtd-review-column`, set by the wizard). Kept after both base
+ * rules: same specificity, so a later declaration there would silently win. */
+.cardScroller,
+.centeredArea {
+    align-self: stretch;
+    inline-size: auto;
+    margin-inline: calc(-1 * var(--gtd-main-inline-inset, 0px));
+    padding-inline: calc(var(--gtd-main-inline-inset, 0px) + max(0px, (100% - var(--gtd-review-column, 48rem)) / 2));
 }
 
 /* Anchors the item-level ◀ ▶ pair to the content slot's start edge while the decision buttons

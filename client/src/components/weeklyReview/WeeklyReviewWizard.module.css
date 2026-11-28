@@ -1,17 +1,27 @@
 .wizardRoot {
+    /* The review's column: 4rem wider than the card/bar (44rem) so the stepper and header strip
+       keep their own breathing room while the item card centers inside them. The root itself
+       spans the page — the stage's scrollport reaches the page edge (stageLayout .cardScroller)
+       and keeps its content in this column with padding. */
+    --gtd-review-column: 48rem;
+
     display: flex;
     flex-direction: column;
     gap: var(--space-4);
-
-    /* Stays 4rem wider than the card/bar (44rem) so the stepper and header strip keep their own
-       breathing room while the item card centers inside them. */
-    max-inline-size: 48rem;
-    margin-inline: auto;
 
     /* Viewport-fitted so the stage action bar stays pinned at the bottom: item content scrolls
        INSIDE its card, never the page — the decision buttons keep one fixed screen position. The
        inset var mirrors mainContent's vertical padding (fallback = its desktop value). */
     block-size: calc(100dvh - var(--gtd-main-vertical-inset, 3rem));
+}
+
+/* Caps the header pieces to the review column; the wizard root itself spans the page. */
+.stepper,
+.header,
+.headerStrip {
+    inline-size: 100%;
+    max-inline-size: var(--gtd-review-column);
+    margin-inline: auto;
 }
 
 /* The stepper scrolls itself on narrow screens (each step keeps a readable minimum width); the
@@ -32,7 +42,6 @@
     display: flex;
     align-items: center;
     gap: var(--space-3);
-    inline-size: 100%;
     padding: var(--space-1-5) var(--space-2);
     border: 0;
     border-radius: var(--radius-md);

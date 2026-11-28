@@ -90,3 +90,4 @@
 - [IDB loss simulation vs WebKit mode](project_idb_loss_simulation_vs_webkit_mode.md) — close()-simulated loss throws sync; real WebKit loss rejects async inside an explicit tx, which never triggers reopen.
 - [Dialogs write click-time snapshots](project_dialog_snapshot_rows_vs_live_resolve.md) — row-acting dialogs store StoredItem[] and write them on confirm; demand ids + live resolve, and content that survives exit animation.
 - [E2E goto resets module store](project_e2e_goto_resets_module_store.md) — write-through to an in-memory store "proven" via page.goto is vacuous (reload wipes it); also stale in-flight check overwrites remember.
+- [Grouped CSS rule overridden later](project_grouped_css_rule_overridden_later.md) — `.a, .b {}` above `.b {}` loses repeated props (centeredArea kept inline-size:100%); e2e checked only `.a`.
