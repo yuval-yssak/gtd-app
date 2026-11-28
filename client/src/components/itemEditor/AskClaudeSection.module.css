@@ -86,3 +86,10 @@
     align-items: baseline;
     gap: var(--space-1-5);
 }
+
+.notConnectedRow {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+}

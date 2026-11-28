@@ -96,13 +96,53 @@ test.describe('Ask Claude on an item', () => {
         });
     });
 
-    test('without a connected Claude routine the error points to Settings', async ({ browser }) => {
+    test('without a connected Claude routine the button is disabled and links to its Settings section', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `ask-claude-unconnected-${uniqueStamp()}@example.com`, async (page) => {
-            await openSeededItem(page, 'No Claude routine yet');
+            const itemId = await openSeededItem(page, 'No Claude routine yet');
+            await expect(page.getByTestId('askClaudeButton')).toBeDisabled();
+            await expect(page.getByTestId('askClaudePrompt')).toHaveCount(0);
+            await page.getByTestId('askClaudeNotConnectedTooltipAnchor').hover();
+            await expect(page.getByRole('tooltip')).toHaveText('Connect a Claude routine in Settings to ask Claude from Done');
+
+            await page.getByTestId('askClaudeSettingsLink').click();
+            await expect(page).toHaveURL(/\/settings#claude-routine$/);
+            await expect(page.getByTestId('claudeRoutineSection')).toBeInViewport();
+
+            // Connecting in Settings enables the box without waiting for the status to go stale:
+            // Settings writes its answer through, so the item page re-reads nothing. In-app back
+            // navigation keeps the page (and the in-memory status) — a page.goto would reload it.
+            await page.getByTestId('claudeRoutineIdInput').getByRole('textbox').fill('trig_01E2eItem');
+            await page.getByTestId('claudeRoutineTokenInput').getByRole('textbox').fill('sk-ant-oat01-e2e-item-token-abcd');
+            await page.getByTestId('claudeRoutineSaveButton').click();
+            await expect(page.getByTestId('claudeRoutineDisconnectButton')).toBeVisible();
+            const statusReads: string[] = [];
+            page.on('request', (req) => {
+                if (req.method() === 'GET' && req.url().endsWith('/account/claude-routine')) statusReads.push(req.url());
+            });
+            await page.goBack();
+            await expect(page).toHaveURL(new RegExp(`/item/${itemId}`));
+            await expect(promptBox(page)).toBeVisible();
+            expect(statusReads).toEqual([]);
+        });
+    });
+
+    test('an ask refused for a missing Claude routine re-checks the connection and disables the box', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `ask-claude-unchecked-${uniqueStamp()}@example.com`, async (page) => {
+            // The first status read fails, so the box starts usable (status unknown); the ask then fails.
+            let isFirstRead = true;
+            await page.route('**/account/claude-routine', (route) => {
+                if (route.request().method() === 'GET' && isFirstRead) {
+                    isFirstRead = false;
+                    return route.fulfill({ status: 500, contentType: 'application/json', body: '{}' });
+                }
+                return route.fallback();
+            });
+            await openSeededItem(page, 'Status unknown');
             await promptBox(page).fill('Help');
             await page.getByTestId('askClaudeButton').click();
-            await expect(page.getByTestId('askClaudeError')).toBeVisible();
-            await expect(page.getByTestId('askClaudeSettingsLink')).toHaveAttribute('href', /\/settings/);
+            await expect(page.getByTestId('askClaudeSettingsLink')).toHaveAttribute('href', /\/settings#claude-routine$/);
+            await expect(page.getByTestId('askClaudePrompt')).toHaveCount(0);
+            await expect(page.getByTestId('askClaudeButton')).toBeDisabled();
             await expect(page.getByTestId('askClaudeRow')).toHaveCount(0);
         });
     });
@@ -122,6 +162,7 @@ test.describe('Ask Claude on an item', () => {
 
     test('the Ask Claude box is on the Weekly Review card too', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `ask-claude-review-${uniqueStamp()}@example.com`, async (page) => {
+            await connectClaudeRoutine(page.context().request);
             const item = await gtd.collect(page, 'Review me');
             await gtd.updateItem(page, { ...item, status: 'nextAction', energy: 'low', time: 5 });
             await gtd.flush(page);
@@ -137,6 +178,23 @@ test.describe('Ask Claude on an item', () => {
             await page.keyboard.press('Enter');
             // The disclosure button unmounts on open; focus must land in the prompt, not on <body>.
             await expect(card.getByTestId('askClaudePrompt').getByRole('textbox')).toBeFocused();
+        });
+    });
+
+    test('the Weekly Review card disables Ask Claude without a Claude routine', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `ask-claude-review-off-${uniqueStamp()}@example.com`, async (page) => {
+            const item = await gtd.collect(page, 'Review me unconnected');
+            await gtd.updateItem(page, { ...item, status: 'nextAction', energy: 'low', time: 5 });
+            await gtd.flush(page);
+            await page.route('**/maintenance/briefs/sweep-mine', (route) =>
+                route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ started: 0, cooldown: true }) }),
+            );
+            await page.goto('/weekly-review?stage=nextActions');
+            await page.getByTestId('startReviewButton').click();
+            const card = page.getByTestId('focusStage');
+            await expect(card.getByTestId('askClaudeButton')).toBeDisabled();
+            await expect(card.getByTestId('askClaudeExpandButton')).toHaveCount(0);
+            await expect(card.getByTestId('askClaudeSettingsLink')).toHaveAttribute('href', /\/settings#claude-routine$/);
         });
     });
 });

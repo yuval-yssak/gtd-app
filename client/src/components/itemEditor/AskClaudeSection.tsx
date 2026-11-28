@@ -7,9 +7,12 @@ import { formatDisplayDate } from '../../lib/displayDate';
 import { hasAtLeastOne, type NonEmptyArray } from '../../lib/typeUtils';
 import type { StoredClaudeAsk } from '../../types/MyDB';
 import { DisabledCapableTooltip } from '../DisabledCapableTooltip';
+import { CLAUDE_ROUTINE_SETTINGS_ANCHOR } from '../settings/claudeRoutineSectionLogic';
 import styles from './AskClaudeSection.module.css';
 import {
+    ASK_CLAUDE_CONNECT_LINK_LABEL,
     ASK_CLAUDE_LABEL,
+    ASK_CLAUDE_NOT_CONNECTED_TOOLTIP,
     ASK_CLAUDE_OPEN_SESSION_LABEL,
     ASK_CLAUDE_PLACEHOLDER,
     ASK_CLAUDE_PROMPT_LABEL,
@@ -43,6 +46,17 @@ interface AskClaudeSectionProps {
  */
 export function AskClaudeSection({ state, asks, isCollapsible = false }: AskClaudeSectionProps) {
     const [isExpanded, setIsExpanded] = useState(false);
+    // No composer means no error row either: a refused ask's message is superseded by the disabled
+    // button's tooltip and the Settings link, which say the same thing and stay put.
+    if (state.routineStatus === 'notConnected') {
+        return (
+            <section className={styles.section} aria-label={ASK_CLAUDE_LABEL} data-testid="askClaudeSection">
+                <NotConnectedRow />
+                {/* The review card keeps its one-line height budget; the item page still lists earlier asks. */}
+                {!isCollapsible && hasAtLeastOne(asks) && <AskHistory asks={asks} />}
+            </section>
+        );
+    }
     if (isCollapsible && !isExpanded) {
         return (
             <section className={styles.section} aria-label={ASK_CLAUDE_LABEL} data-testid="askClaudeSection">
@@ -113,17 +127,35 @@ function SendButton({ isDisabled, tooltip, isSending, onSend }: { isDisabled: bo
     return tooltip ? <DisabledCapableTooltip title={tooltip}>{button}</DisabledCapableTooltip> : button;
 }
 
+/** No Claude routine on the owner's account: a disabled button that says why, and the way to fix it. */
+function NotConnectedRow() {
+    return (
+        <div className={styles.notConnectedRow}>
+            <DisabledCapableTooltip title={ASK_CLAUDE_NOT_CONNECTED_TOOLTIP} wrapperTestId="askClaudeNotConnectedTooltipAnchor">
+                <Button size="sm" tone="neutral" startIcon={<Sparkles />} disabled data-testid="askClaudeButton">
+                    {ASK_CLAUDE_LABEL}
+                </Button>
+            </DisabledCapableTooltip>
+            <SettingsLink label={ASK_CLAUDE_CONNECT_LINK_LABEL} />
+        </div>
+    );
+}
+
+function SettingsLink({ label }: { label: string }) {
+    return (
+        <Link to="/settings" hash={CLAUDE_ROUTINE_SETTINGS_ANCHOR} className={styles.link} data-testid="askClaudeSettingsLink">
+            {label}
+        </Link>
+    );
+}
+
 function AskError({ message, isSettingsFix }: { message: string; isSettingsFix: boolean }) {
     return (
         <div className={styles.errorRow} role="alert" data-testid="askClaudeError">
             <Text variant="bodySm" tone="error">
                 {message}
             </Text>
-            {isSettingsFix && (
-                <Link to="/settings" className={styles.link} data-testid="askClaudeSettingsLink">
-                    Open Settings
-                </Link>
-            )}
+            {isSettingsFix && <SettingsLink label="Open Settings" />}
         </div>
     );
 }

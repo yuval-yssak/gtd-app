@@ -8,6 +8,7 @@ import {
 import { useAppData } from '../../contexts/AppDataProvider';
 import { useIsMounted } from '../../hooks/useIsMounted';
 import { useOnline } from '../../hooks/useOnline';
+import { claudeRoutineStatusStore } from '../../lib/claudeRoutineStatus';
 import { type ConnectionDraft, describeConnectionError, describeLoadError } from './claudeRoutineSectionLogic';
 
 /** The Settings section's view of the active account's Claude routine and its actions. */
@@ -65,6 +66,10 @@ export function useClaudeRoutineConnection(): ClaudeRoutineConnectionState {
                 return;
             }
             setConnection(view);
+            // Items owned by this account read the same answer — no wait for their status to go stale.
+            if (forAccountId) {
+                claudeRoutineStatusStore.remember(forAccountId, view.connected);
+            }
             // Disconnected (here or elsewhere): there is nothing left to replace.
             if (!view.connected) {
                 setIsReplacing(false);

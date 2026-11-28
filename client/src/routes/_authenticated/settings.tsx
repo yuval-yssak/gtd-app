@@ -9,6 +9,7 @@ import { CalendarIntegrationsSkeleton } from '../../components/settings/Calendar
 import { ClaudeRoutineSection } from '../../components/settings/ClaudeRoutineSection';
 import { ConnectClaude } from '../../components/settings/ConnectClaude';
 import { ConnectedDevices } from '../../components/settings/ConnectedDevices';
+import { CLAUDE_ROUTINE_SETTINGS_ANCHOR } from '../../components/settings/claudeRoutineSectionLogic';
 import { PersonalApiTokens } from '../../components/settings/PersonalApiTokens';
 import { SettingsSection } from '../../components/settings/SettingsSection';
 import { useAppData } from '../../contexts/AppDataProvider';
@@ -92,6 +93,7 @@ function SettingsPage() {
             {/* "Ask Claude" on an item starts this Claude Code cloud routine (not a Done routine) */}
             <SettingsSection
                 title="Claude routine"
+                anchorId={CLAUDE_ROUTINE_SETTINGS_ANCHOR}
                 description="Ask Claude about any item from inside Done. Done starts your Claude routine, a Claude Code session in Anthropic's cloud that runs on your Claude plan with your claude.ai connectors, and keeps a link to each session on the item."
                 isDivided
             >

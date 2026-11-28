@@ -4,6 +4,7 @@ declare const styles: {
     readonly history: string;
     readonly icon: string;
     readonly link: string;
+    readonly notConnectedRow: string;
     readonly prompt: string;
     readonly result: string;
     readonly row: string;

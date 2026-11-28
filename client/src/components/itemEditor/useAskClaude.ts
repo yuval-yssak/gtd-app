@@ -5,9 +5,11 @@ import { useAppData } from '../../contexts/AppDataProvider';
 import { applyServerClaudeAsk } from '../../db/syncHelpers';
 import { useIsMounted } from '../../hooks/useIsMounted';
 import { useOnline } from '../../hooks/useOnline';
+import type { ClaudeRoutineStatus } from '../../lib/claudeRoutineStatus';
 import type { MyDB, StoredItem } from '../../types/MyDB';
 import { type AskErrorView, describeAskButton } from './askClaudeLogic';
 import { type AskClaudeSettlement, runAskClaude } from './askClaudeRunner';
+import { useClaudeRoutineStatus } from './useClaudeRoutineStatus';
 
 /** What the Ask Claude section needs from its host: the draft, the send state, and the feedback. */
 export interface AskClaudeState {
@@ -16,6 +18,8 @@ export interface AskClaudeState {
     setPrompt: (next: string) => void;
     isSending: boolean;
     isOnline: boolean;
+    /** The item owner's Claude routine; `notConnected` swaps the composer for a pointer to Settings. */
+    routineStatus: ClaudeRoutineStatus;
     /** The last failure, until the prompt is edited or the next send starts. */
     error: AskErrorView | null;
     /** The session the last successful send started — drives the "working on it" toast. */
@@ -38,6 +42,7 @@ interface AskClaudeTarget {
 export function useAskClaude(db: IDBPDatabase<MyDB>, { item, flushItemText }: AskClaudeTarget): AskClaudeState {
     const { withOwnerSession, refreshClaudeAsks } = useAppData();
     const isOnline = useOnline();
+    const routine = useClaudeRoutineStatus(item.userId);
     const isMounted = useIsMounted();
     const [prompt, setPromptState] = useState('');
     const [isSending, setIsSending] = useState(false);
@@ -55,6 +60,10 @@ export function useAskClaude(db: IDBPDatabase<MyDB>, { item, flushItemText }: As
             return;
         }
         setError(settlement.error);
+        // A Settings-fixable refusal means the stored status may be stale (disconnected elsewhere).
+        if (settlement.error.isSettingsFix) {
+            routine.recheck();
+        }
     }
 
     async function send(text: string) {
@@ -90,5 +99,15 @@ export function useAskClaude(db: IDBPDatabase<MyDB>, { item, flushItemText }: As
         setError(null);
     }
 
-    return { prompt, setPrompt, isSending, isOnline, error, startedSessionUrl, dismissStarted: () => setStartedSessionUrl(null), submit };
+    return {
+        prompt,
+        setPrompt,
+        isSending,
+        isOnline,
+        routineStatus: routine.status,
+        error,
+        startedSessionUrl,
+        dismissStarted: () => setStartedSessionUrl(null),
+        submit,
+    };
 }

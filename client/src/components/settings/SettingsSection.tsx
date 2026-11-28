@@ -9,14 +9,16 @@ interface SettingsSectionProps {
     /** Rules a separator between the description and the section's controls. */
     isDivided?: boolean | undefined;
     children?: ReactNode | undefined;
+    /** Fragment anchor, so other pages can link straight to this section (`/settings#<anchorId>`). */
+    anchorId?: string | undefined;
 }
 
 /** One settings card: a named region with a heading, an optional description, then the section's own controls. */
-export function SettingsSection({ title, description, isDivided = false, children }: SettingsSectionProps) {
+export function SettingsSection({ title, description, isDivided = false, children, anchorId }: SettingsSectionProps) {
     const headingId = useId();
     return (
         <Card padding="none" className={styles.section}>
-            <section className={styles.content} aria-labelledby={headingId}>
+            <section id={anchorId} className={styles.content} aria-labelledby={headingId}>
                 <Text variant="subtitle" weight="semibold" id={headingId} className={styles.heading}>
                     {title}
                 </Text>

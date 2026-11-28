@@ -1,6 +1,8 @@
 import { ClaudeRoutineApiError } from '../../api/claudeRoutineApi';
 
 export const CLAUDE_ROUTINES_URL = 'https://claude.ai/code/routines';
+/** The Settings section's anchor — "Ask Claude" links straight to it (`/settings#claude-routine`). */
+export const CLAUDE_ROUTINE_SETTINGS_ANCHOR = 'claude-routine';
 
 /**
  * The saved prompt the user pastes into their Claude routine. Done sends each request as the run's

@@ -15,6 +15,7 @@ function makeState(overrides: Partial<AskClaudeState> = {}): AskClaudeState {
         setPrompt: fn(),
         isSending: false,
         isOnline: true,
+        routineStatus: 'connected',
         error: null,
         startedSessionUrl: null,
         dismissStarted: fn(),
@@ -88,7 +89,23 @@ export const Offline: Story = {
     args: { state: makeState({ prompt: 'Draft a reply to the landlord', isOnline: false }) },
 };
 
+/** No Claude routine on the owner's account: no composer, a disabled button and the way to Settings. */
 export const NotConnected: Story = {
+    args: { state: makeState({ routineStatus: 'notConnected' }) },
+    play: async ({ canvasElement }) => {
+        const canvas = within(canvasElement);
+        await waitFor(() => expect(canvas.getByTestId('askClaudeButton')).toBeDisabled());
+        expect(canvas.queryByTestId('askClaudePrompt')).toBeNull();
+        expect(canvas.getByTestId('askClaudeSettingsLink').getAttribute('href')).toMatch(/\/settings#claude-routine$/);
+    },
+};
+
+export const NotConnectedWithHistory: Story = { args: { state: makeState({ routineStatus: 'notConnected' }), asks: [COMPLETED] } };
+
+export const ReviewNotConnected: Story = { args: { isCollapsible: true, state: makeState({ routineStatus: 'notConnected' }), asks: [COMPLETED] } };
+
+/** The status read had not answered (or failed) and the server then refused the ask. */
+export const NotConnectedError: Story = {
     args: {
         state: makeState({ prompt: 'Draft a reply', error: { message: 'Connect a Claude routine in Settings to ask Claude from Done.', isSettingsFix: true } }),
     },
